@@ -2,58 +2,52 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-## 專案概觀
+## 架構
 
-ESP32-S3 相機板（GOOUUU ESP32-S3-CAM + 2.8" HSD028903 TFT）搭配電腦端 Python 做影像辨識。
-架構是「板子負責取像與顯示，電腦負責運算」：ESP32 透過 USB 序列埠把 JPEG 影格丟給 PC，
-PC 用 OpenCV / AprilTag 辨識，必要時再把結果以文字回傳給板子畫在 TFT 上。
+MXCam：ESP32-S3 視覺感測器，搭配 MATRIX Mini R4 使用，設定由電腦端 Web Serial PWA 完成。三個子專案：
 
-沒有 build system、測試或 lint。
+- `firmware/`：ESP-IDF v5.4.1 韌體（ESP32-S3 N16R8），專案名 `mxcam`
+- `pc-app/`：MXCam Studio（Vite + React + TS）
+- `arduino-lib/`：給 R4 用的 Arduino 函式庫 `MXCam`
 
-## 執行方式
+規格與決策不在這裡重複，請看：`docs/SPEC.md`（規格）、`docs/adr/`（架構決策）、`GLOSSARY.md`（名詞）。
+目前**還沒有協定程式碼**：MXCam Protocol v1 只在 `docs/SPEC.md` §5 有規格，M1 期間會定稿為 `docs/protocol.md`。
 
-- **韌體**：每個 `*/xxx.ino` 資料夾都是獨立的 Arduino sketch，用 Arduino IDE（或 arduino-cli）以 ESP32-S3 板型編譯上傳。
-  - 必須開啟 PSRAM（`fb_location = CAMERA_FB_IN_PSRAM`）。
-  - 依賴 `TFT_eSPI`，其腳位 / 驅動設定在函式庫自己的 `User_Setup.h`，**不在本 repo**。
-- **電腦端**：`python <script>.py`，依賴 `opencv-python numpy pyserial pupil-apriltags`（無 requirements.txt）。
-  - 每支腳本都寫死 `PORT = "COM11"`、`BAUD = 921600`，換機要改。
-  - 序列埠是獨佔的：跑 Python 前要關掉 Arduino Serial Monitor。
-  - 視窗中按 `q` 離開。
+正式 repo：github.com/Lowis-Mamilton/esp32S3_cam
 
-## 韌體與腳本的配對
+## 指令
 
-| Sketch | 搭配的 Python | 說明 |
-|---|---|---|
-| `cam_timely/` | 無 | 純 TFT 預覽，115200 baud，不傳圖 |
-| `01_color_detect/` | `detect_HSV.py`（拉桿調 HSV 範圍）→ `detect_color.py`（用調好的值做多色辨識） | 單向：板 → PC，240×240 影格 |
-| `04_apriltag/` | `pure_april.py` | **雙向**：板傳圖，PC 回傳 `#TAG` 行，板子在 TFT 上畫框 |
-| （任何會傳圖的 sketch） | `detect_apriltag.py` | 只在 PC 視窗顯示，不回傳 |
-
-`detect_color.py` 的 `COLORS` 格式是 `(Hmin, Hmax, Smin, Smax, Vmin, Vmax, min_area)`，數值來自 `detect_HSV.py` 調出來的結果。
-
-## 序列協定（改任一端都要同步改另一端）
-
-**板 → PC（影格）**：`0xAA 0x55` + `uint32` little-endian 長度 + JPEG bytes。
-- 板端用 `frame2jpg()` 把 RGB565 影格轉 JPEG，依 `SEND_INTERVAL_MS` 節流送出。
-- PC 端 `read_frame()` 逐 byte 掃 `AA 55` 重新同步，所以同一條序列線上夾雜 `Serial.println` 文字是可容忍的。
-- PC 端會丟掉長度 `<100` 或 `>200000`（`pure_april.py` 為 `>300000`）的影格。
-- `read_exact` / `read_frame` / `drain_old_frames` 在每支 Python 腳本裡各自複製一份，沒有共用模組 — 改協定要四支都改。
-
-**PC → 板（AprilTag 結果，僅 `pure_april.py` ↔ `04_apriltag`）**：一行 ASCII
+firmware（在 `firmware/`，需 ESP-IDF v5.4.1 環境）：
 ```
-#TAG,<id>,<cx>,<cy>,<x0>,<y0>,<x1>,<y1>,<x2>,<y2>,<x3>,<y3>,<rot_deg>\n
-#TAG,NONE\n
+idf.py build
+idf.py -p COMx flash monitor
 ```
-座標是 PC 端處理後（已翻轉）的 320×240 影格座標，已 clamp 到 0–319 / 0–239。板端 `parseTagLine` 解析固定 11 個整數 + 1 個 float，行長超過 160 字元會被丟棄。
+目前沒有韌體單元測試。本機沒裝 ESP-IDF 時，韌體只能靠 CI 或本機安裝 v5.4.1 驗證，不要宣稱「已建置成功」而沒跑過。
 
-## 方向 / 座標系的陷阱
+pc-app（在 `pc-app/`）：
+```
+npm ci
+npm run dev | build | lint | test
+npx vitest run src/app.test.tsx          # 單一測試檔
+npx vitest run -t "測試名稱"              # 單一測試
+```
+Vite `base` 為 `/esp32S3_cam/`（GitHub Pages）。
 
-影像方向是這個專案最常出錯的地方，兩端的翻轉是成對設計的：
-- 板端 sensor 設定 `set_vflip(0)`、`set_hmirror(0)`；PC 端用 `cv2.flip(frame, 1)` 左右翻轉讓 PC 畫面與 TFT 一致。
-- `04_apriltag` 畫框時用 `319 - x` 把 x 鏡像回來、y 加 40（TFT 上方 40px 是狀態列）。所以如果改了 `pure_april.py` 的 `USE_FLIP` / `USE_ROTATE_180`，板端的 `mx()` 也要跟著改。
-- TFT 是 `setRotation(0)` 直向 240×320，影像貼在 y=40。`01_color_detect` 用 `FRAMESIZE_240X240` 剛好貼滿寬度；`cam_timely` 與 `04_apriltag` 用 QVGA（320×240）推到 240 寬的面板上，右側會被裁掉。
-- `detect_apriltag.py` 目前會 flip 兩次（其中一次在 `None` 檢查之前），並把畫面裁成 240 寬再拉伸回 320×240 — 改這支時注意。
+arduino-lib（在 repo 根目錄）：
+```
+arduino-cli compile --fqbn arduino:renesas_uno:unor4wifi --library arduino-lib arduino-lib/examples/HelloMXCam
+```
+目前沒有單元測試，以編譯通過為準。
 
-## 硬體腳位
+CI（`.github/workflows/ci.yml`）三個 job 分別建置以上三者。
 
-相機腳位（GOOUUU 版）在三個 sketch 裡各自 `#define` 一份且內容相同（XCLK=15、SIOD=4、SIOC=5、D0–D7=11,9,8,10,12,18,17,16、VSYNC=6、HREF=7、PCLK=13，無 PWDN/RESET）。改腳位要三份一起改。
+## 注意事項
+
+- **本機建 ESP-IDF 時 repo 路徑有空白**（`K230 Smart Cam`），ESP-IDF 工具鏈對空白路徑常出問題；請把專案複製或 clone 到無空白路徑再建置，或交給 CI。
+- 除錯訊息走 TTL 孔（UART0），協定走 OTG 孔（原生 USB），不要混用。
+- 硬體腳位以 `docs/SPEC.md` 第 4 節為準；V1.3 實板尚未核對。
+
+## 工作方式
+
+- 與使用者的對話回覆用繁體中文。
+- 使用者的全域規則：要建功能、改行為、做設計、選架構之前，先問清楚細節（grilling），不要直接動工；結論記錄到 `docs/SPEC.md` 或 `docs/adr/`。
