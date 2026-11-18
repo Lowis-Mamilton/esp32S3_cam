@@ -207,3 +207,7 @@ docs/          規格、協定、ADR
 - [ ] USB-Serial-JTAG 的頻寬能否撐住 QVGA JPEG 串流（M1 實測）
 - [ ] 320×240 影像在直向 240×320 螢幕上的擺法
 - [ ] 協定起始碼、指令代碼、I2C 讀取方式定稿（`docs/protocol.md`）
+- [ ] M1：加入第一個 managed component 時，移除 `.gitignore` 裡的 `firmware/dependencies.lock` 並 commit 鎖定檔
+- [ ] M1/M2：效能設定（CPU 240 MHz、PSRAM 80 MHz、flash QIO 80 MHz），以達成第 3 節的 fps 目標
+- [ ] M1：協定 C 程式碼放哪裡才能讓韌體和 Arduino 函式庫共用同一份（Arduino 函式庫只能編譯自己資料夾內的檔案）
+- [ ] M4：Arduino 函式庫的發佈方式（把 `arduino-lib/` 打包成 release ZIP）
