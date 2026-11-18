@@ -23,7 +23,7 @@ offset  size  欄位
 - 所有多位元組數值都是 **little-endian**。
 - `crc16`：CRC-16/CCITT-FALSE（poly `0x1021`、init `0xFFFF`、不反轉、不 XOR），計算範圍是 `ver` 到 payload 結尾（offset 2 到 6+len）。檢查值：`"123456789"` → `0x29B1`。
 - 字串欄位是固定長度的 ASCII，不含結尾的 NUL。
-- payload 上限：MXCam 收到的請求 payload 最多 **1024** bytes，超過就丟掉並回 `BAD_LENGTH`；MXCam 推送的 FRAME 可以到 65535 bytes。
+- payload 上限：MXCam 收到的請求 payload 最多 **1024** bytes，超過就**靜默丟掉**（不回 `BAD_LENGTH`，主機靠逾時；與 §2 第 3 步一致）。`BAD_LENGTH` 只用於「封包本身解碼正常、但 payload 長度不符該指令」的情況；MXCam 推送的 FRAME 可以到 65535 bytes。
 
 ## 2. 接收端行為（解碼器）
 
@@ -36,6 +36,8 @@ offset  size  欄位
 5. 合法的封包交給上層，回到第 1 步。
 
 第 2、3 步「丟掉」的意思是：**不**照 `len` 跳過後面的 bytes，直接從下一個收到的 byte 重新找 magic。這樣雜訊造成的錯誤 `len` 不會讓解碼器跳過後面正常的封包。
+
+丟掉一個封包後，接收端**可以**從被丟掉封包的 magic 之後的那個 byte 開始重新掃描（TS 解碼器這樣做，因此能從被截斷的 FRAME 裡救回夾在其中的回應）；也可以直接從下一個收到的 byte 找起。兩種行為都符合本協定。
 
 CRC 錯誤的封包**不回應**：因為內容不可信，連 `seq` 都不能相信。主機要靠逾時重送。
 
@@ -121,6 +123,8 @@ STREAM_START 請求：
 | flags | u8 | bit0 = 推送 FRAME，bit1 = 推送 RESULTS（M2 起才有作用），其他位元填 0 |
 | max_fps | u8 | 推送 FRAME 的上限張數，1–10；`0` 表示預設 10 |
 | jpeg_quality | u8 | 1–100（數字越大品質越好）；`0` 表示韌體預設值 |
+
+參數夾限：`max_fps` > 10 當成 10；`jpeg_quality` > 100 當成 100；`flags` 中保留的位元會被忽略。
 
 回應 `0xD0`：空。重複送 STREAM_START 會用新參數取代舊的。STREAM_STOP 請求和回應 `0xD1` 都是空的。
 

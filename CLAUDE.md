@@ -30,7 +30,7 @@ idf.py -p COMx flash        # TTL 或 OTG 的 COM 皆可
 idf.py -p COMy monitor      # COMy 必須是 TTL 埠
 ```
 注意：log 只從 UART0（TTL 埠）輸出；在 OTG 埠的 COM 上 monitor 過了 ROM banner 就沒有任何輸出（console 僅 UART0）。
-埠號（本機）：TTL = COM9（CH340），OTG = COM5（VID 303A / PID 1001）。
+埠號（此開發機的範例，各機器不同）：TTL = COM9（CH340），OTG = COM5（VID 303A / PID 1001）。
 用 pyserial 開 OTG 埠前先設 `dtr=False, rts=False` 再 `open()`，否則開關埠會讓板子重開機。
 
 電腦上的 C 測試（Git Bash，MinGW 本機加 `-G "MinGW Makefiles"`）：
