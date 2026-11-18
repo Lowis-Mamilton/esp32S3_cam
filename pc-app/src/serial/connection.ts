@@ -54,6 +54,14 @@ const MXCAM_USB_PID = 0x1001
 const MAX_PING_FAILURES = 3 // matches the firmware's 3 s stream timeout
 const PING_INTERVAL_MS = 1000
 const STATS_INTERVAL_MS = 1000
+const WATCHDOG_INTERVAL_MS = 500
+const WATCHDOG_SILENT_TICKS = 5 // 5 x 500 ms = 2.5 s without a FRAME push
+// Cold boot: the device may still be enumerating/booting, so GET_INFO is retried
+// (1 s per attempt, 250 ms gap, 4 attempts ~= 4.75 s). Used by both connect paths.
+const GET_INFO_ATTEMPTS = 4
+const GET_INFO_TIMEOUT_MS = 1000
+const GET_INFO_GAP_MS = 250
+const STOP_ON_DISCONNECT_TIMEOUT_MS = 300
 
 export class MxcamConnection {
   private readonly serial: Serial | undefined
@@ -66,6 +74,10 @@ export class MxcamConnection {
   private seq = 0
   private pingTimer: ReturnType<typeof setInterval> | null = null
   private statsTimer: ReturnType<typeof setInterval> | null = null
+  private watchdogTimer: ReturnType<typeof setInterval> | null = null
+  private streaming = false
+  private streamPayload: Uint8Array | null = null
+  private silentTicks = 0
   private frameCount = 0
   private byteCount = 0
 
@@ -73,6 +85,9 @@ export class MxcamConnection {
     if (this.status !== 'disconnected' || this.opening) return
     const t = ev.target as SerialPort | null
     void this.autoConnect(t && this.isMxcam(t) ? t : undefined)
+  }
+  private readonly onVisibility = () => {
+    if (typeof document !== 'undefined' && document.visibilityState === 'visible') this.resendStreamStart()
   }
   private readonly onSerialDisconnect = (ev: Event) => {
     const s = this.session
@@ -93,12 +108,14 @@ export class MxcamConnection {
     this.status = 'disconnected'
     serial.addEventListener('connect', this.onSerialConnect)
     serial.addEventListener('disconnect', this.onSerialDisconnect)
+    if (typeof document !== 'undefined') document.addEventListener('visibilitychange', this.onVisibility)
   }
 
   /** Remove serial listeners and close the port. */
   dispose(): Promise<void> {
     this.serial?.removeEventListener('connect', this.onSerialConnect)
     this.serial?.removeEventListener('disconnect', this.onSerialDisconnect)
+    if (typeof document !== 'undefined') document.removeEventListener('visibilitychange', this.onVisibility)
     return this.disconnect()
   }
 
@@ -145,10 +162,16 @@ export class MxcamConnection {
     const serial = this.serial
     try {
       return await this.exclusive(async () => {
-        const port = preferred ?? (await serial.getPorts()).find((p) => this.isMxcam(p))
-        if (!port) return false
-        await this.openPort(port)
-        return true
+        const candidates = preferred ? [preferred] : (await serial.getPorts()).filter((p) => this.isMxcam(p))
+        for (const port of candidates) {
+          try {
+            await this.openPort(port)
+            return true
+          } catch {
+            // try the next granted port
+          }
+        }
+        return false
       })
     } catch {
       return false
@@ -181,7 +204,17 @@ export class MxcamConnection {
       s = created
       this.session = created
       created.loopDone = this.readLoop(created)
-      const info = parseInfo((await this.request(Cmd.GetInfo)).payload)
+      let infoFrame: Frame | undefined
+      for (let attempt = 1; !infoFrame; attempt++) {
+        try {
+          infoFrame = await this.request(Cmd.GetInfo, new Uint8Array(0), GET_INFO_TIMEOUT_MS)
+        } catch (e) {
+          if (this.session !== created || attempt >= GET_INFO_ATTEMPTS || e instanceof MxcamError) throw e
+          await new Promise((r) => setTimeout(r, GET_INFO_GAP_MS))
+          if (this.session !== created) throw new Error('disconnected during setup')
+        }
+      }
+      const info = parseInfo(infoFrame.payload)
       this.events.info?.(info)
       await this.startStream()
       if (this.session !== created) throw new Error('disconnected during setup')
@@ -226,6 +259,7 @@ export class MxcamConnection {
   private handleFrame(f: Frame) {
     if (f.cmd === Cmd.PushFrame) {
       const fp = parseFramePush(f.payload)
+      this.silentTicks = 0
       this.frameCount++
       this.byteCount += fp.jpeg.length
       this.events.frame(fp)
@@ -288,8 +322,12 @@ export class MxcamConnection {
   }
 
   async startStream(maxFps = 10): Promise<void> {
-    await this.request(Cmd.StreamStart, encodeStreamStart({ frames: true, results: false, maxFps, jpegQuality: 0 }))
+    const payload = encodeStreamStart({ frames: true, results: false, maxFps, jpegQuality: 0 })
+    await this.request(Cmd.StreamStart, payload)
     this.stopTimers()
+    this.streaming = true
+    this.streamPayload = payload
+    this.silentTicks = 0
     this.frameCount = 0
     this.byteCount = 0
     // Firmware stops streaming after 3 s without a request (protocol.md §6).
@@ -307,12 +345,24 @@ export class MxcamConnection {
         },
       )
     }, PING_INTERVAL_MS)
+    // A repeated STREAM_START replaces parameters (protocol.md §6) and restarts a stalled stream.
+    this.watchdogTimer = setInterval(() => {
+      if (++this.silentTicks >= WATCHDOG_SILENT_TICKS) {
+        this.silentTicks = 0
+        this.resendStreamStart()
+      }
+    }, WATCHDOG_INTERVAL_MS)
     this.statsTimer = setInterval(() => {
       const secs = STATS_INTERVAL_MS / 1000
       this.events.stats({ fps: this.frameCount / secs, kbps: this.byteCount / 1024 / secs })
       this.frameCount = 0
       this.byteCount = 0
     }, STATS_INTERVAL_MS)
+  }
+
+  private resendStreamStart() {
+    if (!this.streaming || !this.streamPayload || !this.session) return
+    this.request(Cmd.StreamStart, this.streamPayload).catch(() => {})
   }
 
   async stopStream(): Promise<void> {
@@ -324,13 +374,22 @@ export class MxcamConnection {
   private stopTimers() {
     if (this.pingTimer) clearInterval(this.pingTimer)
     if (this.statsTimer) clearInterval(this.statsTimer)
+    if (this.watchdogTimer) clearInterval(this.watchdogTimer)
     this.pingTimer = null
     this.statsTimer = null
+    this.watchdogTimer = null
+    this.streaming = false
   }
 
   async disconnect(): Promise<void> {
     const s = this.session
-    if (s) await this.teardown(s, new Error('disconnected by user'))
+    if (s) {
+      if (this.streaming && this.session === s) {
+        // Best effort: tell the device to stop; failures and timeouts are ignored.
+        await this.request(Cmd.StreamStop, new Uint8Array(0), STOP_ON_DISCONNECT_TIMEOUT_MS).catch(() => {})
+      }
+      await this.teardown(s, new Error('disconnected by user'))
+    }
     await this.cleanup
   }
 

@@ -156,6 +156,8 @@ afterEach(() => {
 const silentOn = (cmd: number): Handler => (f) =>
   f.cmd === Cmd.GetInfo ? infoPayload() : f.cmd === cmd ? null : new Uint8Array(0)
 
+const noInfo: Handler = (f) => (f.cmd === Cmd.GetInfo ? null : new Uint8Array(0))
+
 describe('MxcamConnection', () => {
   test('serial undefined reports unsupported', () => {
     const statuses: ConnectionStatus[] = []
@@ -390,6 +392,80 @@ describe('MxcamConnection', () => {
     }
     await conn.connect()
     expect(statuses.at(-1)).toBe('connected')
+    await conn.disconnect()
+  })
+
+  test('watchdog: re-sends STREAM_START when frames stop for 2.5 s', async () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'setTimeout', 'clearTimeout'] })
+    const { conn, port } = setup()
+    await conn.connect()
+    const starts = () => port.requests.filter((r) => r.cmd === Cmd.StreamStart).length
+    expect(starts()).toBe(1)
+    await vi.advanceTimersByTimeAsync(2000)
+    expect(starts()).toBe(1)
+    await vi.advanceTimersByTimeAsync(1000)
+    expect(starts()).toBe(2)
+    expect([...port.requests.filter((r) => r.cmd === Cmd.StreamStart)[1].payload]).toEqual([1, 10, 0])
+    await conn.disconnect()
+  })
+
+  test('watchdog: no re-send while frames keep arriving', async () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'setTimeout', 'clearTimeout'] })
+    const { conn, port } = setup()
+    await conn.connect()
+    for (let i = 0; i < 10; i++) {
+      port.push(encodeFrame(Cmd.PushFrame, 0, framePushPayload(i, new Uint8Array([0xff, 0xd8, 0xff, 0xd9]))))
+      await vi.advanceTimersByTimeAsync(1000)
+    }
+    expect(port.requests.filter((r) => r.cmd === Cmd.StreamStart).length).toBe(1)
+    await conn.disconnect()
+  })
+
+  test('cold boot: GET_INFO is retried until the device answers', async () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'setTimeout', 'clearTimeout'] })
+    let ready = false
+    const { conn, port, serial, statuses } = setup((f) => (f.cmd === Cmd.GetInfo ? (ready ? infoPayload() : null) : new Uint8Array(0)))
+    serial.granted.push(port)
+    setTimeout(() => {
+      ready = true
+    }, 2500)
+    const p = conn.autoConnect()
+    await vi.advanceTimersByTimeAsync(4000)
+    expect(await p).toBe(true)
+    expect(statuses.at(-1)).toBe('connected')
+    await conn.disconnect()
+  })
+
+  test('cold boot: gives up after about 5 s when the device never answers', async () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'setTimeout', 'clearTimeout'] })
+    const { conn, port, serial, statuses } = setup(noInfo)
+    serial.granted.push(port)
+    const p = conn.autoConnect()
+    await vi.advanceTimersByTimeAsync(6000)
+    expect(await p).toBe(false)
+    expect(statuses.at(-1)).toBe('disconnected')
+    expect(port.requests.filter((r) => r.cmd === Cmd.GetInfo).length).toBeGreaterThanOrEqual(3)
+  })
+
+  test('disconnect sends a best-effort STREAM_STOP, even if it is never answered', async () => {
+    const { conn, port } = setup(silentOn(Cmd.StreamStop))
+    await conn.connect()
+    await conn.disconnect()
+    expect(port.requests.at(-1)?.cmd).toBe(Cmd.StreamStop)
+    expect(port.closed).toBe(true)
+  })
+
+  test('autoConnect tries the next matching port when the first never answers', async () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'setTimeout', 'clearTimeout'] })
+    const dead = new FakePort(noInfo)
+    const good = new FakePort()
+    const serial = new FakeSerial(good)
+    serial.granted.push(dead, good)
+    const conn = new MxcamConnection(serial as unknown as Serial, { status: () => {}, frame: () => {}, stats: () => {} })
+    const p = conn.autoConnect()
+    await vi.advanceTimersByTimeAsync(6000)
+    expect(await p).toBe(true)
+    expect(good.openCount).toBe(1)
     await conn.disconnect()
   })
 })
