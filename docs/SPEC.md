@@ -65,7 +65,7 @@
 | 項目 | 規格 / 接腳 |
 |---|---|
 | 模組 | ESP32-S3-WROOM-1 N16R8（16MB flash、8MB octal PSRAM） |
-| 鏡頭 | OV2640；XCLK=15、SIOD=4、SIOC=5、D0–D7=11,9,8,10,12,18,17,16、VSYNC=6、HREF=7、PCLK=13 |
+| 鏡頭 | OV3660（實板偵測結果；早期資料寫 OV2640，兩者驅動相容）；XCLK=15、SIOD=4、SIOC=5、D0–D7=11,9,8,10,12,18,17,16、VSYNC=6、HREF=7、PCLK=13 |
 | 螢幕 | ILI9341 240×320 直向；SCLK=3、MOSI=45、MISO=46、CS=14、DC=47、RST=21，背光常亮 |
 | 觸控 | XPT2046，**不使用**（腳位讓給 I2C） |
 | USB | OTG 孔＝原生 USB（網頁連線、燒錄）；TTL 孔＝UART0（開發者除錯訊息） |
@@ -138,7 +138,7 @@ USB、UART、I2C 三種傳輸用同一套封包。
 - 鏡頭用 `esp32-camera` 元件，人臉偵測用 `esp-dl` / `esp-who`，螢幕用 `esp_lcd`（ILI9341）
 - 設定與學習資料存在 NVS
 - USB 連線先用 USB-Serial-JTAG（網頁燒錄最省事），在 M1 實測頻寬；不夠再改用 TinyUSB CDC
-- 鏡頭輸出 **RGB565**（辨識和螢幕直接用）；傳給網頁時才用軟體壓 JPEG，預覽最多每秒 10 張，把 CPU 留給辨識
+- 鏡頭輸出 **RGB565**（辨識和螢幕直接用）；傳給網頁時才用軟體壓 JPEG，預覽上限每秒 10 張，M1 實測約 6 張（目標 ≥ 5，見 `docs/measurements/m1.md`），把 CPU 留給辨識
 - 效能設定：CPU 240 MHz、PSRAM 80 MHz、flash QIO 80 MHz（M1 起固定，作為量測基準）
 
 ### 6.2 電腦軟體 `pc-app/`：MXCam Studio
@@ -213,13 +213,14 @@ docs/          規格、協定、ADR
 
 ## 10. 待確認事項
 
-- [ ] V1.3 擴展板實際接腳是否與 V1.2 資料相同（特別是 I2C 41/42、UART 1/2）
-- [ ] 螢幕確定是 ILI9341
-- [ ] USB-Serial-JTAG 的頻寬能否撐住 QVGA JPEG 串流（M1 實測）
+- [x] 螢幕確定是 ILI9341（實板驗證）
+- [x] USB-Serial-JTAG 頻寬足夠（M1 實測只用 < 30 KB/s）
 - [x] 320×240 影像的擺法：螢幕改橫向（第 4 節）
 - [x] 協定封包、指令代碼、錯誤碼定稿（`docs/protocol.md`）
 - [ ] M4：I2C 傳輸方式定稿
-- [ ] M1：加入第一個 managed component 時，移除 `.gitignore` 裡的 `firmware/dependencies.lock` 並 commit 鎖定檔
-- [ ] M1：效能設定實測（JPEG 壓縮時間、USB 頻寬、畫面 fps），作為之後的基準
+- [x] M1：`firmware/dependencies.lock` 已 commit
+- [x] M1：效能實測（`docs/measurements/m1.md`）
+- [ ] M2：預覽回到 10 fps（換更快的 JPEG 編碼器）、TFT 從 11 fps 提升（SPI 時脈、XCLK）
+- [ ] V1.3 擴展板：鏡頭和螢幕腳位已在實板驗證；I2C（41/42）和 UART（1/2）在 M4 驗證
 - [x] 協定 C 程式碼的位置（ADR-0006）
 - [ ] M4：Arduino 函式庫的發佈方式（把 `arduino-lib/` 打包成 release ZIP）

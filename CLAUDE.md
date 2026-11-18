@@ -11,7 +11,11 @@ MXCam：ESP32-S3 視覺感測器，搭配 MATRIX Mini R4 使用，設定由電�
 - `arduino-lib/`：給 R4 用的 Arduino 函式庫 `MXCam`
 
 規格與決策不在這裡重複，請看：`docs/SPEC.md`（規格）、`docs/adr/`（架構決策）、`GLOSSARY.md`（名詞）。
-目前**還沒有協定程式碼**：MXCam Protocol v1 只在 `docs/SPEC.md` §5 有規格，M1 期間會定稿為 `docs/protocol.md`。
+協定規格在 `docs/protocol.md`，測試資料 `docs/protocol-vectors.json`（C 和 TS 兩份實作都要通過）：
+- C（正本，韌體和 Arduino 函式庫共用，ADR-0006）：`arduino-lib/src/protocol/`；韌體元件 `firmware/components/mxcam_protocol/` 直接引用
+- TypeScript：`pc-app/src/protocol/`
+
+韌體裡純 C、可在電腦上測的元件：`mxcam_overlay`（畫框寫字）、`mxcam_service`（指令處理）；碰硬體的：`mxcam_camera`、`mxcam_display`、`mxcam_link`（USB-Serial-JTAG），流程在 `firmware/main/pipeline.c`、`encoder.c`。
 
 正式 repo：github.com/Lowis-Mamilton/esp32S3_cam
 
@@ -26,7 +30,15 @@ idf.py -p COMx flash        # TTL 或 OTG 的 COM 皆可
 idf.py -p COMy monitor      # COMy 必須是 TTL 埠
 ```
 注意：log 只從 UART0（TTL 埠）輸出；在 OTG 埠的 COM 上 monitor 過了 ROM banner 就沒有任何輸出（console 僅 UART0）。
-目前沒有韌體單元測試。本機沒裝 ESP-IDF 時，韌體只能靠 CI 或本機安裝 v5.5.6 驗證，不要宣稱「已建置成功」而沒跑過。
+埠號（本機）：TTL = COM9（CH340），OTG = COM5（VID 303A / PID 1001）。
+用 pyserial 開 OTG 埠前先設 `dtr=False, rts=False` 再 `open()`，否則開關埠會讓板子重開機。
+
+電腦上的 C 測試（Git Bash，MinGW 本機加 `-G "MinGW Makefiles"`）：
+```
+cmake -S arduino-lib/extras/host-test -B build/host-test && cmake --build build/host-test && ctest --test-dir build/host-test --output-on-failure
+cmake -S firmware/components/mxcam_overlay/host-test -B build/overlay-host-test   # 同樣 build + ctest
+cmake -S firmware/components/mxcam_service/host-test -B build/service-host-test   # 同樣 build + ctest
+```
 
 pc-app（在 `pc-app/`）：
 ```
@@ -43,13 +55,14 @@ arduino-cli compile --fqbn arduino:renesas_uno:unor4wifi --library arduino-lib a
 ```
 目前沒有單元測試，以編譯通過為準。
 
-CI（`.github/workflows/ci.yml`）三個 job 分別建置以上三者。
+CI（`.github/workflows/ci.yml`）：firmware、pc-app、arduino-lib、host-tests 四個 job。
 
 ## 注意事項
 
 - 開發路徑是 `C:\dev\esp32S3_cam`。ESP-IDF 不支援路徑有空白，不要在舊的 `...\K230 Smart Cam\esp32S3_cam` 副本建置。
 - 除錯訊息走 TTL 孔（UART0），協定走 OTG 孔（原生 USB），不要混用。
-- 硬體腳位以 `docs/SPEC.md` 第 4 節為準；V1.3 實板尚未核對。
+- 硬體腳位以 `docs/SPEC.md` 第 4 節為準；鏡頭（實際是 OV3660）和螢幕腳位已在實板驗證，I2C／UART 腳位到 M4 才驗證。
+- 實機量測紀錄在 `docs/measurements/`。
 
 ## 工作方式
 
