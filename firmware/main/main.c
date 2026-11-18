@@ -2,6 +2,9 @@
 #include "esp_log.h"
 #include "esp_psram.h"
 #include "mxcam_proto.h"
+#include "mxcam_camera.h"
+#include "mxcam_display.h"
+#include "pipeline.h"
 
 static const char *TAG = "mxcam";
 
@@ -14,4 +17,14 @@ void app_main(void)
     /* Link check for the mxcam_protocol component. */
     static const uint8_t probe[] = { '1', '2', '3', '4', '5', '6', '7', '8', '9' };
     ESP_LOGI(TAG, "crc16 probe: 0x%04x", (unsigned)mxp_crc16(probe, sizeof(probe)));
+
+    if (mxcam_display_init() != ESP_OK) {
+        ESP_LOGE(TAG, "display init failed");
+        return;
+    }
+    if (mxcam_camera_init() != ESP_OK) {
+        ESP_LOGE(TAG, "camera init failed");
+        return;
+    }
+    pipeline_start();
 }
