@@ -1,8 +1,27 @@
 import { fireEvent, render, screen } from '@testing-library/react'
 import { Decoder, encodeFrame } from './protocol/codec'
 import { Cmd, responseOf } from './protocol/messages'
-import { expect, test } from 'vitest'
+import { beforeEach, expect, test } from 'vitest'
+import type { ComponentProps } from 'react'
 import App from './App'
+import { I18nProvider } from './i18n'
+import { translate } from './i18n/core'
+
+function renderApp(props: ComponentProps<typeof App> = {}) {
+  return render(
+    <I18nProvider>
+      <App {...props} />
+    </I18nProvider>,
+  )
+}
+
+beforeEach(() => {
+  try {
+    localStorage.clear()
+  } catch {
+    // ignore
+  }
+})
 
 const idleSerial = {
   addEventListener: () => {},
@@ -14,23 +33,23 @@ const idleSerial = {
 } as unknown as Serial
 
 test('renders the MXCam Studio heading', () => {
-  render(<App />)
+  renderApp()
   expect(screen.getByRole('heading', { name: 'MXCam Studio' })).toBeInTheDocument()
 })
 
 test('renders a single heading per test (cleanup between tests)', () => {
-  render(<App />)
+  renderApp()
   expect(screen.getByRole('heading', { name: 'MXCam Studio' })).toBeInTheDocument()
 })
 
 test('without navigator.serial shows the unsupported message and no connect button', () => {
-  render(<App />)
+  renderApp()
   expect(screen.getByText('此瀏覽器不支援，請用 Chrome 或 Edge')).toBeInTheDocument()
   expect(screen.queryByRole('button', { name: '連線' })).not.toBeInTheDocument()
 })
 
 test('when disconnected shows the connect button and 未連線 status', () => {
-  render(<App serial={idleSerial} />)
+  renderApp({ serial: idleSerial })
   expect(screen.getByRole('button', { name: '連線' })).toBeEnabled()
   expect(screen.getByRole('button', { name: '中斷' })).toBeDisabled()
   expect(screen.getByText('未連線')).toBeInTheDocument()
@@ -58,7 +77,7 @@ test('shows 已斷線 after the read loop ends unexpectedly', async () => {
     }),
   }
   const serial = { ...idleSerial, getPorts: async () => [port] } as unknown as Serial
-  render(<App serial={serial} />)
+  renderApp({ serial })
   expect(await screen.findByText('已連線')).toBeInTheDocument()
   ctl.close()
   expect(await screen.findByText('已斷線')).toBeInTheDocument()
@@ -73,7 +92,56 @@ test('port busy (NetworkError on open) shows the Chinese busy message', async ()
     close: async () => {},
   }
   const serial = { ...idleSerial, requestPort: async () => port } as unknown as Serial
-  render(<App serial={serial} />)
+  renderApp({ serial })
   fireEvent.click(screen.getByRole('button', { name: '連線' }))
   expect(await screen.findByRole('alert')).toHaveTextContent('無法開啟序列埠：可能被其他分頁或程式佔用')
+})
+
+test('defaults to zh-TW and switches to English, persisting the choice', () => {
+  renderApp({ serial: idleSerial })
+  expect(screen.getByRole('button', { name: '顏色' })).toBeInTheDocument()
+  fireEvent.click(screen.getByRole('button', { name: 'English' }))
+  expect(screen.getByRole('button', { name: 'Color' })).toBeInTheDocument()
+  expect(screen.getByRole('button', { name: 'Connect' })).toBeInTheDocument()
+  // Only the language switch itself keeps its native label (繁中).
+  const leftover = screen
+    .queryAllByText(/[一-鿿]/)
+    .filter((el) => !el.closest('[role="group"]'))
+  expect(leftover).toEqual([])
+  expect(localStorage.getItem('mxcam.lang')).toBe('en')
+})
+
+test('restores the saved language', () => {
+  localStorage.setItem('mxcam.lang', 'en')
+  renderApp({ serial: idleSerial })
+  expect(screen.getByRole('button', { name: 'Color' })).toBeInTheDocument()
+})
+
+test('has the three columns: sidebar, live area and right panel tabs', () => {
+  renderApp({ serial: idleSerial })
+  expect(screen.getByRole('navigation')).toBeInTheDocument()
+  expect(screen.getByRole('main')).toBeInTheDocument()
+  expect(screen.getByRole('complementary')).toBeInTheDocument()
+  for (const name of ['結果', '學習', '參數', '程式']) expect(screen.getByRole('tab', { name })).toBeInTheDocument()
+})
+
+test('right panel tabs switch', () => {
+  renderApp({ serial: idleSerial })
+  expect(screen.getByRole('tab', { name: '結果' })).toHaveAttribute('aria-selected', 'true')
+  fireEvent.click(screen.getByRole('tab', { name: '參數' }))
+  expect(screen.getByRole('tab', { name: '參數' })).toHaveAttribute('aria-selected', 'true')
+})
+
+test('sidebar switches views between function, settings and firmware', () => {
+  renderApp({ serial: idleSerial })
+  fireEvent.click(screen.getByRole('button', { name: '設定' }))
+  expect(screen.getByRole('heading', { name: '系統設定' })).toBeInTheDocument()
+  fireEvent.click(screen.getByRole('button', { name: '韌體' }))
+  expect(screen.getByRole('heading', { name: '韌體更新' })).toBeInTheDocument()
+  fireEvent.click(screen.getByRole('button', { name: '人臉' }))
+  expect(screen.getByRole('button', { name: '人臉' })).toHaveAttribute('aria-current', 'page')
+})
+
+test('translate has the unsupported text in both languages', () => {
+  expect(translate('en', 'unsupported')).not.toBe(translate('zh-TW', 'unsupported'))
 })

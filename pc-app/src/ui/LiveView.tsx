@@ -1,6 +1,6 @@
 import { useEffect, useImperativeHandle, useRef, type Ref } from 'react'
 import type { FramePush } from '../protocol/messages'
-import { strings } from '../strings'
+import { useT } from '../i18n'
 
 export interface LiveViewHandle {
   draw(f: FramePush): void
@@ -14,6 +14,7 @@ interface Props {
 }
 
 export default function LiveView({ ref, connected, fps, kbps }: Props) {
+  const { t } = useT()
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const busy = useRef(false)
 
@@ -55,11 +56,12 @@ export default function LiveView({ ref, connected, fps, kbps }: Props) {
   }, [connected])
 
   return (
-    <div style={{ position: 'relative', width: 640, height: 480, background: '#000' }}>
-      <canvas ref={canvasRef} width={320} height={240} style={{ width: 640, height: 480 }} />
-      <div style={{ position: 'absolute', left: 8, top: 8, color: '#0f0', font: '14px monospace' }}>
-        {fps.toFixed(1)} {strings.fps} / {kbps.toFixed(1)} {strings.kbps}
+    <div className="stage">
+      <canvas ref={canvasRef} width={320} height={240} />
+      <div className="stage-stats">
+        {fps.toFixed(1)} {t('fps')} / {kbps.toFixed(1)} {t('kbps')}
       </div>
+      {!connected && <div className="stage-idle">{t('liveIdle')}</div>}
     </div>
   )
 }

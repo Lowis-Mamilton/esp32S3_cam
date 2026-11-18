@@ -1,8 +1,12 @@
 import { useEffect, useRef, useState } from 'react'
 import type { DeviceInfo } from './protocol/messages'
 import { MxcamConnection, type ConnectionStatus } from './serial/connection'
-import { describeError, strings, type ErrorText } from './strings'
-import DevicePanel from './ui/DevicePanel'
+import { describeError, type ErrorText } from './i18n/core'
+import { useT } from './i18n'
+import RightPanel from './ui/layout/RightPanel'
+import Sidebar from './ui/layout/Sidebar'
+import TopBar from './ui/layout/TopBar'
+import type { FunctionId, View } from './ui/layout/types'
 import LiveView, { type LiveViewHandle } from './ui/LiveView'
 
 interface Props {
@@ -10,7 +14,12 @@ interface Props {
   serial?: Serial
 }
 
+// Task 2 derives this from the device (GET_INFO functionIds / demo mode).
+const SUPPORTED: FunctionId[] = [1, 2, 3]
+
 export default function App({ serial }: Props) {
+  const { t } = useT()
+  const [view, setView] = useState<View>({ kind: 'function', id: 1 })
   const resolved = serial ?? (typeof navigator !== 'undefined' && 'serial' in navigator ? navigator.serial : undefined)
   const [status, setStatus] = useState<ConnectionStatus>(resolved ? 'disconnected' : 'unsupported')
   const [lost, setLost] = useState(false)
@@ -60,23 +69,56 @@ export default function App({ serial }: Props) {
   }
 
   return (
-    <main>
-      <h1>{strings.appTitle}</h1>
-      {status === 'unsupported' ? (
-        <p>{strings.unsupported}</p>
-      ) : (
-        <div style={{ display: 'flex', gap: 16, alignItems: 'flex-start' }}>
-          <LiveView ref={liveRef} connected={status === 'connected'} fps={stats.fps} kbps={stats.kbps} />
-          <DevicePanel
-            status={status}
-            lost={lost}
-            info={info}
-            error={error}
-            onConnect={onConnect}
-            onDisconnect={onDisconnect}
-          />
-        </div>
+    <div className="app">
+      <TopBar status={status} lost={lost} info={info} onConnect={onConnect} onDisconnect={onDisconnect} />
+      {error && (
+        <p role="alert" className="alert">
+          {t('error')}: {t(error.key)}
+          {error.detail && (
+            <>
+              {' '}
+              <small>{error.detail}</small>
+            </>
+          )}
+        </p>
       )}
-    </main>
+      <div className="columns">
+        <Sidebar view={view} supported={SUPPORTED} onSelect={setView} />
+        <main className="center">
+          {status === 'unsupported' ? (
+            <p className="notice">{t('unsupported')}</p>
+          ) : view.kind === 'function' ? (
+            <LiveView ref={liveRef} connected={status === 'connected'} fps={stats.fps} kbps={stats.kbps} />
+          ) : (
+            <section className="page">
+              {/* Task 6 builds the real settings / firmware pages. */}
+              <h2>{view.kind === 'settings' ? t('pageSettings') : t('pageFirmware')}</h2>
+              {view.kind === 'settings' && info && (
+                <dl className="info">
+                  <dt>{t('protocolVersion')}</dt>
+                  <dd>{info.protocolVersion}</dd>
+                  <dt>{t('firmware')}</dt>
+                  <dd>
+                    {info.firmwareVersion} ({info.firmwareGit})
+                  </dd>
+                  <dt>{t('serialNumber')}</dt>
+                  <dd>{info.serial}</dd>
+                  <dt>{t('frameSize')}</dt>
+                  <dd>
+                    {info.frameWidth}x{info.frameHeight}
+                  </dd>
+                  <dt>{t('maxResults')}</dt>
+                  <dd>{info.maxResults}</dd>
+                  <dt>{t('functions')}</dt>
+                  <dd>{info.functionIds.join(', ')}</dd>
+                </dl>
+              )}
+              <p className="muted">{t('pageSoon')}</p>
+            </section>
+          )}
+        </main>
+        <RightPanel />
+      </div>
+    </div>
   )
 }
