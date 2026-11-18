@@ -74,8 +74,12 @@ static uint32_t elapsed_ms(const mxs_state_t *s, uint32_t now_ms)
 
 void mxs_tick(mxs_state_t *s, uint32_t now_ms)
 {
-  if (s->streaming && elapsed_ms(s, now_ms) > MXS_STREAM_TIMEOUT_MS)
+  if (elapsed_ms(s, now_ms) > MXS_STREAM_TIMEOUT_MS) {
     s->streaming = false;
+    /* Forget the timestamp so it cannot wrap around into the "future" (>24.8
+     * days of uptime) and read as a recent request. */
+    s->has_request = false;
+  }
 }
 
 bool mxs_host_connected(const mxs_state_t *s, uint32_t now_ms)

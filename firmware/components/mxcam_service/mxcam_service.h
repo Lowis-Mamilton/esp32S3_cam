@@ -16,8 +16,8 @@ extern "C" {
 
 #define MXS_STREAM_TIMEOUT_MS 3000
 #define MXS_MAX_FPS 10
-/* Default JPEG quality (1-100) when the host sends 0. 60 keeps a 320x240
- * frame around 8-12 KB: ~10 fps stays well under the USB-Serial-JTAG
+/* Default JPEG quality (1-100) when the host sends 0. 60 gives a 320x240
+ * frame of about 4.5 KB (measured): ~10 fps stays well under the USB-Serial-JTAG
  * (12 Mbit/s full speed) budget and encodes fast on the otherwise idle core 0. */
 #define MXS_DEFAULT_JPEG_QUALITY 60
 

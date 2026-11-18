@@ -149,6 +149,13 @@ static void test_timeout(void)
   mxs_tick(&s, 4001);
   CHECK(!s.streaming && !mxs_host_connected(&s, 4001)); /* 3001 ms */
 
+  /* After the timeout tick, a far-future clock (>24.8 days, int32 wrap) must not
+   * read the stale timestamp as a recent request. */
+  start(&s, 1, 10, 60, 1000);
+  mxs_tick(&s, 5000);
+  CHECK(!s.streaming && !mxs_host_connected(&s, 5000));
+  CHECK(!mxs_host_connected(&s, 1000u + 0x80000001u));
+
   /* A PING in between restarts the timer. */
   start(&s, 1, 10, 60, 10000);
   call(&s, MXP_CMD_PING, 1, NULL, 0, 12000, &r, rb, sizeof(rb));
