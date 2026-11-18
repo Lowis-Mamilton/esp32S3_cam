@@ -1,0 +1,6 @@
+# Name,   Type, SubType, Offset,  Size,     Flags
+nvs,      data, nvs,     ,        24K,
+phy_init, data, phy,     ,        4K,
+factory,  app,  factory, ,        4M,
+# storage: 0x410000 .. 0x1000000 (16MB end) = 0xBF0000, reserved for model files
+storage,  data, spiffs,  ,        0xBF0000,
