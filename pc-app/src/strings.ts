@@ -1,0 +1,21 @@
+// All user-facing text lives here so M5 can swap it for i18n.
+export const strings = {
+  appTitle: 'MXCam Studio',
+  unsupported: '此瀏覽器不支援，請用 Chrome 或 Edge',
+  connect: '連線',
+  disconnect: '中斷',
+  statusDisconnected: '未連線',
+  statusConnecting: '連線中…',
+  statusConnected: '已連線',
+  statusLost: '已斷線',
+  deviceInfo: '裝置資訊',
+  protocolVersion: '協定版本',
+  firmware: '韌體',
+  serialNumber: '序號',
+  frameSize: '畫面大小',
+  maxResults: '最多結果數',
+  functions: '功能 ID',
+  fps: 'fps',
+  kbps: 'KB/s',
+  error: '錯誤',
+} as const
