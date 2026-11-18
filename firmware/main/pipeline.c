@@ -37,18 +37,28 @@ static void pipeline_task(void *arg)
         camera_fb_t *fb = mxcam_camera_grab();
         if (!fb) {
             grab_fail++;
+            /* Keep enforcing the stream timeout while the camera fails. */
+            mxcam_link_state_lock();
+            mxs_tick(state, (uint32_t)(esp_timer_get_time() / 1000));
+            mxcam_link_state_unlock();
             vTaskDelay(pdMS_TO_TICKS(10));
         } else if (fb->width != MXCAM_LCD_W || fb->height != MXCAM_LCD_H ||
                    fb->len < (size_t)MXCAM_LCD_W * MXCAM_LCD_H * 2) {
             /* mxcam_display_draw assumes a full 320x240 RGB565 buffer. */
             bad_size++;
+            /* Keep enforcing the stream timeout while the camera fails. */
+            mxcam_link_state_lock();
+            mxs_tick(state, (uint32_t)(esp_timer_get_time() / 1000));
+            mxcam_link_state_unlock();
             mxcam_camera_release(fb);
             vTaskDelay(pdMS_TO_TICKS(10));
         } else {
-            uint32_t now_ms = (uint32_t)(esp_timer_get_time() / 1000);
+            uint32_t now_ms;
             bool connected, want;
             uint8_t eff_fps, quality;
             mxcam_link_state_lock();
+            /* Sample the clock inside the lock, like the link RX task does. */
+            now_ms = (uint32_t)(esp_timer_get_time() / 1000);
             mxs_tick(state, now_ms);
             connected = mxs_host_connected(state, now_ms);
             want = mxs_wants_frames(state);

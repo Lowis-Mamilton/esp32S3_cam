@@ -157,6 +157,11 @@ static void test_timeout(void)
   mxs_tick(&s, 15001);
   CHECK(!s.streaming);
 
+  /* now slightly before last_request_ms (cross-task clock sampling). */
+  start(&s, 1, 10, 60, 1000);
+  mxs_tick(&s, 999);
+  CHECK(s.streaming && mxs_host_connected(&s, 999));
+
   /* uint32 wraparound of the millisecond clock. */
   start(&s, 1, 10, 60, 0xFFFFFF00u);
   mxs_tick(&s, 100);

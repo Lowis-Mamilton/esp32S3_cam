@@ -64,15 +64,23 @@ size_t mxs_handle(mxs_state_t *s, const mxp_frame_t *req, uint32_t now_ms, uint8
   }
 }
 
+/* Callers sample the clock on different tasks, so a request may be stamped
+ * slightly after "now": treat a negative difference as 0 elapsed. */
+static uint32_t elapsed_ms(const mxs_state_t *s, uint32_t now_ms)
+{
+  int32_t d = (int32_t)(now_ms - s->last_request_ms);
+  return d < 0 ? 0 : (uint32_t)d;
+}
+
 void mxs_tick(mxs_state_t *s, uint32_t now_ms)
 {
-  if (s->streaming && (uint32_t)(now_ms - s->last_request_ms) > MXS_STREAM_TIMEOUT_MS)
+  if (s->streaming && elapsed_ms(s, now_ms) > MXS_STREAM_TIMEOUT_MS)
     s->streaming = false;
 }
 
 bool mxs_host_connected(const mxs_state_t *s, uint32_t now_ms)
 {
-  return s->has_request && (uint32_t)(now_ms - s->last_request_ms) <= MXS_STREAM_TIMEOUT_MS;
+  return s->has_request && elapsed_ms(s, now_ms) <= MXS_STREAM_TIMEOUT_MS;
 }
 
 bool mxs_wants_frames(const mxs_state_t *s)

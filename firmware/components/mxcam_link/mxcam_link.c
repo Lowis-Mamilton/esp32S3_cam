@@ -47,9 +47,10 @@ bool mxcam_link_send(const uint8_t *data, size_t len)
         /* One tick (10 ms at 100 Hz) per attempt; the ring drains at USB speed
          * when the host reads, and stays full when it does not. */
         int n = usb_serial_jtag_write_bytes(data + off, chunk, 1);
-        if (n > 0) {
-            off += (size_t)n;
-        } else if (esp_timer_get_time() >= deadline) {
+        if (n > 0) off += (size_t)n;
+        /* Checked every iteration so a slowly draining host cannot hold the
+         * tx mutex past the budget. */
+        if (off < len && esp_timer_get_time() >= deadline) {
             ok = false;
             break;
         }
