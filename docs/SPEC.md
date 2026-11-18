@@ -188,7 +188,7 @@ docs/          規格、協定、ADR
 ```
 
 - 公開 repo，**MIT 授權**
-- 開發時 repo 放在沒有空白的路徑 `C:\dev\esp32S3_cam`（ESP-IDF 不支援路徑空白），ESP-IDF v5.4.1 也裝在沒有空白的路徑
+- 開發時 repo 放在沒有空白的路徑 `C:\dev\esp32S3_cam`（ESP-IDF 不支援路徑空白），ESP-IDF v5.5.6 也裝在沒有空白的路徑
 - 直接在 `main` 上開發，CI 把關
 - 舊的 `.ino` 與 Python 腳本直接刪除，靠 git 歷史保存
 - `CLAUDE.md` 在 M0 改寫成新架構

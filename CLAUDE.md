@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 MXCam：ESP32-S3 視覺感測器，搭配 MATRIX Mini R4 使用，設定由電腦端 Web Serial PWA 完成。三個子專案：
 
-- `firmware/`：ESP-IDF v5.4.1 韌體（ESP32-S3 N16R8），專案名 `mxcam`
+- `firmware/`：ESP-IDF v5.5.6 韌體（ESP32-S3 N16R8），專案名 `mxcam`
 - `pc-app/`：MXCam Studio（Vite + React + TS）
 - `arduino-lib/`：給 R4 用的 Arduino 函式庫 `MXCam`
 
@@ -17,14 +17,16 @@ MXCam：ESP32-S3 視覺感測器，搭配 MATRIX Mini R4 使用，設定由電�
 
 ## 指令
 
-firmware（在 `firmware/`，需 ESP-IDF v5.4.1 環境）：
+firmware（在 `firmware/`，需 ESP-IDF v5.5.6 環境；本機裝在 `C:\Espressif`）：
 ```
+# PowerShell 先啟用環境（Git Bash 不行）
+$env:IDF_TOOLS_PATH = "C:\Espressif"; . C:\Espressif\frameworks\esp-idf-v5.5.6\export.ps1
 idf.py build
 idf.py -p COMx flash        # TTL 或 OTG 的 COM 皆可
 idf.py -p COMy monitor      # COMy 必須是 TTL 埠
 ```
 注意：log 只從 UART0（TTL 埠）輸出；在 OTG 埠的 COM 上 monitor 過了 ROM banner 就沒有任何輸出（console 僅 UART0）。
-目前沒有韌體單元測試。本機沒裝 ESP-IDF 時，韌體只能靠 CI 或本機安裝 v5.4.1 驗證，不要宣稱「已建置成功」而沒跑過。
+目前沒有韌體單元測試。本機沒裝 ESP-IDF 時，韌體只能靠 CI 或本機安裝 v5.5.6 驗證，不要宣稱「已建置成功」而沒跑過。
 
 pc-app（在 `pc-app/`）：
 ```
@@ -45,7 +47,7 @@ CI（`.github/workflows/ci.yml`）三個 job 分別建置以上三者。
 
 ## 注意事項
 
-- **本機建 ESP-IDF 時 repo 路徑有空白**（`K230 Smart Cam`），ESP-IDF 工具鏈對空白路徑常出問題；請把專案複製或 clone 到無空白路徑再建置，或交給 CI。
+- 開發路徑是 `C:\dev\esp32S3_cam`。ESP-IDF 不支援路徑有空白，不要在舊的 `...\K230 Smart Cam\esp32S3_cam` 副本建置。
 - 除錯訊息走 TTL 孔（UART0），協定走 OTG 孔（原生 USB），不要混用。
 - 硬體腳位以 `docs/SPEC.md` 第 4 節為準；V1.3 實板尚未核對。
 

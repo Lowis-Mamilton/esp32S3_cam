@@ -2,13 +2,13 @@
 
 > **給執行的代理：** 必須搭配 superpowers:subagent-driven-development 逐項執行。步驟用勾選框（`- [ ]`）追蹤。
 > **混合執行（使用者決定）：** 標記 🧑‍🔧 的步驟要接實機，由**主對話**跟使用者一起做（子代理沒辦法跟使用者互動）；其他步驟交給子代理實作，再由審查者檢查。
-> **執行地點：** `C:\dev\esp32S3_cam`（從 GitHub clone 的乾淨副本），本機已裝 ESP-IDF v5.4.1。直接在 `main` 上 commit。
+> **執行地點：** `C:\dev\esp32S3_cam`（從 GitHub clone 的乾淨副本），本機 ESP-IDF 在 `C:\Espressif\frameworks\esp-idf-v5.5.6`，已裝 ESP-IDF v5.5.6。直接在 `main` 上 commit。
 
 **目標：** MXCam 開機後在橫向 TFT 上顯示即時畫面（左上角功能名稱＋fps）；MXCam Studio 透過 USB 連線，顯示裝置資訊和每秒最多 10 張的即時畫面。
 
 **架構：** 協定編解碼有兩份實作：C（`arduino-lib/src/protocol/`，韌體和 Arduino 函式庫共用）和 TypeScript（`pc-app/src/protocol/`），兩份都要通過 `docs/protocol-vectors.json`。韌體裡不碰硬體的邏輯（協定、指令處理、畫框寫字）都是純 C 元件，在電腦上就能測試；碰硬體的部分（鏡頭、螢幕、USB）做成薄薄一層。
 
-**技術：** ESP-IDF v5.4.1、`espressif/esp32-camera`、`espressif/esp_lcd_ili9341`、USB-Serial-JTAG driver；React + TypeScript + Vitest、Web Serial（`@types/w3c-web-serial`）；CMake + CTest 跑電腦上的 C 測試。
+**技術：** ESP-IDF v5.5.6、`espressif/esp32-camera`、`espressif/esp_lcd_ili9341`、USB-Serial-JTAG driver；React + TypeScript + Vitest、Web Serial（`@types/w3c-web-serial`）；CMake + CTest 跑電腦上的 C 測試。
 
 **規格：** `docs/SPEC.md`（第 4、5、6 節）、`docs/protocol.md`、ADR-0006。
 
@@ -145,7 +145,7 @@ export function parseError(payload: Uint8Array): { cmd: number; code: number }
 
 - [ ] **步驟 1：** `firmware/CMakeLists.txt` 設 `PROJECT_VER "0.1.0"`，用 `git rev-parse --short=7 HEAD` 取 commit，失敗就用 `"unknown"`，作為全專案的編譯定義
 - [ ] **步驟 2：** 建立 `mxcam_protocol` 元件
-- [ ] **步驟 3：** `idf_component.yml` 加入 `espressif/esp32-camera` 和 `espressif/esp_lcd_ili9341`（用目前與 IDF v5.4 相容的最新版本，寫明版本範圍）
+- [ ] **步驟 3：** `idf_component.yml` 加入 `espressif/esp32-camera` 和 `espressif/esp_lcd_ili9341`（用目前與 IDF v5.5 相容的最新版本，寫明版本範圍）
 - [ ] **步驟 4：** `sdkconfig.defaults` 加上：
   ```
   CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y
