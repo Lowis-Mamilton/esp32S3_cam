@@ -37,6 +37,13 @@ class FakePort {
   opened = false
   closed = false
   openOptions: SerialOptions | undefined
+  openCount = 0
+  vid = 0x303a
+  pid = 0x1001
+  answering = true
+  getInfo() {
+    return { usbVendorId: this.vid, usbProductId: this.pid }
+  }
   handler: Handler
   private controller!: ReadableStreamDefaultController<Uint8Array>
   readable: ReadableStream<Uint8Array>
@@ -65,6 +72,7 @@ class FakePort {
       write: (chunk) => {
         for (const f of dec.push(chunk)) {
           this.requests.push(f)
+          if (!this.answering && f.cmd === Cmd.Ping) continue
           const r = this.handler(f)
           if (r === null) continue
           if ('cmd' in r) this.push(encodeFrame(r.cmd, f.seq, r.payload))
@@ -80,6 +88,7 @@ class FakePort {
       this.writable = this.makeWritable()
     }
     this.opened = true
+    this.openCount++
     this.openOptions = o
   }
   async close() {
@@ -109,7 +118,9 @@ class FakeSerial {
   emit(type: string, port: FakePort) {
     for (const l of this.listeners.get(type) ?? []) l({ type, target: port })
   }
-  async requestPort() {
+  requestOptions: SerialPortRequestOptions | undefined
+  async requestPort(o?: SerialPortRequestOptions) {
+    this.requestOptions = o
     if (this.nextPort === 'cancel') throw new DOMException('no port', 'NotFoundError')
     this.granted.push(this.nextPort)
     return this.nextPort
@@ -290,5 +301,69 @@ describe('MxcamConnection', () => {
     serial.emit('connect', port)
     await vi.waitFor(() => expect(statuses.at(-1)).toBe('connected'))
     await conn.disconnect()
+  })
+
+  test('overlapping autoConnect calls open the port once and end connected', async () => {
+    const { conn, port, serial, statuses } = setup()
+    serial.granted.push(port)
+    const [a, b] = await Promise.all([conn.autoConnect(), conn.autoConnect()])
+    expect([a, b].filter(Boolean).length).toBe(1)
+    expect(port.openCount).toBe(1)
+    expect(statuses.at(-1)).toBe('connected')
+    await conn.disconnect()
+  })
+
+  test('autoConnect + connect event for the same port does not break the live link', async () => {
+    const { conn, port, serial, statuses } = setup()
+    serial.granted.push(port)
+    const p = conn.autoConnect()
+    serial.emit('connect', port)
+    await p
+    await new Promise((r) => setTimeout(r, 20))
+    expect(port.openCount).toBe(1)
+    expect(statuses.at(-1)).toBe('connected')
+    await conn.disconnect()
+  })
+
+  test('three consecutive PING failures tear the link down; success resets the count', async () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'setTimeout', 'clearTimeout'] })
+    const { conn, port, statuses } = setup()
+    await conn.connect()
+    port.answering = false
+    await vi.advanceTimersByTimeAsync(2500) // one ping has failed (t=2 s)
+    port.answering = true
+    await vi.advanceTimersByTimeAsync(3000) // the ping from t=2 s fails too, then successes reset the count
+    port.answering = false
+    await vi.advanceTimersByTimeAsync(2000) // only one failure since the reset
+    expect(statuses.at(-1)).toBe('connected')
+    await vi.advanceTimersByTimeAsync(4000) // three in a row
+    expect(statuses.at(-1)).toBe('disconnected')
+  })
+
+  test('requestPort and autoConnect use the MXCam VID/PID', async () => {
+    const other = new FakePort()
+    other.vid = 0x1234
+    other.pid = 0x5678
+    const mx = new FakePort()
+    const serial = new FakeSerial(mx)
+    serial.granted.push(other, mx)
+    const conn = new MxcamConnection(serial as unknown as Serial, { status: () => {}, frame: () => {}, stats: () => {} })
+    expect(await conn.autoConnect()).toBe(true)
+    expect(other.openCount).toBe(0)
+    expect(mx.openCount).toBe(1)
+    await conn.disconnect()
+    await conn.connect()
+    expect(serial.requestOptions?.filters).toEqual([{ usbVendorId: 0x303a, usbProductId: 0x1001 }])
+    await conn.disconnect()
+  })
+
+  test('autoConnect returns false when no granted port matches', async () => {
+    const other = new FakePort()
+    other.vid = 0x1234
+    const serial = new FakeSerial(other)
+    serial.granted.push(other)
+    const conn = new MxcamConnection(serial as unknown as Serial, { status: () => {}, frame: () => {}, stats: () => {} })
+    expect(await conn.autoConnect()).toBe(false)
+    expect(other.openCount).toBe(0)
   })
 })

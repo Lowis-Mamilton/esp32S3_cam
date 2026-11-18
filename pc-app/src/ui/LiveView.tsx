@@ -1,4 +1,4 @@
-import { useImperativeHandle, useRef, type Ref } from 'react'
+import { useEffect, useImperativeHandle, useRef, type Ref } from 'react'
 import type { FramePush } from '../protocol/messages'
 import { strings } from '../strings'
 
@@ -8,11 +8,12 @@ export interface LiveViewHandle {
 
 interface Props {
   ref?: Ref<LiveViewHandle>
+  connected: boolean
   fps: number
   kbps: number
 }
 
-export default function LiveView({ ref, fps, kbps }: Props) {
+export default function LiveView({ ref, connected, fps, kbps }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const busy = useRef(false)
 
@@ -27,10 +28,13 @@ export default function LiveView({ ref, fps, kbps }: Props) {
       busy.current = true
       createImageBitmap(new Blob([f.jpeg as BlobPart], { type: 'image/jpeg' }))
         .then((bmp) => {
-          if (canvas.width !== f.width) canvas.width = f.width
-          if (canvas.height !== f.height) canvas.height = f.height
-          canvas.getContext('2d')?.drawImage(bmp, 0, 0)
-          bmp.close()
+          try {
+            if (canvas.width !== f.width) canvas.width = f.width
+            if (canvas.height !== f.height) canvas.height = f.height
+            canvas.getContext('2d')?.drawImage(bmp, 0, 0)
+          } finally {
+            bmp.close()
+          }
         })
         .catch(() => {})
         .finally(() => {
@@ -38,6 +42,17 @@ export default function LiveView({ ref, fps, kbps }: Props) {
         })
     },
   }))
+
+  useEffect(() => {
+    if (connected) return
+    const canvas = canvasRef.current
+    // jsdom has no canvas context; getContext may be missing or return null
+    try {
+      canvas?.getContext('2d')?.clearRect(0, 0, canvas.width, canvas.height)
+    } catch {
+      // ignore
+    }
+  }, [connected])
 
   return (
     <div style={{ position: 'relative', width: 640, height: 480, background: '#000' }}>

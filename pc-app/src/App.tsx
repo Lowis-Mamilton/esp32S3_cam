@@ -50,7 +50,9 @@ export default function App({ serial }: Props) {
   }, [resolved])
 
   const onConnect = () => {
-    connRef.current?.connect().catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)))
+    connRef.current?.connect().catch((e: unknown) => {
+      if (!userClosed.current) setError(e instanceof Error ? e.message : String(e))
+    })
   }
   const onDisconnect = () => {
     userClosed.current = true
@@ -64,7 +66,7 @@ export default function App({ serial }: Props) {
         <p>{strings.unsupported}</p>
       ) : (
         <div style={{ display: 'flex', gap: 16, alignItems: 'flex-start' }}>
-          <LiveView ref={liveRef} fps={stats.fps} kbps={stats.kbps} />
+          <LiveView ref={liveRef} connected={status === 'connected'} fps={stats.fps} kbps={stats.kbps} />
           <DevicePanel
             status={status}
             lost={lost}

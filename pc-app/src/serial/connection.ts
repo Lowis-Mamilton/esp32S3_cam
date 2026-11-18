@@ -48,6 +48,10 @@ interface Session {
   loopDone: Promise<void>
 }
 
+// Native USB-Serial-JTAG of the ESP32-S3 (the OTG port on the board).
+const MXCAM_USB_VID = 0x303a
+const MXCAM_USB_PID = 0x1001
+const MAX_PING_FAILURES = 3 // matches the firmware's 3 s stream timeout
 const PING_INTERVAL_MS = 1000
 const STATS_INTERVAL_MS = 1000
 
@@ -57,6 +61,7 @@ export class MxcamConnection {
   private status: ConnectionStatus
   private session: Session | null = null
   private cleanup: Promise<void> = Promise.resolve()
+  private opening: Promise<unknown> | null = null
   private readonly pending = new Map<number, Pending>()
   private seq = 0
   private pingTimer: ReturnType<typeof setInterval> | null = null
@@ -64,13 +69,15 @@ export class MxcamConnection {
   private frameCount = 0
   private byteCount = 0
 
-  private readonly onSerialConnect = () => {
-    if (this.status === 'disconnected') void this.autoConnect()
+  private readonly onSerialConnect = (ev: Event) => {
+    if (this.status !== 'disconnected' || this.opening) return
+    const t = ev.target as SerialPort | null
+    void this.autoConnect(t && this.isMxcam(t) ? t : undefined)
   }
   private readonly onSerialDisconnect = (ev: Event) => {
     const s = this.session
     // Real events target the port; ignore ones for other ports.
-    if (s && (ev.target === s.port || ev.target === this.serial)) {
+    if (s && ev.target === s.port) {
       void this.teardown(s, new Error('device disconnected'))
     }
   }
@@ -101,25 +108,48 @@ export class MxcamConnection {
     this.events.status(s)
   }
 
-  async connect(): Promise<void> {
-    if (!this.serial || this.status === 'connecting' || this.status === 'connected') return
-    let port: SerialPort
-    try {
-      port = await this.serial.requestPort()
-    } catch (e) {
-      if (e instanceof DOMException && e.name === 'NotFoundError') return // user cancelled the picker
-      throw e
-    }
-    await this.openPort(port)
+  private isMxcam(port: SerialPort): boolean {
+    const i = port.getInfo()
+    return i.usbVendorId === MXCAM_USB_VID && i.usbProductId === MXCAM_USB_PID
   }
 
-  async autoConnect(): Promise<boolean> {
-    if (!this.serial || this.status === 'connecting' || this.status === 'connected') return false
+  /** Run `fn` as the single in-flight open; the flag is set synchronously. */
+  private async exclusive<T>(fn: () => Promise<T>): Promise<T> {
+    const p = fn()
+    this.opening = p
     try {
-      const ports = await this.serial.getPorts()
-      if (ports.length === 0) return false
-      await this.openPort(ports[0])
-      return true
+      return await p
+    } finally {
+      if (this.opening === p) this.opening = null
+    }
+  }
+
+  async connect(): Promise<void> {
+    if (!this.serial || this.opening || this.status === 'connecting' || this.status === 'connected') return
+    const serial = this.serial
+    await this.exclusive(async () => {
+      let port: SerialPort
+      try {
+        port = await serial.requestPort({ filters: [{ usbVendorId: MXCAM_USB_VID, usbProductId: MXCAM_USB_PID }] })
+      } catch (e) {
+        if (e instanceof DOMException && e.name === 'NotFoundError') return // user cancelled the picker
+        throw e
+      }
+      await this.openPort(port)
+    })
+  }
+
+  /** Returns false when already opening/connected or no matching granted port exists. */
+  async autoConnect(preferred?: SerialPort): Promise<boolean> {
+    if (!this.serial || this.opening || this.status === 'connecting' || this.status === 'connected') return false
+    const serial = this.serial
+    try {
+      return await this.exclusive(async () => {
+        const port = preferred ?? (await serial.getPorts()).find((p) => this.isMxcam(p))
+        if (!port) return false
+        await this.openPort(port)
+        return true
+      })
     } catch {
       return false
     }
@@ -254,8 +284,19 @@ export class MxcamConnection {
     this.frameCount = 0
     this.byteCount = 0
     // Firmware stops streaming after 3 s without a request (protocol.md §6).
+    const session = this.session
+    let failures = 0
     this.pingTimer = setInterval(() => {
-      this.request(Cmd.Ping).catch(() => {})
+      this.request(Cmd.Ping).then(
+        () => {
+          failures = 0
+        },
+        () => {
+          if (++failures >= MAX_PING_FAILURES && session && this.session === session) {
+            void this.teardown(session, new Error('device not responding'))
+          }
+        },
+      )
     }, PING_INTERVAL_MS)
     this.statsTimer = setInterval(() => {
       const secs = STATS_INTERVAL_MS / 1000
@@ -295,7 +336,7 @@ export class MxcamConnection {
     this.cleanup = (async () => {
       await s.reader.cancel().catch(() => {})
       await s.loopDone
-      await s.writer.close().catch(() => {})
+      await s.writer.abort().catch(() => {}) // abort, not close: a stuck write must not hang cleanup
       try {
         s.writer.releaseLock()
       } catch {
