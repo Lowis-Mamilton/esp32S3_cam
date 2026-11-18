@@ -26,7 +26,7 @@ export const zhTW = {
   fnColor: '顏色',
   fnTag: 'AprilTag',
   fnFace: '人臉',
-  navFunctions: '功能',
+  navFunctions: '導覽',
   navSettings: '設定',
   navFirmware: '韌體',
   needFirmware: '需要更新韌體',

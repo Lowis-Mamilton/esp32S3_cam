@@ -16,14 +16,16 @@
   --danger: #f87171;
 
   /* Recognition ID colours (ID1-ID8). Deliberately none of them is amber/orange/yellow. */
-  --id-1: #ef4444;
-  --id-2: #22c55e;
-  --id-3: #3b82f6;
-  --id-4: #d946ef;
-  --id-5: #06b6d4;
-  --id-6: #8b5cf6;
-  --id-7: #fb7185;
-  --id-8: #2dd4bf;
+  --id-1: #ef4b4b; /* red      hue   0 */
+  --id-2: #a3d62f; /* lime     hue  75 */
+  --id-3: #34d27b; /* green    hue 145 */
+  --id-4: #2cc8d8; /* cyan     hue 186 */
+  --id-5: #4d8ef5; /* blue     hue 217 */
+  --id-6: #8f6df2; /* violet   hue 257 */
+  --id-7: #d45be0; /* magenta  hue 294 */
+  --id-8: #f2609b; /* pink     hue 336 */
+  --video-bg: #000;
+  --danger-soft: rgba(248, 113, 113, 0.12);
 
   --font-ui: 'Segoe UI Variable Text', 'Segoe UI', 'Noto Sans TC', 'Microsoft JhengHei', system-ui, sans-serif;
   --font-mono: 'Cascadia Mono', 'JetBrains Mono', Consolas, ui-monospace, monospace;
@@ -60,7 +62,7 @@ button {
 
 .app {
   display: grid;
-  grid-template-rows: auto auto 1fr;
+  grid-template-rows: auto minmax(0, 1fr);
   height: 100%;
   min-width: 1024px;
 }
@@ -187,9 +189,14 @@ button {
 }
 
 .alert {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 5;
   margin: 0;
   padding: 8px 16px;
-  background: rgba(248, 113, 113, 0.12);
+  background: var(--danger-soft);
   border-bottom: 1px solid var(--danger);
   color: var(--danger);
 }
@@ -200,6 +207,7 @@ button {
 
 /* ---- three columns ---- */
 .columns {
+  position: relative;
   display: grid;
   grid-template-columns: 168px minmax(0, 1fr) 340px;
   min-height: 0;
@@ -265,7 +273,7 @@ button {
   position: relative;
   aspect-ratio: 4 / 3;
   width: min(100%, calc((100vh - 52px - 48px) * 4 / 3));
-  background: #000;
+  background: var(--video-bg);
   border: 1px solid var(--line);
 }
 .stage canvas {
@@ -300,7 +308,7 @@ button {
   bottom: 8px;
   font: 12px var(--font-mono);
   color: var(--text-dim);
-  text-shadow: 0 1px 2px #000;
+  text-shadow: 0 1px 2px var(--video-bg);
 }
 .stage-idle {
   position: absolute;

@@ -28,7 +28,7 @@ export const en: Record<keyof typeof zhTW, string> = {
   fnColor: 'Color',
   fnTag: 'AprilTag',
   fnFace: 'Face',
-  navFunctions: 'Functions',
+  navFunctions: 'Navigation',
   navSettings: 'Settings',
   navFirmware: 'Firmware',
   needFirmware: 'Firmware update required',

@@ -1,4 +1,4 @@
-import { createContext, useCallback, useContext, useMemo, useState, type ReactNode } from 'react'
+import { createContext, useCallback, useEffect, useContext, useMemo, useState, type ReactNode } from 'react'
 import { translate, type Lang, type MessageKey } from './core'
 
 export type { Lang, MessageKey }
@@ -25,6 +25,9 @@ const Ctx = createContext<I18n | null>(null)
 
 export function I18nProvider({ children }: { children: ReactNode }) {
   const [lang, setLangState] = useState<Lang>(readLang)
+  useEffect(() => {
+    document.documentElement.lang = lang
+  }, [lang])
   const setLang = useCallback((l: Lang) => {
     setLangState(l)
     try {

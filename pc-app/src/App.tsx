@@ -71,18 +71,18 @@ export default function App({ serial }: Props) {
   return (
     <div className="app">
       <TopBar status={status} lost={lost} info={info} onConnect={onConnect} onDisconnect={onDisconnect} />
-      {error && (
-        <p role="alert" className="alert">
-          {t('error')}: {t(error.key)}
-          {error.detail && (
-            <>
-              {' '}
-              <small>{error.detail}</small>
-            </>
-          )}
-        </p>
-      )}
       <div className="columns">
+        {error && (
+          <p role="alert" className="alert">
+            {t('error')}: {t(error.key)}
+            {error.detail && (
+              <>
+                {' '}
+                <small>{error.detail}</small>
+              </>
+            )}
+          </p>
+        )}
         <Sidebar view={view} supported={SUPPORTED} onSelect={setView} />
         <main className="center">
           {status === 'unsupported' ? (
