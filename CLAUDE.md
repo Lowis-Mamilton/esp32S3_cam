@@ -20,8 +20,10 @@ MXCam：ESP32-S3 視覺感測器，搭配 MATRIX Mini R4 使用，設定由電�
 firmware（在 `firmware/`，需 ESP-IDF v5.4.1 環境）：
 ```
 idf.py build
-idf.py -p COMx flash monitor
+idf.py -p COMx flash        # TTL 或 OTG 的 COM 皆可
+idf.py -p COMy monitor      # COMy 必須是 TTL 埠
 ```
+注意：log 只從 UART0（TTL 埠）輸出；在 OTG 埠的 COM 上 monitor 過了 ROM banner 就沒有任何輸出（console 僅 UART0）。
 目前沒有韌體單元測試。本機沒裝 ESP-IDF 時，韌體只能靠 CI 或本機安裝 v5.4.1 驗證，不要宣稱「已建置成功」而沒跑過。
 
 pc-app（在 `pc-app/`）：
