@@ -161,6 +161,15 @@ export class MxcamConnection {
     let s: Session | null = null
     try {
       await port.open({ baudRate: 115200 }) // baud is ignored by USB-Serial-JTAG but required by the API
+      // The ESP32-S3 USB-Serial-JTAG treats DTR/RTS changes as reset/bootloader control, and
+      // closing the port re-asserts them (RTS=1 with DTR=0 resets the chip). Drop RTS first,
+      // then DTR, as two separate calls so the lines never pass through DTR=0/RTS=1.
+      try {
+        await port.setSignals({ requestToSend: false })
+        await port.setSignals({ dataTerminalReady: false })
+      } catch (e) {
+        console.warn('setSignals failed, continuing', e)
+      }
       if (!port.readable || !port.writable) throw new Error('port streams unavailable')
       const created: Session = {
         port,

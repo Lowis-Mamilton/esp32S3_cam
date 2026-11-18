@@ -38,6 +38,10 @@ class FakePort {
   closed = false
   openOptions: SerialOptions | undefined
   openCount = 0
+  log: string[] = []
+  async setSignals(o: SerialOutputSignals) {
+    this.log.push('signals:' + JSON.stringify(o))
+  }
   vid = 0x303a
   pid = 0x1001
   answering = true
@@ -72,6 +76,7 @@ class FakePort {
       write: (chunk) => {
         for (const f of dec.push(chunk)) {
           this.requests.push(f)
+          if (this.requests.length === 1) this.log.push('write')
           if (!this.answering && f.cmd === Cmd.Ping) continue
           const r = this.handler(f)
           if (r === null) continue
@@ -365,5 +370,26 @@ describe('MxcamConnection', () => {
     const conn = new MxcamConnection(serial as unknown as Serial, { status: () => {}, frame: () => {}, stats: () => {} })
     expect(await conn.autoConnect()).toBe(false)
     expect(other.openCount).toBe(0)
+  })
+
+  test('drops RTS then DTR right after open, before the first write', async () => {
+    const { conn, port } = setup()
+    await conn.connect()
+    expect(port.log.slice(0, 3)).toEqual([
+      'signals:{"requestToSend":false}',
+      'signals:{"dataTerminalReady":false}',
+      'write',
+    ])
+    await conn.disconnect()
+  })
+
+  test('setSignals failure does not fail the connection', async () => {
+    const { conn, port, statuses } = setup()
+    port.setSignals = async () => {
+      throw new Error('unsupported')
+    }
+    await conn.connect()
+    expect(statuses.at(-1)).toBe('connected')
+    await conn.disconnect()
   })
 })
