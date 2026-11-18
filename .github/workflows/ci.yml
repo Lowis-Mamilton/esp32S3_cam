@@ -1,0 +1,49 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  firmware:
+    runs-on: ubuntu-latest
+    container: espressif/idf:v5.4.1
+    defaults:
+      run:
+        shell: bash
+        working-directory: firmware
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build
+        run: |
+          . $IDF_PATH/export.sh
+          idf.py build
+
+  pc-app:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: pc-app
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: pc-app/package-lock.json
+      - run: npm ci
+      - run: npm run lint
+      - run: npm test
+      - run: npm run build
+
+  arduino-lib:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: arduino/compile-sketches@v1
+        with:
+          fqbn: arduino:renesas_uno:unor4wifi
+          libraries: |
+            - source-path: ./arduino-lib
+          sketch-paths: |
+            - ./arduino-lib/examples
