@@ -7,3 +7,4 @@ pc-app/node_modules/
 pc-app/dist/
 .vscode/
 __pycache__/
+build/

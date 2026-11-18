@@ -58,3 +58,11 @@ jobs:
             - source-path: ./arduino-lib
           sketch-paths: |
             - ./arduino-lib/examples
+
+  host-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: cmake -S arduino-lib/extras/host-test -B build/host-test
+      - run: cmake --build build/host-test
+      - run: ctest --test-dir build/host-test --output-on-failure
