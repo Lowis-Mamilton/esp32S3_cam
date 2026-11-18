@@ -224,3 +224,15 @@ docs/          規格、協定、ADR
 - [ ] V1.3 擴展板：鏡頭和螢幕腳位已在實板驗證；I2C（41/42）和 UART（1/2）在 M4 驗證
 - [x] 協定 C 程式碼的位置（ADR-0006）
 - [ ] M4：Arduino 函式庫的發佈方式（把 `arduino-lib/` 打包成 release ZIP）
+- [ ] M2 開工前（M1 總審查建議）：
+  - `mxcam_link` 改成非阻塞的推送佇列（`mxcam_link_push`），推送序號集中在 link；RESULTS 不可以讓 TFT 卡住
+  - 需要 pipeline 資料才能回答的指令（例如 LEARN）：先決定用 BUSY＋輪詢，還是延後回應
+  - 量測 TFT 每張約 91 ms 花在哪裡（等鏡頭 vs SPI 傳輸），再加入辨識演算法
+  - 換 JPEG 編碼器時，輸入格式要選 **big-endian** RGB565
+  - 初始化失敗時在 TFT 顯示錯誤字串、USB 仍可回應 GET_INFO
+  - git hash 每次建置都更新、加上 `-dirty`
+  - 測試補強：`mxp_unpack_info` n=2、解碼器 len==cap 邊界、逐 byte 餵入、`unhex` 長度檢查
+  - 1 Hz log 加上 task stack 高水位和最小 heap
+  - FRAME 和 RESULTS 的 timestamp 統一用同一個來源
+  - 網頁小問題：多個已授權埠時自動連線會忽略使用者的「中斷」；watchdog 改用時間戳而不是計數
+  - macOS Chrome 驗證：關分頁不重開機、拔插自動重連
