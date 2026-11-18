@@ -1,13 +1,13 @@
 import type { DeviceInfo } from '../protocol/messages'
 import type { ConnectionStatus } from '../serial/connection'
-import { strings } from '../strings'
+import { strings, type ErrorText } from '../strings'
 
 interface Props {
   status: ConnectionStatus
   /** True when the last disconnect was not requested by the user. */
   lost: boolean
   info: DeviceInfo | null
-  error: string | null
+  error: ErrorText | null
   onConnect(): void
   onDisconnect(): void
 }
@@ -33,7 +33,13 @@ export default function DevicePanel({ status, lost, info, error, onConnect, onDi
       <p>{statusText(status, lost)}</p>
       {error && (
         <p role="alert">
-          {strings.error}: {error}
+          {strings.error}: {error.message}
+          {error.detail && (
+            <>
+              {' '}
+              <small>{error.detail}</small>
+            </>
+          )}
         </p>
       )}
       {info && (

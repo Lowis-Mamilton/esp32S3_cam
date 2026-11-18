@@ -18,4 +18,24 @@ export const strings = {
   fps: 'fps',
   kbps: 'KB/s',
   error: '錯誤',
+  errPortBusy: '無法開啟序列埠：可能被其他分頁或程式佔用',
+  errAlreadyOpen: '序列埠已經開啟',
+  errNoResponse: '裝置沒有回應',
+  errGeneric: '連線失敗',
 } as const
+
+export interface ErrorText {
+  message: string
+  /** Raw error text, shown small, only for unmapped errors. */
+  detail?: string
+}
+
+/** Map a connect/open failure to Traditional Chinese user text. */
+export function describeError(e: unknown): ErrorText {
+  const name = e instanceof Error ? e.name : ''
+  const msg = e instanceof Error ? e.message : String(e)
+  if (name === 'NetworkError' || /failed to open/i.test(msg)) return { message: strings.errPortBusy }
+  if (name === 'InvalidStateError') return { message: strings.errAlreadyOpen }
+  if (/timeout|not responding/i.test(msg)) return { message: strings.errNoResponse }
+  return { message: strings.errGeneric, detail: msg }
+}

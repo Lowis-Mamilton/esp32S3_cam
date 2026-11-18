@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react'
+import { fireEvent, render, screen } from '@testing-library/react'
 import { Decoder, encodeFrame } from './protocol/codec'
 import { Cmd, responseOf } from './protocol/messages'
 import { expect, test } from 'vitest'
@@ -62,4 +62,18 @@ test('shows 已斷線 after the read loop ends unexpectedly', async () => {
   expect(await screen.findByText('已連線')).toBeInTheDocument()
   ctl.close()
   expect(await screen.findByText('已斷線')).toBeInTheDocument()
+})
+
+test('port busy (NetworkError on open) shows the Chinese busy message', async () => {
+  const port = {
+    getInfo: () => ({ usbVendorId: 0x303a, usbProductId: 0x1001 }),
+    open: async () => {
+      throw new DOMException('Failed to open serial port.', 'NetworkError')
+    },
+    close: async () => {},
+  }
+  const serial = { ...idleSerial, requestPort: async () => port } as unknown as Serial
+  render(<App serial={serial} />)
+  fireEvent.click(screen.getByRole('button', { name: '連線' }))
+  expect(await screen.findByRole('alert')).toHaveTextContent('無法開啟序列埠：可能被其他分頁或程式佔用')
 })

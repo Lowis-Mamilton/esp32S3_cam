@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import type { DeviceInfo } from './protocol/messages'
 import { MxcamConnection, type ConnectionStatus } from './serial/connection'
-import { strings } from './strings'
+import { describeError, strings, type ErrorText } from './strings'
 import DevicePanel from './ui/DevicePanel'
 import LiveView, { type LiveViewHandle } from './ui/LiveView'
 
@@ -15,7 +15,7 @@ export default function App({ serial }: Props) {
   const [status, setStatus] = useState<ConnectionStatus>(resolved ? 'disconnected' : 'unsupported')
   const [lost, setLost] = useState(false)
   const [info, setInfo] = useState<DeviceInfo | null>(null)
-  const [error, setError] = useState<string | null>(null)
+  const [error, setError] = useState<ErrorText | null>(null)
   const [stats, setStats] = useState({ fps: 0, kbps: 0 })
   const liveRef = useRef<LiveViewHandle>(null)
   const connRef = useRef<MxcamConnection | null>(null)
@@ -51,7 +51,7 @@ export default function App({ serial }: Props) {
 
   const onConnect = () => {
     connRef.current?.connect().catch((e: unknown) => {
-      if (!userClosed.current) setError(e instanceof Error ? e.message : String(e))
+      if (!userClosed.current) setError(describeError(e))
     })
   }
   const onDisconnect = () => {
