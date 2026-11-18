@@ -1,0 +1,9 @@
+firmware/build/
+firmware/sdkconfig
+firmware/sdkconfig.old
+firmware/managed_components/
+firmware/dependencies.lock
+pc-app/node_modules/
+pc-app/dist/
+.vscode/
+__pycache__/
