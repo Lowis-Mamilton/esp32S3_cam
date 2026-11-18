@@ -78,7 +78,10 @@
 ### TFT 畫面
 
 - 即時鏡頭畫面＋辨識框、ID、標籤（類似 HUSKYLENS 主畫面，無選單）
-- 320×240 的影像在 240 寬的直向螢幕上怎麼擺（縮放、裁切或改橫向），實作時決定
+- 螢幕**橫向** 320×240，鏡頭畫面剛好填滿，不縮放、不裁切
+- 螢幕裝在鏡頭背面（同 HUSKYLENS），畫面**不鏡像**；確切旋轉方向在第一次實機燒錄時調整
+- 左上角疊一行小字：目前功能名稱＋fps；右上角小圖示表示 MXCam Studio 是否連線中
+- 框和文字直接畫在 RGB565 畫面上（內建點陣字型），**不使用 LVGL**
 
 ## 5. 通訊協定（MXCam Protocol v1）
 
@@ -95,7 +98,8 @@ USB、UART、I2C 三種傳輸用同一套封包。
 - `ver`：協定版本，v1 為 `0x01`
 - `seq`：主機自行遞增，回應時原樣帶回，用來配對請求和回應
 - `crc16`：CRC-16/CCITT-FALSE（poly 0x1021、init 0xFFFF），範圍為 `ver` 到 `payload` 結尾
-- 起始碼、指令代碼表在實作第一個里程碑時定稿，寫入 `docs/protocol.md`
+- 完整定義（指令代碼、錯誤碼、各指令的 payload）見 **`docs/protocol.md`**，測試資料見 `docs/protocol-vectors.json`
+- I2C 上的傳輸方式（讀長度、分段讀取）在 M4 定稿
 
 ### 互動模式
 
@@ -134,6 +138,8 @@ USB、UART、I2C 三種傳輸用同一套封包。
 - 鏡頭用 `esp32-camera` 元件，人臉偵測用 `esp-dl` / `esp-who`，螢幕用 `esp_lcd`（ILI9341）
 - 設定與學習資料存在 NVS
 - USB 連線先用 USB-Serial-JTAG（網頁燒錄最省事），在 M1 實測頻寬；不夠再改用 TinyUSB CDC
+- 鏡頭輸出 **RGB565**（辨識和螢幕直接用）；傳給網頁時才用軟體壓 JPEG，預覽最多每秒 10 張，把 CPU 留給辨識
+- 效能設定：CPU 240 MHz、PSRAM 80 MHz、flash QIO 80 MHz（M1 起固定，作為量測基準）
 
 ### 6.2 電腦軟體 `pc-app/`：MXCam Studio
 
@@ -143,6 +149,9 @@ USB、UART、I2C 三種傳輸用同一套封包。
 - 介面模仿 HUSKYLENS 的螢幕介面：即時畫面＋辨識框、功能切換、顏色學習、參數調整、存到板子
 - 內建網頁燒錄韌體（esptool-js），使用者不需安裝 ESP-IDF
 - 語言：繁體中文、English（從一開始就做多語系）
+- 辨識框由網頁依據 RESULTS 自己畫在畫面上，不畫進 JPEG
+- 自動重新連線：網頁打開或板子重新插上時，自動連回上次授權過的序列埠；只有第一次要手動選
+- 串流時每秒送一次 PING；MXCam 3 秒沒收到請求就自動停止串流
 
 ### 6.3 Arduino 函式庫 `arduino-lib/`
 
@@ -165,7 +174,7 @@ if (cam.request()) {
 
 ### 6.4 協定程式碼共用
 
-- 協定編解碼用 C 寫一份，韌體和 Arduino 函式庫共用
+- 協定編解碼用 C 寫一份，韌體和 Arduino 函式庫共用：正本在 `arduino-lib/src/protocol/`（純 C），韌體元件 `firmware/components/mxcam_protocol/` 直接引用（見 ADR-0006）
 - 網頁另外用 TypeScript 寫一份
 - 兩邊用同一組測試資料（`docs/protocol-vectors.json`）驗證結果一致
 
@@ -179,6 +188,8 @@ docs/          規格、協定、ADR
 ```
 
 - 公開 repo，**MIT 授權**
+- 開發時 repo 放在沒有空白的路徑 `C:\dev\esp32S3_cam`（ESP-IDF 不支援路徑空白），ESP-IDF v5.4.1 也裝在沒有空白的路徑
+- 直接在 `main` 上開發，CI 把關
 - 舊的 `.ino` 與 Python 腳本直接刪除，靠 git 歷史保存
 - `CLAUDE.md` 在 M0 改寫成新架構
 
@@ -205,9 +216,10 @@ docs/          規格、協定、ADR
 - [ ] V1.3 擴展板實際接腳是否與 V1.2 資料相同（特別是 I2C 41/42、UART 1/2）
 - [ ] 螢幕確定是 ILI9341
 - [ ] USB-Serial-JTAG 的頻寬能否撐住 QVGA JPEG 串流（M1 實測）
-- [ ] 320×240 影像在直向 240×320 螢幕上的擺法
-- [ ] 協定起始碼、指令代碼、I2C 讀取方式定稿（`docs/protocol.md`）
+- [x] 320×240 影像的擺法：螢幕改橫向（第 4 節）
+- [x] 協定封包、指令代碼、錯誤碼定稿（`docs/protocol.md`）
+- [ ] M4：I2C 傳輸方式定稿
 - [ ] M1：加入第一個 managed component 時，移除 `.gitignore` 裡的 `firmware/dependencies.lock` 並 commit 鎖定檔
-- [ ] M1/M2：效能設定（CPU 240 MHz、PSRAM 80 MHz、flash QIO 80 MHz），以達成第 3 節的 fps 目標
-- [ ] M1：協定 C 程式碼放哪裡才能讓韌體和 Arduino 函式庫共用同一份（Arduino 函式庫只能編譯自己資料夾內的檔案）
+- [ ] M1：效能設定實測（JPEG 壓縮時間、USB 頻寬、畫面 fps），作為之後的基準
+- [x] 協定 C 程式碼的位置（ADR-0006）
 - [ ] M4：Arduino 函式庫的發佈方式（把 `arduino-lib/` 打包成 release ZIP）

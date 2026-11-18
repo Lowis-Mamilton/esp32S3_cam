@@ -1,0 +1,211 @@
+{
+  "_comment": "MXCam Protocol v1 test vectors. Shared by the C codec (arduino-lib/src/protocol) and the TypeScript codec (pc-app/src/protocol). See docs/protocol.md.",
+  "crc16": [
+    {
+      "input_ascii": "123456789",
+      "crc": "29b1"
+    },
+    {
+      "input_hex": "0102010000",
+      "crc": "6105"
+    }
+  ],
+  "frames": [
+    {
+      "name": "ping_request",
+      "ver": 1,
+      "cmd": 2,
+      "seq": 1,
+      "payload_hex": "",
+      "encoded_hex": "4d5801020100000561"
+    },
+    {
+      "name": "ping_response",
+      "ver": 1,
+      "cmd": 130,
+      "seq": 1,
+      "payload_hex": "",
+      "encoded_hex": "4d5801820100003dbc"
+    },
+    {
+      "name": "get_info_request",
+      "ver": 1,
+      "cmd": 1,
+      "seq": 2,
+      "payload_hex": "",
+      "encoded_hex": "4d58010102000089a3"
+    },
+    {
+      "name": "get_info_response_m1",
+      "ver": 1,
+      "cmd": 129,
+      "seq": 2,
+      "payload_hex": "010001006131623263336424ec4a0011ff4001f0000800",
+      "encoded_hex": "4d580181021700010001006131623263336424ec4a0011ff4001f0000800c384"
+    },
+    {
+      "name": "set_function_none_request",
+      "ver": 1,
+      "cmd": 16,
+      "seq": 3,
+      "payload_hex": "00",
+      "encoded_hex": "4d5801100301000006e3"
+    },
+    {
+      "name": "set_function_none_response",
+      "ver": 1,
+      "cmd": 144,
+      "seq": 3,
+      "payload_hex": "00",
+      "encoded_hex": "4d58019003010000d6c1"
+    },
+    {
+      "name": "get_function_response",
+      "ver": 1,
+      "cmd": 145,
+      "seq": 4,
+      "payload_hex": "00",
+      "encoded_hex": "4d58019104010000aa3a"
+    },
+    {
+      "name": "stream_start_frames_10fps_default_quality",
+      "ver": 1,
+      "cmd": 80,
+      "seq": 5,
+      "payload_hex": "010a00",
+      "encoded_hex": "4d580150050300010a0052e9"
+    },
+    {
+      "name": "stream_start_response",
+      "ver": 1,
+      "cmd": 208,
+      "seq": 5,
+      "payload_hex": "",
+      "encoded_hex": "4d5801d0050000aef8"
+    },
+    {
+      "name": "stream_stop_request",
+      "ver": 1,
+      "cmd": 81,
+      "seq": 6,
+      "payload_hex": "",
+      "encoded_hex": "4d580151060000720a"
+    },
+    {
+      "name": "error_unknown_command",
+      "ver": 1,
+      "cmd": 255,
+      "seq": 7,
+      "payload_hex": "7e01",
+      "encoded_hex": "4d5801ff0702007e01dbac"
+    },
+    {
+      "name": "frame_push",
+      "ver": 1,
+      "cmd": 96,
+      "seq": 0,
+      "payload_hex": "01000000e80300004001f000ffd8ffd9",
+      "encoded_hex": "4d58016000100001000000e80300004001f000ffd8ffd91ca8"
+    }
+  ],
+  "decoder": [
+    {
+      "name": "single_frame",
+      "chunks_hex": [
+        "4d5801020100000561"
+      ],
+      "expect": [
+        {
+          "cmd": 2,
+          "seq": 1,
+          "payload_hex": ""
+        }
+      ]
+    },
+    {
+      "name": "garbage_before_header",
+      "chunks_hex": [
+        "00ff4d12344d5801020100000561"
+      ],
+      "expect": [
+        {
+          "cmd": 2,
+          "seq": 1,
+          "payload_hex": ""
+        }
+      ]
+    },
+    {
+      "name": "split_across_chunks",
+      "chunks_hex": [
+        "4d5801",
+        "010200",
+        "0089a3"
+      ],
+      "expect": [
+        {
+          "cmd": 1,
+          "seq": 2,
+          "payload_hex": ""
+        }
+      ]
+    },
+    {
+      "name": "two_frames_one_chunk",
+      "chunks_hex": [
+        "4d58010201000005614d58010102000089a3"
+      ],
+      "expect": [
+        {
+          "cmd": 2,
+          "seq": 1,
+          "payload_hex": ""
+        },
+        {
+          "cmd": 1,
+          "seq": 2,
+          "payload_hex": ""
+        }
+      ]
+    },
+    {
+      "name": "bad_crc_dropped_then_resync",
+      "chunks_hex": [
+        "4d580102010000059e4d58010102000089a3"
+      ],
+      "expect": [
+        {
+          "cmd": 1,
+          "seq": 2,
+          "payload_hex": ""
+        }
+      ]
+    },
+    {
+      "name": "unsupported_version_dropped",
+      "chunks_hex": [
+        "4d58020209000076264d5801020100000561"
+      ],
+      "expect": [
+        {
+          "cmd": 2,
+          "seq": 1,
+          "payload_hex": ""
+        }
+      ]
+    },
+    {
+      "name": "frame_push_with_payload",
+      "chunks_hex": [
+        "4d58016000100001000000e80300004001f000ffd8ffd91ca8"
+      ],
+      "expect": [
+        {
+          "cmd": 96,
+          "seq": 0,
+          "payload_hex": "01000000e80300004001f000ffd8ffd9"
+        }
+      ]
+    }
+  ]
+}
