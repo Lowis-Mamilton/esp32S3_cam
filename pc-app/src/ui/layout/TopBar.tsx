@@ -8,11 +8,13 @@ interface Props {
   /** True when the last disconnect was not requested by the user. */
   lost: boolean
   info: DeviceInfo | null
+  demo: boolean
+  onToggleDemo(on: boolean): void
   onConnect(): void
   onDisconnect(): void
 }
 
-export default function TopBar({ status, lost, info, onConnect, onDisconnect }: Props) {
+export default function TopBar({ status, lost, info, demo, onToggleDemo, onConnect, onDisconnect }: Props) {
   const { t, lang, setLang } = useT()
   const busy = status === 'connecting' || status === 'connected'
   const unsupported = status === 'unsupported'
@@ -29,7 +31,8 @@ export default function TopBar({ status, lost, info, onConnect, onDisconnect }: 
   return (
     <header className="topbar">
       <h1 className="brand">{t('appTitle')}</h1>
-      {!unsupported && (
+      {demo && <span className="demo-badge">{t('demoBadge')}</span>}
+      {(!unsupported || demo) && (
         <div className="conn-status" data-tone={tone}>
           <span className="lamp" aria-hidden="true" />
           <span>{statusText}</span>
@@ -37,8 +40,14 @@ export default function TopBar({ status, lost, info, onConnect, onDisconnect }: 
         </div>
       )}
       <div className="topbar-spacer" />
-      {/* Task 2 replaces this placeholder with the real demo-mode toggle. */}
-      <button type="button" role="switch" aria-checked="false" className="switch" disabled data-slot="demo-toggle">
+      <button
+        type="button"
+        role="switch"
+        aria-checked={demo}
+        className="switch"
+        data-slot="demo-toggle"
+        onClick={() => onToggleDemo(!demo)}
+      >
         <span className="switch-track" aria-hidden="true" />
         {t('demoMode')}
       </button>
@@ -50,7 +59,7 @@ export default function TopBar({ status, lost, info, onConnect, onDisconnect }: 
           English
         </button>
       </div>
-      {!unsupported && (
+      {!unsupported && !demo && (
         <>
           <button type="button" className="btn primary" onClick={onConnect} disabled={busy}>
             <Plug size={16} aria-hidden="true" />

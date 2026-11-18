@@ -25,6 +25,7 @@ export const en: Record<keyof typeof zhTW, string> = {
   errGeneric: 'Connection failed',
   language: 'Language',
   demoMode: 'Demo mode',
+  demoBadge: 'Demo mode',
   fnColor: 'Color',
   fnTag: 'AprilTag',
   fnFace: 'Face',

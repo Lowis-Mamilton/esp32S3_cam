@@ -1,12 +1,12 @@
 import { useEffect, useRef, useState } from 'react'
-import type { DeviceInfo } from './protocol/messages'
-import { MxcamConnection, type ConnectionStatus } from './serial/connection'
+import type { Device } from './device/types'
+import { useDevice } from './device/useDevice'
 import { describeError, type ErrorText } from './i18n/core'
 import { useT } from './i18n'
 import RightPanel from './ui/layout/RightPanel'
 import Sidebar from './ui/layout/Sidebar'
 import TopBar from './ui/layout/TopBar'
-import type { FunctionId, View } from './ui/layout/types'
+import type { View } from './ui/layout/types'
 import LiveView, { type LiveViewHandle } from './ui/LiveView'
 
 interface Props {
@@ -14,63 +14,40 @@ interface Props {
   serial?: Serial
 }
 
-// Task 2 derives this from the device (GET_INFO functionIds / demo mode).
-const SUPPORTED: FunctionId[] = [1, 2, 3]
-
 export default function App({ serial }: Props) {
   const { t } = useT()
   const [view, setView] = useState<View>({ kind: 'function', id: 1 })
   const resolved = serial ?? (typeof navigator !== 'undefined' && 'serial' in navigator ? navigator.serial : undefined)
-  const [status, setStatus] = useState<ConnectionStatus>(resolved ? 'disconnected' : 'unsupported')
-  const [lost, setLost] = useState(false)
-  const [info, setInfo] = useState<DeviceInfo | null>(null)
-  const [error, setError] = useState<ErrorText | null>(null)
-  const [stats, setStats] = useState({ fps: 0, kbps: 0 })
+  const { device, snapshot, demo, setDemo } = useDevice(resolved)
+  const { status, lost, info, supported } = snapshot
+  // Errors and stats belong to one device instance; ignore them once it is replaced.
+  const [errorOf, setErrorOf] = useState<{ device: Device; error: ErrorText } | null>(null)
+  const [statsOf, setStatsOf] = useState<{ device: Device; fps: number; kbps: number } | null>(null)
+  const error = errorOf && errorOf.device === device ? errorOf.error : null
+  const stats = statsOf && statsOf.device === device ? statsOf : { fps: 0, kbps: 0 }
   const liveRef = useRef<LiveViewHandle>(null)
-  const connRef = useRef<MxcamConnection | null>(null)
-  const userClosed = useRef(false)
 
   useEffect(() => {
-    if (!resolved) return
-    const conn = new MxcamConnection(resolved, {
-      status: (s) => {
-        setStatus(s)
-        if (s === 'connecting') {
-          userClosed.current = false
-          setLost(false)
-          setError(null)
-        } else if (s === 'disconnected') {
-          setLost(!userClosed.current)
-          setInfo(null)
-        }
-      },
-      frame: (f) => liveRef.current?.draw(f),
-      stats: setStats,
-      info: setInfo,
-    })
-    connRef.current = conn
-    // Deferred so StrictMode's mount/unmount/mount does not race two opens of one port.
-    const t = setTimeout(() => void conn.autoConnect(), 0)
-    return () => {
-      clearTimeout(t)
-      connRef.current = null
-      void conn.dispose()
-    }
-  }, [resolved])
+    if (!device) return
+    const offs = [
+      device.onFrame((f) => liveRef.current?.draw(f)),
+      device.onStats((x) => setStatsOf({ device, ...x })),
+    ]
+    return () => offs.forEach((off) => off())
+  }, [device])
 
   const onConnect = () => {
-    connRef.current?.connect().catch((e: unknown) => {
-      if (!userClosed.current) setError(describeError(e))
-    })
+    if (!device) return
+    setErrorOf(null)
+    device.connect().catch((e: unknown) => setErrorOf({ device, error: describeError(e) }))
   }
   const onDisconnect = () => {
-    userClosed.current = true
-    void connRef.current?.disconnect()
+    void device?.disconnect()
   }
 
   return (
     <div className="app">
-      <TopBar status={status} lost={lost} info={info} onConnect={onConnect} onDisconnect={onDisconnect} />
+      <TopBar status={status} lost={lost} info={info ?? null} demo={demo} onToggleDemo={setDemo} onConnect={onConnect} onDisconnect={onDisconnect} />
       <div className="columns">
         {error && (
           <p role="alert" className="alert">
@@ -83,7 +60,7 @@ export default function App({ serial }: Props) {
             )}
           </p>
         )}
-        <Sidebar view={view} supported={SUPPORTED} onSelect={setView} />
+        <Sidebar view={view} supported={supported} onSelect={setView} />
         <main className="center">
           {status === 'unsupported' ? (
             <p className="notice">{t('unsupported')}</p>

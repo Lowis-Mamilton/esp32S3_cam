@@ -132,7 +132,40 @@ test('right panel tabs switch', () => {
   expect(screen.getByRole('tab', { name: '參數' })).toHaveAttribute('aria-selected', 'true')
 })
 
+test('sidebar greys out all functions while no device is connected', () => {
+  renderApp({ serial: idleSerial })
+  for (const name of ['顏色', 'AprilTag', '人臉']) {
+    expect(screen.getByRole('button', { name })).toHaveAttribute('aria-disabled', 'true')
+  }
+})
+
+test('demo toggle shows the badge, DEMO firmware, hides connect and persists; turning it off returns to 未連線', async () => {
+  renderApp({ serial: idleSerial })
+  const toggle = screen.getByRole('switch', { name: '展示模式' })
+  expect(toggle).toHaveAttribute('aria-checked', 'false')
+  fireEvent.click(toggle)
+  expect(await screen.findByText('DEMO')).toBeInTheDocument()
+  expect(screen.getByText('展示模式', { selector: '.demo-badge' })).toBeInTheDocument()
+  expect(screen.getByText('已連線')).toBeInTheDocument()
+  expect(screen.queryByRole('button', { name: '連線' })).not.toBeInTheDocument()
+  expect(screen.getByRole('button', { name: '人臉' })).not.toHaveAttribute('aria-disabled')
+  expect(localStorage.getItem('mxcam.demo')).toBe('1')
+  fireEvent.click(screen.getByRole('switch', { name: '展示模式' }))
+  expect(await screen.findByText('未連線')).toBeInTheDocument()
+  expect(document.querySelector('.demo-badge')).toBeNull()
+  expect(screen.getByRole('button', { name: '連線' })).toBeEnabled()
+})
+
+test('demo badge and toggle are translated', async () => {
+  localStorage.setItem('mxcam.lang', 'en')
+  localStorage.setItem('mxcam.demo', '1')
+  renderApp({ serial: idleSerial })
+  expect(await screen.findByText('Demo mode', { selector: '.demo-badge' })).toBeInTheDocument()
+  expect(screen.getByRole('switch', { name: 'Demo mode' })).toHaveAttribute('aria-checked', 'true')
+})
+
 test('sidebar switches views between function, settings and firmware', () => {
+  localStorage.setItem('mxcam.demo', '1')
   renderApp({ serial: idleSerial })
   fireEvent.click(screen.getByRole('button', { name: '設定' }))
   expect(screen.getByRole('heading', { name: '系統設定' })).toBeInTheDocument()

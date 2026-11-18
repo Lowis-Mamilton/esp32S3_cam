@@ -390,3 +390,39 @@ button {
       color 0.12s;
   }
 }
+
+.switch-track {
+  position: relative;
+}
+.switch-track::after {
+  content: '';
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--text-dim);
+  transition: transform 0.12s;
+}
+.switch[aria-checked='true'] {
+  color: var(--accent);
+}
+.switch[aria-checked='true'] .switch-track {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+}
+.switch[aria-checked='true'] .switch-track::after {
+  background: var(--accent);
+  transform: translateX(12px);
+}
+
+.demo-badge {
+  padding: 2px 10px;
+  border-radius: 999px;
+  background: var(--accent);
+  color: var(--accent-ink);
+  font-weight: 700;
+  font-size: 12px;
+  letter-spacing: 0.04em;
+}

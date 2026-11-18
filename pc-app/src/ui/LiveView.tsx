@@ -1,9 +1,9 @@
 import { useEffect, useImperativeHandle, useRef, type Ref } from 'react'
-import type { FramePush } from '../protocol/messages'
+import type { FrameSource } from '../device/types'
 import { useT } from '../i18n'
 
 export interface LiveViewHandle {
-  draw(f: FramePush): void
+  draw(f: FrameSource): void
 }
 
 interface Props {
@@ -20,6 +20,12 @@ export default function LiveView({ ref, connected, fps, kbps }: Props) {
 
   useImperativeHandle(ref, () => ({
     draw(f) {
+      if (f.kind === 'canvas') {
+        const canvas = canvasRef.current
+        const ctx = canvas?.getContext('2d')
+        if (canvas && ctx) f.draw(ctx)
+        return
+      }
       // No createImageBitmap (e.g. jsdom): nothing to draw.
       if (typeof createImageBitmap !== 'function') return
       // Drop the frame if the previous decode is still running; never queue.
@@ -30,8 +36,8 @@ export default function LiveView({ ref, connected, fps, kbps }: Props) {
       createImageBitmap(new Blob([f.jpeg as BlobPart], { type: 'image/jpeg' }))
         .then((bmp) => {
           try {
-            if (canvas.width !== f.width) canvas.width = f.width
-            if (canvas.height !== f.height) canvas.height = f.height
+            if (canvas.width !== bmp.width) canvas.width = bmp.width
+            if (canvas.height !== bmp.height) canvas.height = bmp.height
             canvas.getContext('2d')?.drawImage(bmp, 0, 0)
           } finally {
             bmp.close()

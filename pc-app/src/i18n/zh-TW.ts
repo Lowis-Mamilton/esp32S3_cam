@@ -23,6 +23,7 @@ export const zhTW = {
   errGeneric: '連線失敗',
   language: '語言',
   demoMode: '展示模式',
+  demoBadge: '展示模式',
   fnColor: '顏色',
   fnTag: 'AprilTag',
   fnFace: '人臉',
