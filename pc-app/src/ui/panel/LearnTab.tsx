@@ -1,11 +1,15 @@
 import { Trash2 } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
-import type { Device, LearnedId } from '../../device/types'
+import { NAME_MAX_BYTES, nameBytes, truncateBytes, type Device, type LearnedId } from '../../device/types'
 import { useT } from '../../i18n'
 import type { FunctionId } from '../layout/types'
 import type { Guard } from './guard'
 
-const MAX_NAME = 32
+/** Names are limited in UTF-8 bytes (48); no 48-byte name has more than 48 characters. */
+const MAX_NAME_CHARS = NAME_MAX_BYTES
+/** Keeps a name within the byte limit; IME composition is left alone until it ends. */
+const limitName = (v: string, composing: boolean) => (composing ? v : truncateBytes(v))
+const atLimit = (v: string) => nameBytes(v) >= NAME_MAX_BYTES
 const MAX_TAG = 586
 
 interface Props {
@@ -20,22 +24,28 @@ function NameInput({ value, label, disabled, onCommit }: { value: string; label:
   const { t } = useT()
   const [draft, setDraft] = useState<string | null>(null)
   const commit = () => {
-    if (draft !== null && draft !== value) onCommit(draft)
+    const v = draft === null ? null : truncateBytes(draft)
+    if (v !== null && v !== value) onCommit(v)
     setDraft(null)
   }
   return (
-    <input
-      className="rp-input"
-      type="text"
-      aria-label={label}
-      placeholder={t('unnamed')}
-      maxLength={MAX_NAME}
-      value={draft ?? value}
-      disabled={disabled}
-      onChange={(e) => setDraft(e.target.value)}
-      onBlur={commit}
-      onKeyDown={(e) => e.key === 'Enter' && !e.nativeEvent.isComposing && e.keyCode !== 229 && commit()}
-    />
+    <>
+      <input
+        className="rp-input"
+        type="text"
+        aria-label={label}
+        placeholder={t('unnamed')}
+        title={t('nameLimit')}
+        maxLength={MAX_NAME_CHARS}
+        value={draft ?? value}
+        disabled={disabled}
+        onChange={(e) => setDraft(limitName(e.target.value, (e.nativeEvent as InputEvent).isComposing === true))}
+        onCompositionEnd={(e) => setDraft(truncateBytes(e.currentTarget.value))}
+        onBlur={commit}
+        onKeyDown={(e) => e.key === 'Enter' && !e.nativeEvent.isComposing && e.keyCode !== 229 && commit()}
+      />
+      {draft !== null && atLimit(draft) && <span className="rp-hint rp-namehint">{t('nameLimit')}</span>}
+    </>
   )
 }
 
@@ -134,13 +144,23 @@ function TagLearn({ device, learned, disabled, guard }: Omit<Props, 'fn'>) {
         </label>
         <label>
           <span>{t('nameLabel')}</span>
-          <input className="rp-input" type="text" maxLength={MAX_NAME} value={name} disabled={disabled} onChange={(e) => setName(e.target.value)} />
+          <input
+            className="rp-input"
+            type="text"
+            title={t('nameLimit')}
+            maxLength={MAX_NAME_CHARS}
+            value={name}
+            disabled={disabled}
+            onChange={(e) => setName(limitName(e.target.value, (e.nativeEvent as InputEvent).isComposing === true))}
+            onCompositionEnd={(e) => setName(truncateBytes(e.currentTarget.value))}
+          />
         </label>
         <button type="submit" className="btn" disabled={disabled || !valid}>
           {t('add')}
         </button>
       </form>
       {tag !== '' && !(Number.isInteger(n) && n >= 0 && n <= MAX_TAG) && <p className="rp-hint">{t('tagRange', { max: MAX_TAG })}</p>}
+      {atLimit(name) && <p className="rp-hint">{t('nameLimit')}</p>}
       {learned.length === 0 ? (
         <p className="muted">{t('tagListEmpty')}</p>
       ) : (

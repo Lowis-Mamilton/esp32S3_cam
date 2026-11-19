@@ -1,3 +1,5 @@
+import { useSyncExternalStore } from 'react'
+import type { ResultsStore } from '../../device/resultsStore'
 import type { LearnedId, Result } from '../../device/types'
 import { useT } from '../../i18n'
 import type { FunctionId } from '../layout/types'
@@ -7,12 +9,14 @@ const KIND: Record<FunctionId, Result['kind']> = { 1: 'color', 2: 'tag', 3: 'fac
 
 interface Props {
   fn: FunctionId
-  results: Result[]
+  /** The newest results: what the R4 would read. */
+  results: ResultsStore
   learned: LearnedId[]
 }
 
-export default function ResultsTab({ fn, results, learned }: Props) {
+export default function ResultsTab({ fn, results: store, learned }: Props) {
   const { t } = useT()
+  const results = useSyncExternalStore(store.subscribe, store.latest)
   const rows = results.filter((r) => r.kind === KIND[fn])
   if (rows.length === 0) return <p className="muted">{t('resultsEmpty')}</p>
   const face = fn === 3

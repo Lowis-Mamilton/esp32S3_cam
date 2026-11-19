@@ -1,4 +1,5 @@
-import { fireEvent, render, screen, within } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { FakeFirmware } from './testing/fakeFirmware'
 import { Decoder, encodeFrame } from './protocol/codec'
 import { Cmd, ErrorCode, responseOf } from './protocol/messages'
 import { beforeEach, expect, test } from 'vitest'
@@ -352,4 +353,34 @@ test('English demo mode leaks no CJK text or attributes on any tab of any view',
     leaks.push(...visibleCjk(container).map((x) => `${page}/${x}`))
   }
   expect(leaks).toEqual([])
+})
+
+// ---- M2: function ownership with a real board ----
+test('when the R4 changes the function, Studio follows and says so; its own stale frames are ignored', async () => {
+  const fw = new FakeFirmware()
+  renderApp({ serial: fw.serial() })
+  expect(await screen.findByText('已連線')).toBeInTheDocument()
+  await waitFor(() => expect(fw.requests.some((r) => r.cmd === Cmd.SetFunction && r.payload[0] === 1)).toBe(true))
+  await waitFor(() => expect(fw.active).toBe(1))
+  fw.pushResults(1, 2, []) // in flight from before our SET_FUNCTION
+  await new Promise((r) => setTimeout(r, 50))
+  expect(screen.getByRole('button', { name: '顏色' })).toHaveAttribute('aria-current', 'page')
+  expect(screen.queryByText(/由其他裝置變更/)).toBeNull()
+  await new Promise((r) => setTimeout(r, 1100))
+  fw.externalSetFunction(2)
+  fw.pushResults(2, 2, [{ id: 3, x: 100, y: 100, width: 40, height: 40 }])
+  expect(await screen.findByText('已切換到 AprilTag（由其他裝置變更）')).toBeInTheDocument()
+  expect(screen.getByRole('button', { name: 'AprilTag' })).toHaveAttribute('aria-current', 'page')
+  expect((await screen.findAllByText('Tag 3')).length).toBeGreaterThan(0)
+})
+
+test('real board: results pushes show up in the results tab', async () => {
+  const fw = new FakeFirmware()
+  fw.colors = [{ id: 1, rgb: [255, 0, 0] }]
+  fw.names.set('1:1', '紅色積木')
+  renderApp({ serial: fw.serial() })
+  expect(await screen.findByText('已連線')).toBeInTheDocument()
+  fw.pushResults(5, 1, [{ id: 1, x: 160, y: 120, width: 30, height: 20 }])
+  expect((await screen.findAllByText('紅色積木')).length).toBeGreaterThan(0)
+  expect(screen.getAllByText('ID1').length).toBeGreaterThan(0)
 })

@@ -3,6 +3,7 @@ import { useSyncExternalStore } from 'react'
 import { afterEach, beforeEach, expect, test, vi } from 'vitest'
 import { DemoDevice } from '../../device/DemoDevice'
 import { RealDevice } from '../../device/RealDevice'
+import { ResultsStore } from '../../device/resultsStore'
 import { Cmd } from '../../protocol/messages'
 import { FakeFirmware } from '../../testing/fakeFirmware'
 import type { Device, FunctionId } from '../../device/types'
@@ -12,6 +13,7 @@ import FirmwarePage from './FirmwarePage'
 import SettingsPage from './SettingsPage'
 
 const FULL = { x: 0, y: 0, width: 320, height: 240 }
+const EMPTY_RESULTS = new ResultsStore()
 let devices: Device[] = []
 
 beforeEach(() => {
@@ -41,7 +43,7 @@ function FirmwareHarness({ device }: { device: Device }) {
   return <FirmwarePage snapshot={useSnap(device)} />
 }
 function PanelHarness({ device, fn }: { device: Device; fn: FunctionId }) {
-  return <RightPanel device={device} snapshot={useSnap(device)} fn={fn} results={[]} />
+  return <RightPanel device={device} snapshot={useSnap(device)} fn={fn} results={EMPTY_RESULTS} />
 }
 /** A RealDevice connected to older firmware without the config commands (they answer UNKNOWN_CMD). */
 async function connectedReal(supported: FunctionId[] = []) {
@@ -360,4 +362,36 @@ test('oversized import file is rejected without reading it', async () => {
   expect(await screen.findByText(/設定檔格式不正確/)).toBeInTheDocument()
   expect(screen.getByText('檔案太大（上限 1 MB）')).toBeInTheDocument()
   expect(spy).not.toHaveBeenCalled()
+})
+
+// ---- M2: real device import ----
+test('importing into a real board applies config and names, and says colours must be re-learned', async () => {
+  const fw = new FakeFirmware()
+  const r = new RealDevice(fw.serial())
+  await waitFor(() => expect(r.snapshot().status).toBe('connected'))
+  mount((x) => <PanelHarness device={x} fn={1} />, r)
+  const file = {
+    version: 1,
+    learned: { 1: [{ id: 1, name: '紅', color: [255, 0, 0] }], 2: [{ id: 3, name: '起點' }], 3: [] },
+    params: { ...r.snapshot().params, color: { ...r.snapshot().params.color, tolerance: 60 } },
+    system: r.snapshot().system,
+  }
+  openParams()
+  upload(JSON.stringify(file))
+  expect(await screen.findByText('已匯入設定')).toBeInTheDocument()
+  expect(screen.getByText('顏色需要重新學習')).toBeInTheDocument()
+  expect(r.snapshot().params.color.tolerance).toBe(60)
+  expect(r.snapshot().learned[2]).toEqual([{ id: 3, name: '起點' }])
+  expect(fw.requests.some((q) => q.cmd === Cmd.Learn)).toBe(false)
+})
+
+test('real board settings show the device values once connected', async () => {
+  const fw = new FakeFirmware()
+  fw.config = { ...fw.config, i2cAddress: 0x31, uartBaud: 9600, ledBrightness: 12 }
+  const r = new RealDevice(fw.serial())
+  await waitFor(() => expect(r.snapshot().status).toBe('connected'))
+  mount((x) => <SettingsHarness device={x} />, r)
+  expect(i2c()).toHaveValue('31')
+  expect(screen.getByRole('radio', { name: '9600' })).toBeChecked()
+  expect(screen.getByRole('slider', { name: '亮度' })).toHaveValue('12')
 })

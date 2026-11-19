@@ -106,5 +106,10 @@ export const zhTW = {
   cfgNotJson: '不是有效的 JSON',
   cfgTooLarge: '檔案太大（上限 1 MB）',
   cfgBad: '設定檔格式不正確',
-  copyFailed: '複製失敗，請手動選取'
+  copyFailed: '複製失敗，請手動選取',
+  fnSwitched: '已切換到 {fn}（由其他裝置變更）',
+  cfgRelearn: '顏色需要重新學習',
+  nameLimit: '名稱最多 48 bytes（中文約 16 字）',
+  namesFull: '名字已達上限（最多 32 個）',
+  mirrorView: '鏡像顯示'
 } as const

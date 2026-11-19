@@ -81,7 +81,7 @@ function readText(file: File): Promise<string> {
 const MAX_CONFIG_BYTES = 1024 * 1024
 const REVOKE_DELAY_MS = 1000
 
-type ImportState = { kind: 'ok' } | { kind: 'bad'; key?: MessageKey; raw?: string } | null
+type ImportState = { kind: 'ok'; relearn: boolean } | { kind: 'bad'; key?: MessageKey; raw?: string } | null
 
 /** Export / import of the whole device config (all functions + system). */
 function ConfigIO({ device, disabled, guard }: { device: Device | null; disabled: boolean; guard: Guard }) {
@@ -112,8 +112,8 @@ function ConfigIO({ device, disabled, guard }: { device: Device | null; disabled
       return
     }
     try {
-      await device.importConfig(await readText(file))
-      setState({ kind: 'ok' })
+      const out = await device.importConfig(await readText(file))
+      setState({ kind: 'ok', relearn: out.colorsNeedRelearn })
     } catch (e) {
       // A firmware that cannot take the config is not a bad file.
       if (isNotSupported(e)) void guard.run(() => Promise.reject(e))
@@ -151,6 +151,7 @@ function ConfigIO({ device, disabled, guard }: { device: Device | null; disabled
           {t('cfgImported')} <small>{t('cfgImportedHint')}</small>
         </p>
       )}
+      {state?.kind === 'ok' && state.relearn && <p className="rp-hint">{t('cfgRelearn')}</p>}
       {state?.kind === 'bad' && (
         <p role="alert" className="rp-error">
           {t('cfgBad')} <small>{state.key ? t(state.key) : state.raw}</small>

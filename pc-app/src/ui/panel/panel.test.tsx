@@ -1,9 +1,10 @@
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
-import { useSyncExternalStore } from 'react'
+import { useState, useSyncExternalStore } from 'react'
 import { afterEach, beforeEach, expect, test, vi } from 'vitest'
 import { DemoDevice } from '../../device/DemoDevice'
 import { RealDevice } from '../../device/RealDevice'
-import type { Device, FunctionId, Result } from '../../device/types'
+import { ResultsStore } from '../../device/resultsStore'
+import { DeviceOpError, type Device, type FunctionId, type Result } from '../../device/types'
 import { I18nProvider } from '../../i18n'
 import RightPanel from '../layout/RightPanel'
 import { snippetFor } from './codeSnippets'
@@ -32,7 +33,12 @@ function Harness({ device, fn, results }: { device: Device; fn: FunctionId; resu
     (cb) => device.subscribe(cb),
     () => device.snapshot(),
   )
-  return <RightPanel device={device} snapshot={snapshot} fn={fn} results={results} />
+  const [store] = useState(() => {
+    const st = new ResultsStore()
+    st.push(results)
+    return st
+  })
+  return <RightPanel device={device} snapshot={snapshot} fn={fn} results={store} />
 }
 
 function setup(fn: FunctionId = 1, results: Result[] = [], device: Device = new DemoDevice(() => 0)) {
@@ -120,14 +126,14 @@ test('renaming a learned colour shows the new name in the results tab', async ()
   expect(screen.getByRole('row', { name: /ID1/ })).toHaveTextContent('紅積木')
 })
 
-test('name input is limited to 32 characters and Enter commits', async () => {
+test('name input caps characters at 48 (bytes are checked separately) and Enter commits', async () => {
   const { device } = setup()
   await act(async () => {
     await device.learnColor(FULL)
   })
   tab('學習')
   const input = screen.getByRole('textbox', { name: 'ID1 名稱' })
-  expect(input).toHaveAttribute('maxlength', '32')
+  expect(input).toHaveAttribute('maxlength', '48')
   fireEvent.change(input, { target: { value: 'abc' } })
   fireEvent.keyDown(input, { key: 'Enter' })
   await waitFor(() => expect(device.snapshot().learned[1][0].name).toBe('abc'))
@@ -396,4 +402,39 @@ test('opening the forget-all confirm moves focus to Cancel', async () => {
   tab('學習')
   fireEvent.click(screen.getByRole('button', { name: '全部忘記' }))
   await waitFor(() => expect(screen.getByRole('button', { name: '取消' })).toHaveFocus())
+})
+
+// ---- M2: names are limited in UTF-8 bytes ----
+test('name inputs limit names to 48 UTF-8 bytes, not characters, and say so', async () => {
+  const { device } = setup()
+  await act(async () => {
+    await device.learnColor(FULL)
+  })
+  tab('學習')
+  const input = screen.getByRole('textbox', { name: 'ID1 名稱' })
+  fireEvent.change(input, { target: { value: '中'.repeat(20) } })
+  expect(input).toHaveValue('中'.repeat(16))
+  expect(screen.getByText('名稱最多 48 bytes（中文約 16 字）')).toBeInTheDocument()
+  fireEvent.blur(input)
+  await waitFor(() => expect(device.snapshot().learned[1][0].name).toBe('中'.repeat(16)))
+  fireEvent.change(input, { target: { value: 'a'.repeat(60) } })
+  expect(input).toHaveValue('a'.repeat(48))
+})
+
+test('tag name input is limited to 48 UTF-8 bytes', () => {
+  setup(2)
+  tab('學習')
+  const nm = screen.getByRole('textbox', { name: '名稱' })
+  fireEvent.change(nm, { target: { value: '起點'.repeat(10) } })
+  expect(nm).toHaveValue('起點'.repeat(8))
+})
+
+test('a full name table on the device shows a localized message', async () => {
+  const { device } = setup(2)
+  vi.spyOn(device, 'setName').mockRejectedValue(new DeviceOpError('names-full', 'name table full'))
+  tab('學習')
+  fireEvent.change(screen.getByRole('spinbutton'), { target: { value: '4' } })
+  fireEvent.change(screen.getByRole('textbox', { name: '名稱' }), { target: { value: 'x' } })
+  fireEvent.click(screen.getByRole('button', { name: '加入' }))
+  expect(await screen.findByText('名字已達上限（最多 32 個）')).toBeInTheDocument()
 })

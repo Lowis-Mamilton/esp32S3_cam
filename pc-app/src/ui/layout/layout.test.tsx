@@ -4,6 +4,7 @@ import { I18nProvider } from '../../i18n'
 import RightPanel from './RightPanel'
 import Sidebar from './Sidebar'
 import TopBar from './TopBar'
+import { ResultsStore } from '../../device/resultsStore'
 import { defaultParams, defaultSystem, emptyLearned, type DeviceSnapshot } from '../../device/types'
 
 const idleSnapshot: DeviceSnapshot = {
@@ -90,7 +91,7 @@ test('nav landmark is named as general navigation in both languages', () => {
 test('tabs use roving tabindex and arrow/Home/End keys move and select', () => {
   render(
     <I18nProvider>
-      <RightPanel device={null} snapshot={idleSnapshot} fn={1} results={[]} />
+      <RightPanel device={null} snapshot={idleSnapshot} fn={1} results={new ResultsStore()} />
     </I18nProvider>,
   )
   const tab = (n: string) => screen.getByRole('tab', { name: n })

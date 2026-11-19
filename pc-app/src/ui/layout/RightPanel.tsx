@@ -1,5 +1,6 @@
 import { useId, useRef, useState, type KeyboardEvent } from 'react'
-import { needsConnection, type Device, type DeviceSnapshot, type Result } from '../../device/types'
+import type { ResultsStore } from '../../device/resultsStore'
+import { needsConnection, type Device, type DeviceSnapshot } from '../../device/types'
 import { useT, type MessageKey } from '../../i18n'
 import CodeTab from '../panel/CodeTab'
 import { useGuard } from '../panel/guard'
@@ -20,7 +21,7 @@ interface Props {
   device: Device | null
   snapshot: DeviceSnapshot
   fn: FunctionId
-  results: Result[]
+  results: ResultsStore
 }
 
 export default function RightPanel({ device, snapshot, fn, results }: Props) {

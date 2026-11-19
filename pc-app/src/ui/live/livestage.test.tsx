@@ -2,7 +2,8 @@ import { act, fireEvent, render, screen } from '@testing-library/react'
 import { createRef } from 'react'
 import { afterEach, expect, test, vi } from 'vitest'
 import { DemoLearnError } from '../../device/demo/recognize'
-import { NotSupportedError, type LearnedId, type Result } from '../../device/types'
+import { ResultsStore } from '../../device/resultsStore'
+import { NotConnectedError, NotSupportedError, type LearnedId, type Result } from '../../device/types'
 import { I18nProvider } from '../../i18n'
 import LiveStage, { type LiveStageHandle } from './LiveStage'
 
@@ -19,11 +20,16 @@ interface Over {
   fn?: 1 | 2 | 3
   canLearn?: boolean
   onLearn?: (r: { x: number; y: number; width: number; height: number }) => Promise<number>
-  results?: Result[]
+  results?: Result[] | ResultsStore
   learned?: LearnedId[]
   showNames?: boolean
   fps?: number
   kbps?: number | null
+}
+function storeOf(results: Result[]) {
+  const s = new ResultsStore()
+  s.push(results)
+  return s
 }
 function setup(o: Over = {}) {
   const ref = createRef<LiveStageHandle>()
@@ -37,7 +43,7 @@ function setup(o: Over = {}) {
         fn={o.fn ?? 1}
         canLearn={o.canLearn ?? true}
         onLearn={o.onLearn ?? (async () => 1)}
-        results={o.results ?? []}
+        results={o.results instanceof ResultsStore ? o.results : storeOf(o.results ?? [])}
         learned={o.learned ?? []}
         showNames={o.showNames ?? true}
       />
@@ -119,6 +125,7 @@ test('errors map to messages', async () => {
     [new DemoLearnError('no-color'), '框選範圍內沒有顏色'],
     [new DemoLearnError('full'), '最多只能學 7 個顏色'],
     [new NotSupportedError(), '需要更新韌體'],
+    [new NotConnectedError(), '請先連線 MXCam'],
   ]
   for (const [err, msg] of cases) {
     const { unmount } = setup({ onLearn: () => Promise.reject(err) })
@@ -227,4 +234,28 @@ test('Escape cancels a drag', async () => {
     fireEvent.mouseUp(window, { clientX: 200, clientY: 200 })
   })
   expect(onLearn).not.toHaveBeenCalled()
+})
+
+test('review point 4: boxes are the results of the frame on screen, not the newest results', async () => {
+  stubRect(320, 240)
+  const ctx = { clearRect: () => {}, drawImage: () => {} }
+  vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(ctx as unknown as CanvasRenderingContext2D)
+  vi.stubGlobal('createImageBitmap', async () => ({ width: 320, height: 240, close: () => {} }))
+  const store = new ResultsStore()
+  const at = (id: number, x: number): Result[] => [{ id, kind: 'color', x, y: 100, width: 20, height: 20 }]
+  store.push(at(1, 50), 10)
+  store.push(at(2, 60), 11)
+  store.push(at(3, 70), 12)
+  const { ref, container } = setup({ results: store })
+  const left = () => [...container.querySelectorAll<HTMLElement>('.ls-box')].map((b) => b.style.left)
+  expect(left()).toEqual(['60px']) // nothing on screen yet: newest (x 70 - w/2)
+  await act(async () => {
+    ref.current!.draw({ kind: 'jpeg', jpeg: new Uint8Array([0xff, 0xd8]), frameId: 11 })
+  })
+  await vi.waitFor(() => expect(left()).toEqual(['50px'])) // frame 11's results (x 60)
+  await act(async () => {
+    store.push(at(4, 80), 13)
+  })
+  expect(left()).toEqual(['50px']) // newer results do not jump ahead of the picture
+  vi.unstubAllGlobals()
 })

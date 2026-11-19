@@ -1,5 +1,6 @@
 import { useCallback, useState } from 'react'
-import { NotSupportedError, type Device } from '../../device/types'
+import { DeviceOpError, LearnError, NotSupportedError, type Device } from '../../device/types'
+import { useT, type TFn } from '../../i18n'
 
 export interface Guard {
   /** The device refused an operation with NotSupportedError. */
@@ -19,8 +20,16 @@ interface State {
 
 const isNotSupported = (e: unknown) => e instanceof NotSupportedError || (e instanceof Error && e.name === 'NotSupportedError')
 
+/** Known device refusals get a localized text; anything else keeps its raw message. */
+function detail(e: unknown, t: TFn): string {
+  if (e instanceof DeviceOpError && e.code === 'names-full') return t('namesFull')
+  if (e instanceof LearnError) return t(e.code === 'full' ? 'learnFull' : 'learnNoColor')
+  return e instanceof Error ? e.message || e.name : String(e)
+}
+
 /** Turns device failures into inline state. State belongs to one device instance. */
 export function useGuard(device: Device | null): Guard {
+  const { t } = useT()
   const [state, setState] = useState<State>({ device, needFirmware: false, error: null })
   const run = useCallback(
     async (op: () => Promise<unknown>) => {
@@ -33,12 +42,12 @@ export function useGuard(device: Device | null): Guard {
         setState((s) => ({
           device,
           needFirmware: nf || (s.device === device && s.needFirmware),
-          error: nf ? null : e instanceof Error ? e.message || e.name : String(e),
+          error: nf ? null : detail(e, t),
         }))
         return false
       }
     },
-    [device],
+    [device, t],
   )
   const clear = useCallback(() => setState((s) => (s.error ? { ...s, error: null } : s)), [])
   const mine = state.device === device

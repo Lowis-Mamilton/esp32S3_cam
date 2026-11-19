@@ -108,5 +108,10 @@ export const en: Record<keyof typeof zhTW, string> = {
   cfgNotJson: 'Not valid JSON',
   cfgTooLarge: 'File too large (limit 1 MB)',
   cfgBad: 'Config file is not valid',
-  copyFailed: 'Copy failed. Select the code and copy it by hand'
+  copyFailed: 'Copy failed. Select the code and copy it by hand',
+  fnSwitched: 'Switched to {fn} (changed by another device)',
+  cfgRelearn: 'Colors need to be learned again',
+  nameLimit: 'Names are at most 48 bytes (UTF-8)',
+  namesFull: 'Name table is full (max 32 names)',
+  mirrorView: 'Mirror view'
 }

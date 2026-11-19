@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useImperativeHandle, useLayoutEffect, useRef, useState, type CSSProperties, type MouseEvent as ReactMouseEvent, type Ref } from 'react'
-import { DemoLearnError } from '../../device/demo/recognize'
-import { NotSupportedError, type FrameSource, type LearnedId, type Result } from '../../device/types'
+import { useCallback, useEffect, useImperativeHandle, useLayoutEffect, useRef, useState, useSyncExternalStore, type CSSProperties, type MouseEvent as ReactMouseEvent, type Ref } from 'react'
+import type { ResultsStore } from '../../device/resultsStore'
+import { LearnError, NotConnectedError, NotSupportedError, type FrameSource, type LearnedId } from '../../device/types'
 import { useT } from '../../i18n'
 import type { FunctionId } from '../layout/types'
 import { FRAME_H, FRAME_W, toFrame, toScreen, type Viewport } from './geometry'
@@ -22,7 +22,8 @@ interface Props {
   /** Colour function and a device that can learn. */
   canLearn: boolean
   onLearn: (region: Region) => Promise<number>
-  results: Result[]
+  /** Only this component and the results tab subscribe, so pushes do not re-render the whole app. */
+  results: ResultsStore
   /** Learned IDs of the displayed function. */
   learned: LearnedId[]
   showNames: boolean
@@ -34,8 +35,9 @@ const TAB_H = 18
 const tabWidth = (text: string) => Math.ceil([...text].reduce((w, c) => w + (c.charCodeAt(0) > 255 ? 13 : 7), 14))
 const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v))
 
-export default function LiveStage({ ref, connected, fps, kbps, fn, canLearn, onLearn, results, learned, showNames }: Props) {
+export default function LiveStage({ ref, connected, fps, kbps, fn, canLearn, onLearn, results: store, learned, showNames }: Props) {
   const { t } = useT()
+  const results = useSyncExternalStore(store.subscribe, store.paired)
   const stageRef = useRef<HTMLDivElement>(null)
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const busy = useRef(false)
@@ -56,10 +58,14 @@ export default function LiveStage({ ref, connected, fps, kbps, fn, canLearn, onL
         if (canvas.height !== FRAME_H) canvas.height = FRAME_H
         ctx.clearRect(0, 0, canvas.width, canvas.height)
         f.draw(ctx)
+        store.setDisplayed(undefined)
         return
       }
-      // No createImageBitmap (e.g. jsdom): nothing to draw.
-      if (typeof createImageBitmap !== 'function') return
+      // No createImageBitmap (e.g. jsdom): nothing to decode; treat the frame as shown.
+      if (typeof createImageBitmap !== 'function') {
+        store.setDisplayed(f.frameId)
+        return
+      }
       // Drop the frame if the previous decode is still running; never queue.
       if (busy.current) return
       const canvas = canvasRef.current
@@ -71,6 +77,8 @@ export default function LiveStage({ ref, connected, fps, kbps, fn, canLearn, onL
             if (canvas.width !== bmp.width) canvas.width = bmp.width
             if (canvas.height !== bmp.height) canvas.height = bmp.height
             canvas.getContext('2d')?.drawImage(bmp, 0, 0)
+            // Boxes follow the picture: results are paired by frame id (review point 4).
+            store.setDisplayed(f.frameId)
           } finally {
             bmp.close()
           }
@@ -130,7 +138,8 @@ export default function LiveStage({ ref, connected, fps, kbps, fn, canLearn, onL
         say(t('learned', { id }), false)
       } catch (e) {
         if (e instanceof NotSupportedError) say(t('learnNeedFirmware'), true)
-        else if (e instanceof DemoLearnError) say(t(e.code === 'full' ? 'learnFull' : 'learnNoColor'), true)
+        else if (e instanceof NotConnectedError) say(t('needConnect'), true)
+        else if (e instanceof LearnError) say(t(e.code === 'full' ? 'learnFull' : 'learnNoColor'), true)
         else say(t('learnFailed'), true)
       }
     },

@@ -219,6 +219,14 @@ button {
 .app-alert-close:hover {
   background: var(--danger-soft);
 }
+/* Short-lived notice, e.g. the function was changed by another device. */
+.app-info {
+  margin: 0;
+  padding: 8px 16px;
+  background: var(--accent-soft);
+  border-bottom: 1px solid var(--accent);
+  color: var(--text);
+}
 
 .visually-hidden {
   position: absolute;

@@ -1,9 +1,10 @@
 import { X } from 'lucide-react'
-import { useCallback, useEffect, useRef, useState } from 'react'
-import { needsConnection, type Device, type FunctionId, type Result } from './device/types'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { ResultsStore } from './device/resultsStore'
+import { needsConnection, type Device, type FunctionId } from './device/types'
 import { useDevice } from './device/useDevice'
 import { describeError, type ErrorText } from './i18n/core'
-import { useT } from './i18n'
+import { useT, type MessageKey } from './i18n'
 import RightPanel from './ui/layout/RightPanel'
 import Sidebar from './ui/layout/Sidebar'
 import TopBar from './ui/layout/TopBar'
@@ -11,6 +12,9 @@ import type { View } from './ui/layout/types'
 import FirmwarePage from './ui/pages/FirmwarePage'
 import SettingsPage from './ui/pages/SettingsPage'
 import LiveStage, { type LiveStageHandle } from './ui/live/LiveStage'
+
+const FN_KEY: Record<FunctionId, MessageKey> = { 1: 'fnColor', 2: 'fnTag', 3: 'fnFace' }
+const NOTICE_MS = 4000
 
 interface Props {
   /** Injectable for tests; defaults to navigator.serial. */
@@ -41,11 +45,13 @@ export default function App({ serial }: Props) {
   } | null>(null)
   const error = errorOf && errorOf.device === device ? errorOf.error : null
   const stats = statsOf && statsOf.device === device ? statsOf : { fps: 0, kbps: 0 }
-  const [resultsOf, setResultsOf] = useState<{
-    device: Device
-    results: Result[]
-  } | null>(null)
-  const results = resultsOf && resultsOf.device === device ? resultsOf.results : []
+  // Results live outside React state: only LiveStage and the results tab subscribe (push rate is ~10/s).
+  // One store per device instance, so a new device never shows the previous one's boxes.
+  // oxlint-disable-next-line react-hooks/exhaustive-deps -- device is the store's identity key
+  const results = useMemo(() => new ResultsStore(), [device])
+  // "Switched by another device" notice; belongs to one device instance.
+  const [noticeOf, setNoticeOf] = useState<{ device: Device; fn: FunctionId } | null>(null)
+  const notice = noticeOf && noticeOf.device === device ? noticeOf.fn : null
   const liveRef = useRef<LiveStageHandle>(null)
   const userClosed = useRef(false)
 
@@ -53,15 +59,30 @@ export default function App({ serial }: Props) {
     if (!device) return
     const offs = [
       device.onFrame((f) => liveRef.current?.draw(f)),
-      device.onResults((r) => setResultsOf({ device, results: r })),
+      device.onResults((r, meta) => results.push(r, meta?.frameId)),
       device.onStats((x) => setStatsOf({ device, ...x })),
+      // Another host (e.g. the R4) changed the function: follow it so the view matches what the board runs.
+      device.onFunctionChange((fn) => {
+        setLastFn(fn)
+        setView((v) => (v.kind === 'function' ? { kind: 'function', id: fn } : v))
+        setNoticeOf({ device, fn })
+      }),
     ]
     return () => offs.forEach((off) => off())
-  }, [device])
+  }, [device, results])
+
+  useEffect(() => {
+    if (!noticeOf) return
+    const timer = setTimeout(() => setNoticeOf(null), NOTICE_MS)
+    return () => clearTimeout(timer)
+  }, [noticeOf])
 
   // The device must be told which function is active: it does not know what the user is looking at.
-  // Real devices without the command reject with NotSupportedError, which is expected for now.
+  // Sent on every view change and after each (re)connect; older firmware rejects it, which is fine.
   const connected = status === 'connected'
+  useEffect(() => {
+    if (!connected) results.clear()
+  }, [connected, results])
   useEffect(() => {
     if (!device || !connected) return
     device.setFunction(lastFn).catch(() => {})
@@ -98,6 +119,11 @@ export default function App({ serial }: Props) {
           <button type="button" className="app-alert-close" aria-label={t('dismiss')} onClick={() => setErrorOf(null)}>
             <X size={16} aria-hidden="true" />
           </button>
+        </p>
+      )}
+      {notice && (
+        <p role="status" className="app-info">
+          {t('fnSwitched', { fn: t(FN_KEY[notice]) })}
         </p>
       )}
       <div className="app-columns">
