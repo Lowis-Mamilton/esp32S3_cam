@@ -222,14 +222,22 @@ static void fill_record(const apriltag_detection_t *dd, double scale, mxp_result
   r->h = (uint16_t)(y1 - y0);
   r->confidence = (uint8_t)lround(clampd(d->decision_margin, 0.0, 100.0));
 
-  /* Corner 0 -> corner 1: the tag's bottom edge, left to right when upright. */
-  double deg = atan2(d->p[1][1] - d->p[0][1], d->p[1][0] - d->p[0][0]) *
-               (180.0 / 3.14159265358979323846);
+  /* Output corners in the OpenCV/ArUco order TL, TR, BR, BL (clockwise on
+   * screen from the tag's top-left). OpenCV's DICT_APRILTAG_36h11 marker is
+   * the AprilRobotics image turned 180 degrees, and upstream's p[] runs
+   * BL, BR, TR, TL of the AprilRobotics image; in OpenCV terms that is
+   * TR, TL, BL, BR, so OpenCV's TL, TR, BR, BL = upstream p[1], p[0], p[3], p[2]
+   * (confirmed on the board against OpenCV on the same frames). */
+  static const int order[4] = { 1, 0, 3, 2 };
+  const double *tl = d->p[order[0]], *tr = d->p[order[1]];
+  /* Rotation: direction of the top edge TL -> TR; upright reads 0, turned
+   * clockwise on screen reads positive. */
+  double deg = atan2(tr[1] - tl[1], tr[0] - tl[0]) * (180.0 / 3.14159265358979323846);
   r->extra_len = 18;
   put_i16(r->extra, to_i16(clampd(deg * 100.0, -18000.0, 18000.0)));
   for (int k = 0; k < 4; k++) {
-    put_i16(r->extra + 2 + 4 * k, to_i16(d->p[k][0]));
-    put_i16(r->extra + 4 + 4 * k, to_i16(d->p[k][1]));
+    put_i16(r->extra + 2 + 4 * k, to_i16(d->p[order[k]][0]));
+    put_i16(r->extra + 4 + 4 * k, to_i16(d->p[order[k]][1]));
   }
 }
 

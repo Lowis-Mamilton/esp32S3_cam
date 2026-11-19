@@ -20,11 +20,13 @@ extern "C" {
  *   w, h        axis-aligned bounding box of the 4 corners, clipped to the frame
  *   confidence  decision_margin rounded and clamped to 0..100
  *   extra       18 bytes, little-endian i16: rotation_cdeg, then x0,y0..x3,y3
- *               (corners in upstream order, rounded, unclipped)
- * rotation_cdeg = atan2(y1 - y0, x1 - x0) in image coordinates (y down), in
- * centidegrees -18000..18000. Corner 0 -> corner 1 is the tag's bottom edge
- * running left to right, so an upright tag reads 0 and a tag turned clockwise
- * on screen reads positive.
+ *               = the tag's top-left, top-right, bottom-right, bottom-left
+ *               corners (clockwise on screen; rounded, unclipped)
+ * "Top" follows OpenCV/ArUco (DICT_APRILTAG_36h11), whose marker image is the
+ * AprilRobotics image (apriltag-imgs PNG) turned 180 degrees.
+ * rotation_cdeg = atan2(TR.y - TL.y, TR.x - TL.x) in image coordinates (y down),
+ * in centidegrees -18000..18000: an upright tag reads 0 and a tag turned
+ * clockwise on screen reads positive.
  * Records are sorted by decision_margin (descending); detections that needed
  * more than 1 corrected bit are discarded (the decoder only builds the
  * hamming<=1 table anyway, see mxcam_tag.c). */

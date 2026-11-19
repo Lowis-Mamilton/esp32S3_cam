@@ -43,12 +43,10 @@ static void tag_cells(int id, uint8_t cells[10][10]) {
       cells[fam->bit_y[i] + border_start][fam->bit_x[i] + border_start] = 255;
 }
 
-/* Draws the tag centred at (cx, cy), cell_px pixels per cell, rotated by
- * angle_deg clockwise on screen (image y axis points down). Inverse mapping
- * with nearest neighbour. */
-static void draw_tag(int id, double cx, double cy, double cell_px, double angle_deg) {
-  uint8_t cells[10][10];
-  tag_cells(id, cells);
+/* Draws a 10x10 cell grid centred at (cx, cy), cell_px pixels per cell,
+ * rotated by angle_deg clockwise on screen (image y axis points down). Inverse
+ * mapping with nearest neighbour. */
+static void draw_cells(uint8_t cells[10][10], double cx, double cy, double cell_px, double angle_deg) {
   double a = angle_deg * PI / 180.0, c = cos(a), s = sin(a);
   for (int y = 0; y < H; y++)
     for (int x = 0; x < W; x++) {
@@ -59,6 +57,25 @@ static void draw_tag(int id, double cx, double cy, double cell_px, double angle_
       if (cu < 0 || cv < 0 || cu >= 10 || cv >= 10) continue;
       gray[y * W + x] = cells[(int)cv][(int)cu];
     }
+}
+
+/* "Upright" follows the OpenCV/ArUco convention (DICT_APRILTAG_36h11), which
+ * the MXCam rotation/corner output uses: the marker image OpenCV generates is
+ * the AprilRobotics image (apriltag_to_image / apriltag-imgs PNG) turned 180
+ * degrees (checked with OpenCV 5.1 for IDs 3 and 12). So draw_tag() renders
+ * the upstream grid rotated by 180; draw_tag_upstream() renders it as is. */
+static void draw_tag(int id, double cx, double cy, double cell_px, double angle_deg) {
+  uint8_t up[10][10], cells[10][10];
+  tag_cells(id, up);
+  for (int y = 0; y < 10; y++)
+    for (int x = 0; x < 10; x++) cells[y][x] = up[9 - y][9 - x];
+  draw_cells(cells, cx, cy, cell_px, angle_deg);
+}
+
+static void draw_tag_upstream(int id, double cx, double cy, double cell_px, double angle_deg) {
+  uint8_t cells[10][10];
+  tag_cells(id, cells);
+  draw_cells(cells, cx, cy, cell_px, angle_deg);
 }
 
 static void to_frame(void) {
@@ -83,6 +100,22 @@ static uint32_t last_us;
 static uint8_t run(mxp_result_t *out, uint8_t cap) {
   to_frame();
   return mxt_detect(frame, out, cap, &last_us);
+}
+
+/* Corners must come as the tag's TL, TR, BR, BL (OpenCV order): the black
+ * square's corners at (-4,-4), (4,-4), (4,4), (-4,4) cells, rotated with the tag. */
+static void check_corners(const mxp_result_t *r, double cx, double cy, double cell, double angle_deg, int tol) {
+  static const int su[4] = { -1, 1, 1, -1 }, sv[4] = { -1, -1, 1, 1 };
+  double a = angle_deg * PI / 180.0, c = cos(a), s = sin(a), h = 4 * cell;
+  for (int k = 0; k < 4; k++) {
+    double u = su[k] * h, v = sv[k] * h;
+    double ex = cx + c * u - s * v, ey = cy + s * u + c * v;
+    int px = rd16(r->extra + 2 + 4 * k), py = rd16(r->extra + 4 + 4 * k);
+    if (abs(px - (int)lround(ex)) > tol || abs(py - (int)lround(ey)) > tol)
+      printf("  corner %d at (%d,%d), expected (%.0f,%.0f)\n", k, px, py, ex, ey);
+    APPROX(px, lround(ex), tol);
+    APPROX(py, lround(ey), tol);
+  }
 }
 
 /* Common checks for one record against the rendered tag. */
@@ -117,6 +150,7 @@ static void check_record(const mxp_result_t *r, int id, double cx, double cy, do
   double ext = side * (fabs(cos(a)) + fabs(sin(a)));
   APPROX(r->w, ext, 4);
   APPROX(r->h, ext, 4);
+  check_corners(r, cx, cy, 6, angle_deg, 2);
 }
 
 static void test_empty(void) {
@@ -257,6 +291,17 @@ static void test_clipped_bbox(void) {
   CHECK(out[0].h > 0);
 }
 
+/* The AprilRobotics image drawn as is (its own "upright") is upside down in the
+ * OpenCV convention: rotation reads +-180 and TL is its bottom-right corner. */
+static void test_upstream_orientation(void) {
+  mxp_result_t out[MXP_MAX_RESULTS];
+  background();
+  draw_tag_upstream(12, 160, 120, 6, 0);
+  uint8_t n = run(out, MXP_MAX_RESULTS);
+  CHECK(n == 1);
+  if (n == 1) check_record(&out[0], 12, 160, 120, 180);
+}
+
 /* Half-res mode: 160x120 gray, coordinates scaled back to 320x240. */
 static void check_half(const mxp_result_t *r, int id, double cx, double cy, double angle_deg, double cell) {
   CHECK(r->id == id);
@@ -268,6 +313,7 @@ static void check_half(const mxp_result_t *r, int id, double cx, double cy, doub
   double a = angle_deg * PI / 180.0, ext = 8 * cell * (fabs(cos(a)) + fabs(sin(a)));
   APPROX(r->w, ext, 5);
   APPROX(r->h, ext, 5);
+  check_corners(r, cx, cy, cell, angle_deg, 3);
 }
 
 /* The table-driven gray conversion equals the reference formula for every pixel. */
@@ -336,6 +382,7 @@ int main(void) {
   test_lifecycle();
   test_decimate_setter();
   test_clipped_bbox();
+  test_upstream_orientation();
   test_half_res();
   test_luma_exhaustive();
   mxt_deinit();
