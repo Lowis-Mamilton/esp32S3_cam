@@ -178,3 +178,38 @@ test('sidebar switches views between function, settings and firmware', () => {
 test('translate has the unsupported text in both languages', () => {
   expect(translate('en', 'unsupported')).not.toBe(translate('zh-TW', 'unsupported'))
 })
+
+function slowPortSerial(open: () => Promise<void>): Serial {
+  const port = { getInfo: () => ({ usbVendorId: 0x303a, usbProductId: 0x1001 }), open, close: async () => {} }
+  return { ...idleSerial, requestPort: async () => port } as unknown as Serial
+}
+
+test('no error is shown when a connect rejection follows a user-initiated disconnect', async () => {
+  let rejectOpen!: (e: unknown) => void
+  const serial = slowPortSerial(() => new Promise<void>((_, rej) => (rejectOpen = rej)))
+  renderApp({ serial })
+  fireEvent.click(screen.getByRole('button', { name: '連線' }))
+  expect(await screen.findByText('連線中…')).toBeInTheDocument()
+  fireEvent.click(screen.getByRole('button', { name: '中斷' }))
+  rejectOpen(new DOMException('Failed to open serial port.', 'NetworkError'))
+  expect(await screen.findByText('未連線')).toBeInTheDocument()
+  await new Promise((r) => setTimeout(r, 20))
+  expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+})
+
+test('the error is cleared when a new connection attempt starts', async () => {
+  let n = 0
+  let release: (() => void) | undefined
+  const serial = slowPortSerial(() =>
+    ++n === 1
+      ? Promise.reject(new DOMException('busy', 'NetworkError'))
+      : new Promise<void>((res) => (release = res)),
+  )
+  renderApp({ serial })
+  fireEvent.click(screen.getByRole('button', { name: '連線' }))
+  expect(await screen.findByRole('alert')).toBeInTheDocument()
+  fireEvent.click(screen.getByRole('button', { name: '連線' }))
+  expect(await screen.findByText('連線中…')).toBeInTheDocument()
+  expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+  release?.()
+})

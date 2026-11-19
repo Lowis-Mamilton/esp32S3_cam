@@ -26,6 +26,7 @@ export default function App({ serial }: Props) {
   const error = errorOf && errorOf.device === device ? errorOf.error : null
   const stats = statsOf && statsOf.device === device ? statsOf : { fps: 0, kbps: 0 }
   const liveRef = useRef<LiveViewHandle>(null)
+  const userClosed = useRef(false)
 
   useEffect(() => {
     if (!device) return
@@ -38,10 +39,14 @@ export default function App({ serial }: Props) {
 
   const onConnect = () => {
     if (!device) return
+    userClosed.current = false
     setErrorOf(null)
-    device.connect().catch((e: unknown) => setErrorOf({ device, error: describeError(e) }))
+    device.connect().catch((e: unknown) => {
+      if (!userClosed.current) setErrorOf({ device, error: describeError(e) })
+    })
   }
   const onDisconnect = () => {
+    userClosed.current = true
     void device?.disconnect()
   }
 

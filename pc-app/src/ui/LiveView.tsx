@@ -23,7 +23,12 @@ export default function LiveView({ ref, connected, fps, kbps }: Props) {
       if (f.kind === 'canvas') {
         const canvas = canvasRef.current
         const ctx = canvas?.getContext('2d')
-        if (canvas && ctx) f.draw(ctx)
+        if (!canvas || !ctx) return
+        // A previous JPEG frame may have resized the canvas; reset so no stale pixels remain.
+        if (canvas.width !== 320) canvas.width = 320
+        if (canvas.height !== 240) canvas.height = 240
+        ctx.clearRect(0, 0, canvas.width, canvas.height)
+        f.draw(ctx)
         return
       }
       // No createImageBitmap (e.g. jsdom): nothing to draw.

@@ -1,3 +1,4 @@
+import { parseConfig } from './config'
 import {
   Emitter,
   defaultParams,
@@ -9,7 +10,6 @@ import {
   type FrameSource,
   type FunctionId,
   type FunctionParams,
-  type LearnedId,
   type Result,
   type SystemConfig,
 } from './types'
@@ -26,63 +26,6 @@ export const DEMO_INFO: DeviceInfo = {
 }
 
 const FRAME_INTERVAL_MS = 100
-const FNS: FunctionId[] = [1, 2, 3]
-
-interface Config {
-  learned: Record<FunctionId, LearnedId[]>
-  params: FunctionParams
-  system: SystemConfig
-}
-
-const isObj = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v)
-const isNum = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v)
-const isBool = (v: unknown): v is boolean => typeof v === 'boolean'
-
-function bad(what: string): never {
-  throw new Error(`invalid config: ${what}`)
-}
-
-function parseLearned(fn: FunctionId, list: unknown): LearnedId[] {
-  if (!Array.isArray(list)) return bad(`learned.${fn}`)
-  return list.map((e: unknown): LearnedId => {
-    if (!isObj(e) || !isNum(e.id) || typeof e.name !== 'string') return bad(`learned.${fn} entry`)
-    const c = e.color
-    if (c === undefined) return { id: e.id, name: e.name }
-    if (!(Array.isArray(c) && c.length === 3 && c.every(isNum))) return bad('learned color')
-    return { id: e.id, name: e.name, color: [c[0], c[1], c[2]] }
-  })
-}
-
-function parseConfig(json: string): Config {
-  let raw: unknown
-  try {
-    raw = JSON.parse(json)
-  } catch {
-    return bad('not JSON')
-  }
-  if (!isObj(raw) || raw.version !== 1) return bad('version')
-  const { learned, params, system } = raw
-  if (!isObj(learned)) return bad('learned')
-  const out = emptyLearned()
-  for (const fn of FNS) out[fn] = parseLearned(fn, learned[fn])
-  if (!isObj(params) || !isObj(params.color) || !isObj(params.tag) || !isObj(params.face)) return bad('params')
-  const { color: c, tag: t, face: f } = params
-  if (!isNum(c.tolerance) || !isNum(c.minArea) || !isNum(c.maxResults) || !isBool(c.showNames)) return bad('params.color')
-  if (!isBool(t.showNames)) return bad('params.tag')
-  if (!isNum(f.threshold) || !isNum(f.maxResults)) return bad('params.face')
-  if (!isObj(system)) return bad('system')
-  const { uartBaud, i2cAddress, ledBrightness } = system
-  if ((uartBaud !== 115200 && uartBaud !== 9600) || !isNum(i2cAddress) || !isNum(ledBrightness)) return bad('system')
-  return {
-    learned: out,
-    params: {
-      color: { tolerance: c.tolerance, minArea: c.minArea, maxResults: c.maxResults, showNames: c.showNames },
-      tag: { showNames: t.showNames },
-      face: { threshold: f.threshold, maxResults: f.maxResults },
-    },
-    system: { uartBaud, i2cAddress, ledBrightness },
-  }
-}
 
 /** Browser-only device: draws a placeholder scene, keeps config in memory. Task 3 adds the real scene. */
 export class DemoDevice implements Device {

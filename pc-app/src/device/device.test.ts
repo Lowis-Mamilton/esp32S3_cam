@@ -145,13 +145,14 @@ test('RealDevice without Web Serial is unsupported', () => {
 })
 
 test('useDevice: demo toggle persists, disposes the old device, and demo -> real -> demo leaves no old data', async () => {
+  vi.useFakeTimers()
   const { result } = renderHook(() => useDevice(idleSerial))
-  await waitFor(() => expect(result.current.device).not.toBeNull())
+  expect(result.current.device).not.toBeNull()
   expect(result.current.snapshot.mode).toBe('real')
   expect(result.current.snapshot.status).toBe('disconnected')
 
   act(() => result.current.setDemo(true))
-  await waitFor(() => expect(result.current.snapshot.mode).toBe('demo'))
+  expect(result.current.snapshot.mode).toBe('demo')
   expect(localStorage.getItem('mxcam.demo')).toBe('1')
   const first = result.current.device!
   const spy = vi.spyOn(first, 'dispose')
@@ -162,21 +163,50 @@ test('useDevice: demo toggle persists, disposes the old device, and demo -> real
   expect(result.current.snapshot.dirty).toBe(true)
 
   act(() => result.current.setDemo(false))
-  await waitFor(() => expect(result.current.snapshot.mode).toBe('real'))
+  expect(result.current.snapshot.mode).toBe('real')
   expect(spy).toHaveBeenCalled()
   expect(result.current.snapshot.status).toBe('disconnected')
   expect(result.current.snapshot.learned[1]).toEqual([])
 
   act(() => result.current.setDemo(true))
-  await waitFor(() => expect(result.current.snapshot.mode).toBe('demo'))
   const second = result.current.device!
-  const results = vi.fn()
-  second.onResults(results)
   expect(second).not.toBe(first)
+  const batches: unknown[][] = []
+  second.onResults((r) => batches.push(r))
+  act(() => {
+    vi.advanceTimersByTime(300)
+  })
+  expect(batches.length).toBeGreaterThanOrEqual(2)
+  expect(batches.every((b) => b.length === 0)).toBe(true)
   expect(result.current.snapshot.learned).toEqual({ 1: [], 2: [], 3: [] })
   expect(result.current.snapshot.dirty).toBe(false)
   expect(result.current.snapshot.status).toBe('connected')
-  expect(results).not.toHaveBeenCalled()
+})
+
+test('failed import leaves learned, params, system and dirty exactly unchanged', async () => {
+  const d = new DemoDevice()
+  await d.learnColor({ x: 0, y: 0, width: 4, height: 4 })
+  await d.save()
+  const before = d.snapshot()
+  const beforeJson = d.exportConfig()
+  const good = JSON.parse(beforeJson)
+  const newLearned = { ...good.learned, 1: [{ id: 2, name: 'new', color: [1, 2, 3] }] }
+  const cases = [
+    { ...good, learned: newLearned, params: { ...good.params, color: { ...good.params.color, tolerance: 500 } } },
+    { ...good, learned: newLearned, system: { ...good.system, i2cAddress: 0x01 } },
+    { ...good, learned: newLearned, params: null },
+    { ...good, learned: newLearned, system: 'x' },
+  ]
+  for (const c of cases) {
+    await expect(d.importConfig(JSON.stringify(c))).rejects.toThrow(Error)
+    const s = d.snapshot()
+    expect(s.learned).toEqual(before.learned)
+    expect(s.params).toEqual(before.params)
+    expect(s.system).toEqual(before.system)
+    expect(s.dirty).toBe(false)
+    expect(d.exportConfig()).toBe(beforeJson)
+  }
+  d.dispose()
 })
 
 test('useDevice restores the saved demo mode', async () => {
