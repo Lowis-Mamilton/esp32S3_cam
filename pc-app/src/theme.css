@@ -436,6 +436,7 @@ button {
 
 /* ---- right panel ---- */
 .rightpanel {
+  min-width: 0;
   display: flex;
   flex-direction: column;
   min-height: 0;
@@ -460,6 +461,7 @@ button {
 }
 .tabpanel {
   flex: 1;
+  min-width: 0;
   padding: 16px;
   overflow: auto;
 }
@@ -700,6 +702,8 @@ button {
   font-family: var(--font-mono);
 }
 .rp-code {
+  min-width: 0;
+  max-width: 100%;
   display: flex;
   flex-direction: column;
   gap: 10px;
@@ -719,7 +723,16 @@ button {
   color: var(--ok);
   font-size: 13px;
 }
+.rp-copy-fail {
+  color: var(--danger);
+}
+.rp-error small {
+  color: var(--text-dim);
+  font-family: var(--font-mono);
+}
 .rp-pre {
+  min-width: 0;
+  max-width: 100%;
   margin: 0;
   padding: 12px;
   overflow: auto;

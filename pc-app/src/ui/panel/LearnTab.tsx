@@ -1,5 +1,5 @@
 import { Trash2 } from 'lucide-react'
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { Device, LearnedId } from '../../device/types'
 import { useT } from '../../i18n'
 import type { FunctionId } from '../layout/types'
@@ -17,6 +17,7 @@ interface Props {
 }
 
 function NameInput({ value, label, disabled, onCommit }: { value: string; label: string; disabled: boolean; onCommit(v: string): void }) {
+  const { t } = useT()
   const [draft, setDraft] = useState<string | null>(null)
   const commit = () => {
     if (draft !== null && draft !== value) onCommit(draft)
@@ -27,12 +28,13 @@ function NameInput({ value, label, disabled, onCommit }: { value: string; label:
       className="rp-input"
       type="text"
       aria-label={label}
+      placeholder={t('unnamed')}
       maxLength={MAX_NAME}
       value={draft ?? value}
       disabled={disabled}
       onChange={(e) => setDraft(e.target.value)}
       onBlur={commit}
-      onKeyDown={(e) => e.key === 'Enter' && commit()}
+      onKeyDown={(e) => e.key === 'Enter' && !e.nativeEvent.isComposing && e.keyCode !== 229 && commit()}
     />
   )
 }
@@ -40,6 +42,10 @@ function NameInput({ value, label, disabled, onCommit }: { value: string; label:
 function ColorLearn({ device, learned, disabled, guard }: Omit<Props, 'fn'>) {
   const { t } = useT()
   const [confirming, setConfirming] = useState(false)
+  const cancelRef = useRef<HTMLButtonElement>(null)
+  useEffect(() => {
+    if (confirming) cancelRef.current?.focus()
+  }, [confirming])
   return (
     <>
       {learned.length === 0 ? (
@@ -73,7 +79,7 @@ function ColorLearn({ device, learned, disabled, guard }: Omit<Props, 'fn'>) {
         confirming && learned.length > 0 ? (
           <div className="rp-confirm" role="group" aria-label={t('forgetAll')}>
             <p>{t('forgetConfirmText')}</p>
-            <button type="button" className="btn" onClick={() => setConfirming(false)}>
+            <button ref={cancelRef} type="button" className="btn" onClick={() => setConfirming(false)}>
               {t('cancel')}
             </button>
             <button
@@ -102,12 +108,14 @@ function TagLearn({ device, learned, disabled, guard }: Omit<Props, 'fn'>) {
   const [tag, setTag] = useState('')
   const [name, setName] = useState('')
   const n = Number(tag)
-  const valid = tag !== '' && Number.isInteger(n) && n >= 0 && n <= MAX_TAG
+  const valid = name.trim() !== '' && tag !== '' && Number.isInteger(n) && n >= 0 && n <= MAX_TAG
   const add = () => {
     if (!device || !valid) return
-    void guard.run(() => device.setName(2, n, name)).then(() => {
-      setTag('')
-      setName('')
+    void guard.run(() => device.setName(2, n, name)).then((ok) => {
+      if (ok) {
+        setTag('')
+        setName('')
+      }
     })
   }
   return (
@@ -132,7 +140,7 @@ function TagLearn({ device, learned, disabled, guard }: Omit<Props, 'fn'>) {
           {t('add')}
         </button>
       </form>
-      {tag !== '' && !valid && <p className="rp-hint">{t('tagRange', { max: MAX_TAG })}</p>}
+      {tag !== '' && !(Number.isInteger(n) && n >= 0 && n <= MAX_TAG) && <p className="rp-hint">{t('tagRange', { max: MAX_TAG })}</p>}
       {learned.length === 0 ? (
         <p className="muted">{t('tagListEmpty')}</p>
       ) : (

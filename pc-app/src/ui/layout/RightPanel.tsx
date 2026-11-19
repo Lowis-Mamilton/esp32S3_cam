@@ -31,6 +31,10 @@ export default function RightPanel({ device, snapshot, fn, results }: Props) {
   const base = useId()
   const refs = useRef<Record<PanelTab, HTMLButtonElement | null>>({ results: null, learn: null, params: null, code: null })
 
+  const selectTab = (id: PanelTab) => {
+    guard.clear()
+    setTab(id)
+  }
   const onKeyDown = (e: KeyboardEvent, index: number) => {
     let next: number
     if (e.key === 'ArrowRight') next = (index + 1) % TABS.length
@@ -40,7 +44,7 @@ export default function RightPanel({ device, snapshot, fn, results }: Props) {
     else return
     e.preventDefault()
     const id = TABS[next].id
-    setTab(id)
+    selectTab(id)
     refs.current[id]?.focus()
   }
   return (
@@ -59,7 +63,7 @@ export default function RightPanel({ device, snapshot, fn, results }: Props) {
             tabIndex={tab === id ? 0 : -1}
             onKeyDown={(e) => onKeyDown(e, i)}
             aria-controls={`${base}-panel`}
-            onClick={() => setTab(id)}
+            onClick={() => selectTab(id)}
           >
             {t(key)}
           </button>
@@ -69,7 +73,7 @@ export default function RightPanel({ device, snapshot, fn, results }: Props) {
         {tab !== 'results' && tab !== 'code' && blocked && <p className="rp-hint rp-firmware">{t('needFirmware')}</p>}
         {guard.error && (
           <p role="alert" className="rp-error">
-            {guard.error}
+            {t('opFailed')} <small>{guard.error}</small>
           </p>
         )}
         {tab === 'results' && <ResultsTab fn={fn} results={results} learned={snapshot.learned[fn]} />}
@@ -77,7 +81,7 @@ export default function RightPanel({ device, snapshot, fn, results }: Props) {
         {tab === 'params' && <ParamsTab device={device} fn={fn} params={snapshot.params} disabled={blocked} guard={guard} />}
         {tab === 'code' && <CodeTab fn={fn} />}
       </div>
-      <SaveBar device={device} dirty={snapshot.dirty} disabled={!snapshot.supported.includes(fn)} />
+      <SaveBar key={String(snapshot.dirty)} device={device} dirty={snapshot.dirty} disabled={!snapshot.supported.includes(fn)} />
     </aside>
   )
 }

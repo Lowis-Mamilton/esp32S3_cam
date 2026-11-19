@@ -20,18 +20,25 @@ interface SliderProps {
 function Slider({ label, value, min, max, step = 1, disabled, onCommit }: SliderProps) {
   const [draft, setDraft] = useState<number | null>(null)
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const pending = useRef<{ v: number; commit: SliderProps['onCommit'] } | null>(null)
+  // Leaving the tab must not drop a change that is still waiting out the debounce.
   useEffect(
     () => () => {
       if (timer.current) clearTimeout(timer.current)
+      const p = pending.current
+      pending.current = null
+      if (p) void p.commit(p.v)
     },
     [],
   )
   const shown = draft ?? value
   const change = (v: number) => {
     setDraft(v)
+    pending.current = { v, commit: onCommit }
     if (timer.current) clearTimeout(timer.current)
     timer.current = setTimeout(() => {
       timer.current = null
+      pending.current = null
       void Promise.resolve(onCommit(v)).finally(() => setDraft(null))
     }, DEBOUNCE_MS)
   }
@@ -74,9 +81,9 @@ export default function ParamsTab({ device, fn, params, disabled, guard }: Props
     const color = (patch: Partial<FunctionParams['color']>) => set((p) => ({ color: { ...p.color, ...patch } }))
     return (
       <div className="rp-params">
-        <Slider label={t('paramTolerance')} value={c.tolerance} min={0} max={100} disabled={disabled} onCommit={(v) => color({ tolerance: v })} />
-        <Slider label={t('paramMinArea')} value={c.minArea} min={0} max={5000} step={10} disabled={disabled} onCommit={(v) => color({ minArea: v })} />
-        <Slider label={t('paramMaxResults')} value={c.maxResults} min={1} max={8} disabled={disabled} onCommit={(v) => color({ maxResults: v })} />
+        <Slider key="1-tolerance" label={t('paramTolerance')} value={c.tolerance} min={0} max={100} disabled={disabled} onCommit={(v) => color({ tolerance: v })} />
+        <Slider key="1-minArea" label={t('paramMinArea')} value={c.minArea} min={0} max={5000} step={10} disabled={disabled} onCommit={(v) => color({ minArea: v })} />
+        <Slider key="1-maxResults" label={t('paramMaxResults')} value={c.maxResults} min={1} max={8} disabled={disabled} onCommit={(v) => color({ maxResults: v })} />
         {checkbox(c.showNames, (v) => void color({ showNames: v }), 'paramShowNames')}
       </div>
     )
@@ -96,8 +103,8 @@ export default function ParamsTab({ device, fn, params, disabled, guard }: Props
   const face = (patch: Partial<FunctionParams['face']>) => set((p) => ({ face: { ...p.face, ...patch } }))
   return (
     <div className="rp-params">
-      <Slider label={t('paramThreshold')} value={f.threshold} min={0} max={100} disabled={disabled} onCommit={(v) => face({ threshold: v })} />
-      <Slider label={t('paramMaxResults')} value={f.maxResults} min={1} max={8} disabled={disabled} onCommit={(v) => face({ maxResults: v })} />
+      <Slider key="3-threshold" label={t('paramThreshold')} value={f.threshold} min={0} max={100} disabled={disabled} onCommit={(v) => face({ threshold: v })} />
+      <Slider key="3-maxResults" label={t('paramMaxResults')} value={f.maxResults} min={1} max={8} disabled={disabled} onCommit={(v) => face({ maxResults: v })} />
     </div>
   )
 }

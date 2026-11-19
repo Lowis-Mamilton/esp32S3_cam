@@ -7,7 +7,6 @@ const TEXT = {
   'zh-TW': {
     serial: '// 序列埠監控視窗',
     uart: '// Serial1 接 MXCam',
-    combine: '// 也可以同時開多個：MXCAM_ALGO_COLOR | MXCAM_ALGO_TAG | MXCAM_ALGO_FACE',
     ask: '// 向 MXCam 要一次結果',
     each: '// 一個一個讀出來',
     colorId: '// r.id 是學習的顏色 ID',
@@ -18,7 +17,6 @@ const TEXT = {
   en: {
     serial: '// Serial Monitor',
     uart: '// Serial1 is wired to MXCam',
-    combine: '// You can combine them: MXCAM_ALGO_COLOR | MXCAM_ALGO_TAG | MXCAM_ALGO_FACE',
     ask: '// Ask MXCam for the current results',
     each: '// Read them one by one',
     colorId: '// r.id is the learned colour ID',
@@ -41,7 +39,6 @@ void setup() {
   Serial1.begin(115200);  ${c.uart}
   cam.begin(Serial1);
   cam.setAlgorithm(${ALGO[fn]});
-  ${c.combine}
 }
 
 void loop() {

@@ -25,7 +25,8 @@ interface Path {
 // x = cx + ax*sin(2*pi*t/px + phx), y = cy + ay*sin(2*pi*t/py + phy): a Lissajous curve.
 // Each object roams its own region so the scene stays readable: the tag stays in the upper-left
 // (x 30..110, y 35..85), the face in the upper-right (x 210..290, y 35..85), so their bounding boxes
-// can never intersect; blobs use the lower half (centre y >= 130). Blob x amplitudes reach past the
+// can never intersect; blobs use the lower half in separate horizontal lanes (blue 130, yellow 158, red 186,
+// green 228; the lane gaps are about the radii sums) so they rarely touch each other. Blob x amplitudes reach past the
 // frame edge so blobs periodically leave it partially or fully. Phases spread the start positions.
 const at = (p: Path, t: number): [number, number] => [
   p.cx + p.ax * Math.sin((2 * Math.PI * t) / p.px + p.phx),
@@ -33,10 +34,10 @@ const at = (p: Path, t: number): [number, number] => [
 ]
 
 const BLOBS: { r: number; rgb: [number, number, number]; path: Path }[] = [
-  { r: 24, rgb: [230, 40, 40], path: { cx: 70, cy: 180, ax: 85, ay: 30, px: 14000, py: 9000, phx: 0.5, phy: 0 } }, // red
-  { r: 18, rgb: [40, 200, 70], path: { cx: 160, cy: 200, ax: 60, ay: 40, px: 11000, py: 7000, phx: 2, phy: 1 } }, // green
-  { r: 30, rgb: [50, 90, 230], path: { cx: 250, cy: 170, ax: 95, ay: 25, px: 16000, py: 10000, phx: 4, phy: 2 } }, // blue
-  { r: 14, rgb: [240, 210, 40], path: { cx: 160, cy: 150, ax: 170, ay: 20, px: 9000, py: 13000, phx: 1.2, phy: 3 } }, // yellow
+  { r: 24, rgb: [230, 40, 40], path: { cx: 160, cy: 186, ax: 115, ay: 0, px: 15277, py: 8845, phx: 1.23, phy: 2.52 } }, // red
+  { r: 18, rgb: [40, 200, 70], path: { cx: 160, cy: 228, ax: 152, ay: 0, px: 8530, py: 11305, phx: 3.26, phy: 4.38 } }, // green
+  { r: 30, rgb: [50, 90, 230], path: { cx: 160, cy: 130, ax: 84, ay: 0, px: 16546, py: 7191, phx: 1.91, phy: 5.05 } }, // blue
+  { r: 14, rgb: [240, 210, 40], path: { cx: 160, cy: 158, ax: 147, ay: 8, px: 16044, py: 13664, phx: 3.61, phy: 1.48 } }, // yellow
 ]
 const TAG = { half: 20, id: 3, path: { cx: 70, cy: 60, ax: 40, ay: 25, px: 30000, py: 40000, phx: 0.8, phy: 0 } }
 const FACE = { r: 26, path: { cx: 250, cy: 60, ax: 40, ay: 25, px: 36000, py: 28000, phx: 3, phy: 1.5 } }

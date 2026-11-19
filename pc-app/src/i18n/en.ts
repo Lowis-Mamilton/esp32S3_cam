@@ -84,5 +84,8 @@ export const en: Record<keyof typeof zhTW, string> = {
   codeNote: 'The library API may change before M4',
   save: 'Save to board',
   unsaved: 'Unsaved',
-  saveFailed: 'Save failed'
+  saveFailed: 'Save failed',
+  opFailed: 'Action failed',
+  unnamed: 'Unnamed',
+  copyFailed: 'Copy failed. Select the code and copy it by hand'
 }

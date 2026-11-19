@@ -141,3 +141,23 @@ test('minArea uses the visible area of a partially visible blob', () => {
   expect(recognize(1, [half], [], p)).toHaveLength(0)
   expect(recognize(1, [blob(20, 120, 20, RED)], [], p)).toHaveLength(1)
 })
+
+test('demo blobs rarely overlap each other (< 10% of samples over 20 s)', () => {
+  let overlap = 0
+  let n = 0
+  for (let t = 0; t < 20000; t += 50) {
+    n++
+    const b = sceneAt(t).filter((o) => o.kind === 'blob')
+    let hit = false
+    for (let i = 0; i < b.length; i++)
+      for (let j = i + 1; j < b.length; j++) if (Math.hypot(b[i].x - b[j].x, b[i].y - b[j].y) < b[i].r + b[j].r) hit = true
+    if (hit) overlap++
+  }
+  expect(overlap / n).toBeLessThan(0.1)
+})
+
+test('demo blobs still sometimes leave the frame', () => {
+  let out = 0
+  for (let t = 0; t < 40000; t += 50) if (sceneAt(t).some((o) => o.kind === 'blob' && (o.x - o.r < 0 || o.x + o.r > 320))) out++
+  expect(out).toBeGreaterThan(0)
+})

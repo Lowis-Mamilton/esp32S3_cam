@@ -18,7 +18,10 @@ beforeEach(() => {
     // ignore
   }
 })
+const clipboardDesc = Object.getOwnPropertyDescriptor(navigator, 'clipboard')
 afterEach(() => {
+  if (clipboardDesc) Object.defineProperty(navigator, 'clipboard', clipboardDesc)
+  else delete (navigator as unknown as Record<string, unknown>).clipboard
   devices.forEach((d) => d.dispose())
   devices = []
   vi.restoreAllMocks()
@@ -235,4 +238,133 @@ test('NotSupportedError from the device is caught and shown as a firmware hint',
   tab('參數')
   fireEvent.click(screen.getByRole('checkbox', { name: '顯示名稱' }))
   expect(await screen.findByText('需要更新韌體')).toBeInTheDocument()
+})
+
+// ---- review fixes ----
+
+test('a slider change is flushed when the tab is left within the debounce window', async () => {
+  const { device } = setup()
+  const spy = vi.spyOn(device, 'setParams')
+  tab('參數')
+  fireEvent.change(screen.getByRole('slider', { name: '容許範圍' }), { target: { value: '70' } })
+  tab('結果')
+  await waitFor(() => expect(spy).toHaveBeenCalled())
+  expect(device.snapshot().params.color.tolerance).toBe(70)
+  await waitFor(() => expect(screen.getByText('未儲存')).toBeInTheDocument())
+})
+
+test('Enter that confirms an IME composition does not commit the name', async () => {
+  const { device } = setup()
+  await act(async () => {
+    await device.learnColor(FULL)
+  })
+  tab('學習')
+  const input = screen.getByRole('textbox', { name: 'ID1 名稱' })
+  fireEvent.change(input, { target: { value: '紅色' } })
+  fireEvent.keyDown(input, { key: 'Enter', isComposing: true })
+  fireEvent.keyDown(input, { key: 'Process', keyCode: 229 })
+  await act(async () => {})
+  expect(device.snapshot().learned[1][0].name).toBe('')
+  fireEvent.keyDown(input, { key: 'Enter' })
+  await waitFor(() => expect(device.snapshot().learned[1][0].name).toBe('紅色'))
+})
+
+test('name input shows a placeholder', async () => {
+  const { device } = setup()
+  await act(async () => {
+    await device.learnColor(FULL)
+  })
+  tab('學習')
+  expect(screen.getByRole('textbox', { name: 'ID1 名稱' })).toHaveAttribute('placeholder', '未命名')
+})
+
+test('tag form: add needs a name, and a failed add keeps the inputs', async () => {
+  const { device } = setup(2)
+  tab('學習')
+  const num = screen.getByRole('spinbutton', { name: 'Tag 編號' })
+  const nm = screen.getByRole('textbox', { name: '名稱' })
+  fireEvent.change(num, { target: { value: '5' } })
+  expect(screen.getByRole('button', { name: '加入' })).toBeDisabled()
+  fireEvent.change(nm, { target: { value: '門' } })
+  vi.spyOn(device, 'setName').mockRejectedValue(new Error('nope'))
+  fireEvent.click(screen.getByRole('button', { name: '加入' }))
+  expect(await screen.findByRole('alert')).toHaveTextContent('操作失敗')
+  expect(num).toHaveValue(5)
+  expect(nm).toHaveValue('門')
+})
+
+test('panel errors are localized, carry a small detail, and clear on tab change', async () => {
+  const { device } = setup()
+  vi.spyOn(device, 'setParams').mockRejectedValue(new Error('boom'))
+  tab('參數')
+  fireEvent.click(screen.getByRole('checkbox', { name: '顯示名稱' }))
+  const alert = await screen.findByRole('alert')
+  expect(alert).toHaveTextContent('操作失敗')
+  expect(alert).toHaveTextContent('boom')
+  tab('學習')
+  expect(screen.queryByRole('alert')).toBeNull()
+})
+
+test('save error is localized and cleared by the next attempt', async () => {
+  const { device } = setup()
+  await act(async () => {
+    await device.learnColor(FULL)
+  })
+  const spy = vi.spyOn(device, 'save').mockRejectedValueOnce(new Error('flash busy'))
+  fireEvent.click(save())
+  const alert = await screen.findByRole('alert')
+  expect(alert).toHaveTextContent('儲存失敗')
+  expect(alert).toHaveTextContent('flash busy')
+  fireEvent.click(save())
+  await waitFor(() => expect(screen.queryByRole('alert')).toBeNull())
+  expect(spy).toHaveBeenCalledTimes(2)
+})
+
+test('save error disappears when the dirty state changes', async () => {
+  const { device } = setup()
+  await act(async () => {
+    await device.learnColor(FULL)
+  })
+  vi.spyOn(device, 'save').mockRejectedValueOnce(new Error('x'))
+  fireEvent.click(save())
+  await screen.findByRole('alert')
+  await act(async () => {
+    await device.factoryReset()
+  })
+  expect(screen.queryByRole('alert')).toBeNull()
+})
+
+test('snippets show exactly one algorithm, no combined flags', () => {
+  for (const fn of [1, 2, 3] as FunctionId[])
+    for (const lang of ['zh-TW', 'en'] as const) {
+      const s = snippetFor(fn, lang)
+      expect(s).not.toContain('|')
+      expect(s.match(/setAlgorithm/g)).toHaveLength(1)
+    }
+})
+
+test('copy failure is reported', async () => {
+  Object.defineProperty(navigator, 'clipboard', { value: { writeText: vi.fn().mockRejectedValue(new Error('denied')) }, configurable: true })
+  setup(1)
+  tab('程式')
+  fireEvent.click(screen.getByRole('button', { name: '複製' }))
+  expect(await screen.findByText('複製失敗，請手動選取')).toBeInTheDocument()
+})
+
+test('copy without clipboard also reports failure', async () => {
+  Object.defineProperty(navigator, 'clipboard', { value: undefined, configurable: true })
+  setup(1)
+  tab('程式')
+  fireEvent.click(screen.getByRole('button', { name: '複製' }))
+  expect(await screen.findByText('複製失敗，請手動選取')).toBeInTheDocument()
+})
+
+test('opening the forget-all confirm moves focus to Cancel', async () => {
+  const { device } = setup()
+  await act(async () => {
+    await device.learnColor(FULL)
+  })
+  tab('學習')
+  fireEvent.click(screen.getByRole('button', { name: '全部忘記' }))
+  await waitFor(() => expect(screen.getByRole('button', { name: '取消' })).toHaveFocus())
 })

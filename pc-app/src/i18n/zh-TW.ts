@@ -82,5 +82,8 @@ export const zhTW = {
   codeNote: '函式庫 API 在 M4 之前可能會調整',
   save: '存到板子',
   unsaved: '未儲存',
-  saveFailed: '儲存失敗'
+  saveFailed: '儲存失敗',
+  opFailed: '操作失敗',
+  unnamed: '未命名',
+  copyFailed: '複製失敗，請手動選取'
 } as const

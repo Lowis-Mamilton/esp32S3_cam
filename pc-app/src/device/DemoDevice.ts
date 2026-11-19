@@ -136,12 +136,14 @@ export class DemoDevice implements Device {
     this.touch()
   }
   async setName(fn: FunctionId, id: number, name: string) {
+    if (name.length > 32) throw new Error('name too long')
+    if (fn === 2 && !(Number.isInteger(id) && id >= 0 && id <= 586)) throw new Error('invalid tag id')
     const list = this.learned[fn]
-    // Tags need no learning: naming an unseen tag id creates its entry.
-    const next =
-      fn === 2 && !list.some((e) => e.id === id)
-        ? [...list, { id, name }].sort((a, b) => a.id - b.id)
-        : list.map((e) => (e.id === id ? { ...e, name } : e))
+    const cur = list.find((e) => e.id === id)
+    // Colours and faces must already be learned; tags need no learning, so naming an unseen tag creates it.
+    if (!cur && fn !== 2) return
+    if (cur && cur.name === name) return
+    const next = cur ? list.map((e) => (e.id === id ? { ...e, name } : e)) : [...list, { id, name }].sort((a, b) => a.id - b.id)
     this.learned = { ...this.learned, [fn]: next }
     this.touch()
   }

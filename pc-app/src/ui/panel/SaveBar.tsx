@@ -24,7 +24,7 @@ export default function SaveBar({ device, dirty, disabled }: Props) {
     <div className="rp-savebar">
       {guard.error && (
         <p role="alert" className="rp-error">
-          {t('saveFailed')}: {guard.error}
+          {t('saveFailed')} <small>{guard.error}</small>
         </p>
       )}
       {guard.needFirmware && <p className="rp-hint">{t('needFirmware')}</p>}
