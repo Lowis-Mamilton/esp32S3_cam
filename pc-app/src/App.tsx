@@ -7,6 +7,8 @@ import RightPanel from './ui/layout/RightPanel'
 import Sidebar from './ui/layout/Sidebar'
 import TopBar from './ui/layout/TopBar'
 import type { View } from './ui/layout/types'
+import FirmwarePage from './ui/pages/FirmwarePage'
+import SettingsPage from './ui/pages/SettingsPage'
 import LiveStage, { type LiveStageHandle } from './ui/live/LiveStage'
 
 interface Props {
@@ -93,31 +95,11 @@ export default function App({ serial }: Props) {
               showNames={view.id === 3 ? false : snapshot.params[view.id === 1 ? 'color' : 'tag'].showNames}
             />
           ) : (
-            <section className="page">
-              {/* Task 6 builds the real settings / firmware pages. */}
-              <h2>{view.kind === 'settings' ? t('pageSettings') : t('pageFirmware')}</h2>
-              {view.kind === 'settings' && info && (
-                <dl className="info">
-                  <dt>{t('protocolVersion')}</dt>
-                  <dd>{info.protocolVersion}</dd>
-                  <dt>{t('firmware')}</dt>
-                  <dd>
-                    {info.firmwareVersion} ({info.firmwareGit})
-                  </dd>
-                  <dt>{t('serialNumber')}</dt>
-                  <dd>{info.serial}</dd>
-                  <dt>{t('frameSize')}</dt>
-                  <dd>
-                    {info.frameWidth}x{info.frameHeight}
-                  </dd>
-                  <dt>{t('maxResults')}</dt>
-                  <dd>{info.maxResults}</dd>
-                  <dt>{t('functions')}</dt>
-                  <dd>{info.functionIds.join(', ')}</dd>
-                </dl>
-              )}
-              <p className="muted">{t('pageSoon')}</p>
-            </section>
+            view.kind === 'settings' ? (
+              <SettingsPage device={device} snapshot={snapshot} />
+            ) : (
+              <FirmwarePage snapshot={snapshot} />
+            )
           )}
         </main>
         <RightPanel device={device} snapshot={snapshot} fn={lastFn} results={results} />

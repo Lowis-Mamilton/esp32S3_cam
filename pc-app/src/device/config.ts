@@ -17,6 +17,10 @@ const isInt = (v: unknown, min: number, max = Infinity): v is number => Number.i
 const inRange = (v: unknown, min: number, max: number): v is number => isNum(v) && v >= min && v <= max
 const isBool = (v: unknown): v is boolean => typeof v === 'boolean'
 
+export const I2C_MIN = 0x08
+export const I2C_MAX = 0x77
+export const isValidI2cAddress = (v: unknown): v is number => isInt(v, I2C_MIN, I2C_MAX)
+
 function bad(what: string): never {
   throw new Error(`invalid config: ${what}`)
 }
@@ -60,7 +64,7 @@ export function parseConfig(json: string): Config {
   if (!inRange(f.threshold, 0, 100) || !isInt(f.maxResults, 1, 8)) return bad('params.face')
   if (!isObj(system)) return bad('system')
   const { uartBaud, i2cAddress, ledBrightness } = system
-  if ((uartBaud !== 115200 && uartBaud !== 9600) || !isInt(i2cAddress, 0x08, 0x77) || !inRange(ledBrightness, 0, 100))
+  if ((uartBaud !== 115200 && uartBaud !== 9600) || !isValidI2cAddress(i2cAddress) || !inRange(ledBrightness, 0, 100))
     return bad('system')
   return {
     learned: out,

@@ -779,3 +779,137 @@ button {
   font-size: 12px;
   font-weight: 600;
 }
+
+/* settings / firmware pages and the config-file block (pg-*) */
+.pg {
+  align-self: flex-start;
+  width: min(560px, 100%);
+}
+.pg h2 {
+  margin: 0 0 18px;
+  font-size: 20px;
+}
+.pg-section {
+  padding: 16px 0;
+  border-top: 1px solid var(--line);
+}
+.pg-h {
+  margin: 0 0 12px;
+  font-size: 14px;
+  font-weight: 600;
+}
+.pg-info {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 6px 24px;
+  margin: 0;
+}
+.pg-info dt {
+  color: var(--text-dim);
+}
+.pg-info dd {
+  margin: 0;
+  font-family: var(--font-mono);
+}
+.pg-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  min-height: 38px;
+}
+.pg-seg {
+  display: inline-flex;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+.pg-seg label {
+  position: relative;
+  padding: 6px 14px;
+  font-family: var(--font-mono);
+  background: var(--surface-2);
+  cursor: pointer;
+}
+.pg-seg label + label {
+  border-left: 1px solid var(--line);
+}
+.pg-seg label.on {
+  background: var(--accent);
+  color: var(--accent-ink);
+  font-weight: 600;
+}
+.pg-seg input {
+  position: absolute;
+  opacity: 0;
+  inset: 0;
+  margin: 0;
+  cursor: inherit;
+}
+.pg-seg label:has(input:focus-visible) {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+.pg-seg label:has(input:disabled) {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+.pg-hex {
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+  font-family: var(--font-mono);
+}
+.pg-hex span {
+  padding-left: 10px;
+  color: var(--text-dim);
+}
+.pg-hex input {
+  width: 4ch;
+  padding: 6px 10px 6px 2px;
+  background: transparent;
+  border: 0;
+  color: var(--text);
+  font: inherit;
+}
+.pg-hex:has(input[aria-invalid='true']) {
+  border-color: var(--danger);
+}
+.pg-hex:has(input:disabled) {
+  opacity: 0.4;
+}
+.pg-err {
+  color: var(--danger);
+}
+.pg-note {
+  margin: 0 0 10px;
+}
+.pg-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+.pg-version strong {
+  font: 600 22px var(--font-mono);
+}
+.pg-version small {
+  color: var(--text-dim);
+  font-family: var(--font-mono);
+}
+.pg-file {
+  font-family: var(--font-mono);
+  overflow-wrap: anywhere;
+}
+.pg-soon {
+  margin: 0;
+  color: var(--accent);
+}
+.pg-config {
+  margin-top: 22px;
+  padding-top: 14px;
+  border-top: 1px solid var(--line);
+}

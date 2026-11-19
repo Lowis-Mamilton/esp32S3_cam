@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import type { Device, FunctionParams } from '../../device/types'
+import { NotSupportedError, type Device, type FunctionParams } from '../../device/types'
 import { useT, type MessageKey } from '../../i18n'
 import type { FunctionId } from '../layout/types'
 import type { Guard } from './guard'
@@ -17,7 +17,7 @@ interface SliderProps {
 }
 
 /** Shows the value live while dragging; sends it to the device once the user pauses. */
-function Slider({ label, value, min, max, step = 1, disabled, onCommit }: SliderProps) {
+export function Slider({ label, value, min, max, step = 1, disabled, onCommit }: SliderProps) {
   const [draft, setDraft] = useState<number | null>(null)
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const pending = useRef<{ v: number; commit: SliderProps['onCommit'] } | null>(null)
@@ -65,7 +65,86 @@ interface Props {
   guard: Guard
 }
 
-export default function ParamsTab({ device, fn, params, disabled, guard }: Props) {
+const isNotSupported = (e: unknown) => e instanceof NotSupportedError || (e instanceof Error && e.name === 'NotSupportedError')
+
+function readText(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const r = new FileReader()
+    r.onload = () => resolve(String(r.result))
+    r.onerror = () => reject(r.error ?? new Error('read failed'))
+    r.readAsText(file)
+  })
+}
+
+type ImportState = { kind: 'ok' } | { kind: 'bad'; detail: string } | null
+
+/** Export / import of the whole device config (all functions + system). */
+function ConfigIO({ device, disabled, guard }: { device: Device | null; disabled: boolean; guard: Guard }) {
+  const { t } = useT()
+  const input = useRef<HTMLInputElement>(null)
+  const [state, setState] = useState<ImportState>(null)
+  const exportFile = () => {
+    if (!device) return
+    const url = URL.createObjectURL(new Blob([device.exportConfig()], { type: 'application/json' }))
+    const a = document.createElement('a')
+    a.href = url
+    a.download = 'mxcam-config.json'
+    document.body.appendChild(a)
+    a.click()
+    a.remove()
+    URL.revokeObjectURL(url)
+  }
+  const importFile = async (file: File) => {
+    if (!device) return
+    setState(null)
+    guard.clear()
+    try {
+      await device.importConfig(await readText(file))
+      setState({ kind: 'ok' })
+    } catch (e) {
+      // A firmware that cannot take the config is not a bad file.
+      if (isNotSupported(e)) void guard.run(() => Promise.reject(e))
+      else setState({ kind: 'bad', detail: e instanceof Error ? e.message : String(e) })
+    }
+  }
+  return (
+    <div className="pg-config">
+      <h3 className="rp-h">{t('cfgHeading')}</h3>
+      <div className="pg-actions">
+        <button type="button" className="btn" disabled={!device} onClick={exportFile}>
+          {t('cfgExport')}
+        </button>
+        <button type="button" className="btn" disabled={disabled} onClick={() => input.current?.click()}>
+          {t('cfgImport')}
+        </button>
+        <input
+          ref={input}
+          type="file"
+          accept="application/json,.json"
+          hidden
+          aria-label={t('cfgFileInput')}
+          onChange={(e) => {
+            const f = e.target.files?.[0]
+            e.target.value = ''
+            if (f) void importFile(f)
+          }}
+        />
+      </div>
+      {state?.kind === 'ok' && (
+        <p role="status" className="rp-hint">
+          {t('cfgImported')} <small>{t('cfgImportedHint')}</small>
+        </p>
+      )}
+      {state?.kind === 'bad' && (
+        <p role="alert" className="rp-error">
+          {t('cfgBad')} <small>{state.detail}</small>
+        </p>
+      )}
+    </div>
+  )
+}
+
+function FnParams({ device, fn, params, disabled, guard }: Props) {
   const { t } = useT()
   const set = (patch: (p: FunctionParams) => Partial<FunctionParams>) =>
     device ? guard.run(() => device.setParams(patch(device.snapshot().params))) : undefined
@@ -106,5 +185,14 @@ export default function ParamsTab({ device, fn, params, disabled, guard }: Props
       <Slider key="3-threshold" label={t('paramThreshold')} value={f.threshold} min={0} max={100} disabled={disabled} onCommit={(v) => face({ threshold: v })} />
       <Slider key="3-maxResults" label={t('paramMaxResults')} value={f.maxResults} min={1} max={8} disabled={disabled} onCommit={(v) => face({ maxResults: v })} />
     </div>
+  )
+}
+
+export default function ParamsTab(props: Props) {
+  return (
+    <>
+      <FnParams {...props} />
+      <ConfigIO device={props.device} disabled={props.disabled} guard={props.guard} />
+    </>
   )
 }
