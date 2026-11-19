@@ -306,3 +306,13 @@ test('disconnect clears the device state', async () => {
   expect(s.configKnown).toBe(false)
   expect(s.activeFunction).toBe(0)
 })
+
+test('concurrent config edits do not undo each other (each is merged into the config the previous one left)', async () => {
+  const fw = new FakeFirmware()
+  const d = await connected(fw)
+  await Promise.all([d.setSystem({ ledBrightness: 10 }), d.setParams({ color: { ...d.snapshot().params.color, tolerance: 80 } })])
+  expect(fw.config.ledBrightness).toBe(10)
+  expect(fw.config.tolerance).toBe(80)
+  expect(d.snapshot().system.ledBrightness).toBe(10)
+  expect(d.snapshot().params.color.tolerance).toBe(80)
+})

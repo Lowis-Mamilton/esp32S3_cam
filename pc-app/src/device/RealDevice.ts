@@ -129,6 +129,8 @@ export class RealDevice implements Device {
   private fnInFlight = 0
   private quietUntil = 0
   private snap: DeviceSnapshot | null = null
+  /** Config edits run one at a time, each merged into the config the previous one left. */
+  private configQueue: Promise<unknown> = Promise.resolve()
   private readonly auto: ReturnType<typeof setTimeout>
   private disposed = false
 
@@ -378,18 +380,28 @@ export class RealDevice implements Device {
     this.changed()
   }
 
-  async setParams(p: Partial<FunctionParams>): Promise<void> {
-    this.ensureConnected()
-    const cur = this.requireConfig()
-    const old = toParams(cur)
-    const params = { color: { ...old.color, ...p.color }, tag: { ...old.tag, ...p.tag }, face: { ...old.face, ...p.face } }
-    await this.applyConfig(toWire(cur, params, toSystem(cur)))
+  private queued<T>(op: () => Promise<T>): Promise<T> {
+    const run = this.configQueue.then(op, op)
+    this.configQueue = run.catch(() => {})
+    return run
   }
 
-  async setSystem(c: Partial<SystemConfig>): Promise<void> {
-    this.ensureConnected()
-    const cur = this.requireConfig()
-    await this.applyConfig(toWire(cur, toParams(cur), { ...toSystem(cur), ...c }))
+  setParams(p: Partial<FunctionParams>): Promise<void> {
+    return this.queued(async () => {
+      this.ensureConnected()
+      const cur = this.requireConfig()
+      const old = toParams(cur)
+      const params = { color: { ...old.color, ...p.color }, tag: { ...old.tag, ...p.tag }, face: { ...old.face, ...p.face } }
+      await this.applyConfig(toWire(cur, params, toSystem(cur)))
+    })
+  }
+
+  setSystem(c: Partial<SystemConfig>): Promise<void> {
+    return this.queued(async () => {
+      this.ensureConnected()
+      const cur = this.requireConfig()
+      await this.applyConfig(toWire(cur, toParams(cur), { ...toSystem(cur), ...c }))
+    })
   }
 
   async save(): Promise<void> {
@@ -416,6 +428,10 @@ export class RealDevice implements Device {
    */
   async importConfig(json: string): Promise<ImportOutcome> {
     const file = parseConfig(json) // throws before anything is sent
+    return this.queued(() => this.applyFile(file))
+  }
+
+  private async applyFile(file: ReturnType<typeof parseConfig>): Promise<ImportOutcome> {
     this.ensureConnected()
     const cur = this.requireConfig()
     await this.applyConfig(toWire(cur, file.params, file.system))
