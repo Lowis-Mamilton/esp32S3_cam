@@ -132,7 +132,7 @@ test('errors map to messages', async () => {
 test('boxes carry labels and ID colours; fps/KBs shown, KB/s hidden when null', () => {
   stubRect(640, 480)
   const results: Result[] = [
-    { id: 1, kind: 'color', x: 10, y: 50, width: 40, height: 40 },
+    { id: 1, kind: 'color', x: 30, y: 50, width: 40, height: 40 },
     { id: 0, kind: 'color', x: 100, y: 0, width: 20, height: 20 },
   ]
   const { container } = setup({ results, learned: [{ id: 1, name: '紅色積木' }], fps: 9.9, kbps: null })
@@ -144,4 +144,22 @@ test('boxes carry labels and ID colours; fps/KBs shown, KB/s hidden when null', 
   expect(boxes[0].style.width).toBe('80px')
   expect(screen.getByText(/9\.9 fps/)).toBeTruthy()
   expect(screen.queryByText(/KB\/s/)).toBeNull()
+})
+
+test('box is positioned from its centre x/y (frame rect 140..180 x 110..130)', () => {
+  stubRect(640, 480) // scale 2
+  const { container } = setup({ results: [{ id: 1, kind: 'color', x: 160, y: 120, width: 40, height: 20 }] })
+  const box = container.querySelector<HTMLElement>('.box')!
+  expect(box.style.left).toBe('280px')
+  expect(box.style.top).toBe('220px')
+  expect(box.style.width).toBe('80px')
+  expect(box.style.height).toBe('40px')
+})
+
+test('crosshair is shown even when learning is unavailable (real device)', () => {
+  stubRect(640, 480)
+  const { container } = setup({ canLearn: false })
+  const ch = container.querySelector<HTMLElement>('.crosshair')!
+  expect(ch.style.left).toBe('320px')
+  expect(ch.style.top).toBe('240px')
 })

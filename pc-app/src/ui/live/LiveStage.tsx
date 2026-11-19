@@ -176,8 +176,9 @@ export default function LiveStage({ ref, connected, fps, kbps, fn, canLearn, onL
         <canvas ref={canvasRef} width={FRAME_W} height={FRAME_H} />
         <div className="overlay" aria-hidden="true">
           {shown.map((r, i) => {
-            const a = toScreen(vp, r.x, r.y)
-            const b = toScreen(vp, r.x + r.width, r.y + r.height)
+            // Result x/y are the box centre.
+            const a = toScreen(vp, r.x - r.width / 2, r.y - r.height / 2)
+            const b = toScreen(vp, r.x + r.width / 2, r.y + r.height / 2)
             const flip = a.py < LABEL_H
             const style = {
               '--c': idColorVar(r),

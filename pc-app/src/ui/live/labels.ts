@@ -12,8 +12,9 @@ export function labelFor(r: Result, learned: LearnedId[], showNames: boolean, t:
 }
 
 export function idColorVar(r: Result): string {
-  if (r.kind === 'face') return 'var(--id-4)'
-  if (r.kind === 'tag') return `var(--id-${(r.id % 8) + 1})`
+  // Tags cycle ids 1-7; --id-8 is reserved for faces.
+  if (r.kind === 'face') return 'var(--id-8)'
+  if (r.kind === 'tag') return `var(--id-${(r.id % 7) + 1})`
   if (r.id === 0) return 'var(--unlearned)'
   return `var(--id-${((r.id - 1) % 8) + 1})`
 }
