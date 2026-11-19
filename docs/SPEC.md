@@ -62,6 +62,7 @@
   - 延後：條碼（沒有適合授權、可用於 IDF 5 的函式庫）、貓狗偵測、ImageNet 分類。放棄：COCO 物件偵測（約 1 s／張）、姿態、OCR 等 ESP32-S3 沒有可用模型的功能。
   - 手勢（兩隻手）與人臉辨識約 3 fps，NN 功能的效能目標放寬為 ≥ 3 fps。
   - 架構前置（M6 開頭）：GET_INFO 功能上限調到 32、各功能自己的參數（Config v1 之外）、LEARN 可指定 ID；M8 起模型放 flash 的模型分割區、切換功能時才載入。
+    - **M6 已完成協定部分**（ADR-0016、`docs/protocol.md` §9）：GET_INFO 功能清單上限 32；`GET_FUNC_CONFIG (0x44)`／`SET_FUNC_CONFIG (0x45)`，每個功能一個固定版面＋自己的 `layout_version`（功能 1–3 的參數留在 Config v1）；不新增能力位元，GET_INFO 的功能清單就是能力；LEARN 可多帶 `id (u16)`（11 bytes，M6 韌體一律回 `BAD_PARAM`）。模型分割區仍待 M8。
 
 ### 顏色學習流程
 
@@ -142,6 +143,7 @@ USB、UART、I2C 三種傳輸用同一套封包。
 
 - 共同欄位：`id`、`x`、`y`（中心）、`width`、`height`、`confidence`（255 = 不適用）；座標以 **320×240** 為準
 - AprilTag 另帶：旋轉角度、四個角座標
+- 線條追蹤（M6）另帶：角度、相對畫面中央的偏移、線段兩端點、路口／岔路旗標（14 bytes，`docs/protocol.md` §9）
 - 一次最多 **8 筆**，依面積或信心度排序
 
 ### 預設值
@@ -226,6 +228,7 @@ docs/          規格、協定、ADR
 | M3 | 人臉偵測（esp-dl） | ≥ 5 fps |
 | M4 | UART、I2C、Arduino 函式庫、電位轉換接線 | R4 用範例程式讀到三種功能的結果，延遲 ≤ 50 ms |
 | M5 | 網頁燒錄、PWA 離線、GitHub Pages、多語系 | 新電腦只開網頁就能燒錄並使用 |
+| M6 | 架構前置、線條追蹤、物體追蹤 | 兩個功能 TFT ≥ 10 fps（不串流）、實機驗收通過 |
 
 ## 9. 測試策略
 

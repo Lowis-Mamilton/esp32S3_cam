@@ -3,7 +3,6 @@
 #include <string.h>
 
 #define INFO_FIXED 23u
-#define INFO_MAX_FUNCS 8u
 
 enum { S_M0, S_M1, S_VER, S_CMD, S_SEQ, S_LEN0, S_LEN1, S_PAYLOAD, S_CRC0, S_CRC1 };
 
@@ -135,7 +134,7 @@ static void put_u32(uint8_t *p, uint32_t v) {
 static uint16_t get_u16(const uint8_t *p) { return (uint16_t)(p[0] | (p[1] << 8)); }
 
 size_t mxp_pack_info(const mxp_info_t *in, uint8_t *out, size_t out_cap) {
-  if (in->function_count > INFO_MAX_FUNCS) return 0;
+  if (in->function_count > MXP_INFO_MAX_FUNCS) return 0;
   size_t total = INFO_FIXED + in->function_count;
   if (out_cap < total) return 0;
   out[0] = in->protocol_version;
@@ -155,7 +154,7 @@ size_t mxp_pack_info(const mxp_info_t *in, uint8_t *out, size_t out_cap) {
 bool mxp_unpack_info(const uint8_t *p, uint16_t len, mxp_info_t *out) {
   if (len < INFO_FIXED) return false;
   uint8_t n = p[22];
-  if (n > INFO_MAX_FUNCS || len != INFO_FIXED + n) return false;
+  if (n > MXP_INFO_MAX_FUNCS || len != INFO_FIXED + n) return false;
   memset(out, 0, sizeof(*out));
   out->protocol_version = p[0];
   out->fw_major = p[1];
@@ -291,12 +290,14 @@ bool mxp_unpack_config(const uint8_t *p, uint16_t len, mxp_config_t *out) {
 }
 
 bool mxp_unpack_learn(const uint8_t *p, uint16_t len, mxp_learn_req_t *out) {
-  if (len != 9) return false;
+  if (len != 9 && len != 11) return false;
   out->function_id = p[0];
   out->x = get_u16(p + 1);
   out->y = get_u16(p + 3);
   out->w = get_u16(p + 5);
   out->h = get_u16(p + 7);
+  out->has_id = (len == 11) ? 1 : 0;
+  out->id = (len == 11) ? get_u16(p + 9) : 0;
   return true;
 }
 
@@ -360,4 +361,97 @@ size_t mxp_pack_learned(const mxp_learned_t *items, uint8_t n, uint8_t *out, siz
     o += 6u + items[i].name_len;
   }
   return o;
+}
+
+/* ---- M6 payloads (protocol.md 9) ---- */
+
+void mxp_line_config_defaults(mxp_line_config_t *c) {
+  c->mode = MXP_LINE_MODE_DARK;
+  c->threshold = 0;
+  c->roi_pct = 60;
+  c->bands = 8;
+  c->min_width = 4;
+  c->max_width = 80;
+  c->color_tolerance = 30;
+}
+
+void mxp_track_config_defaults(mxp_track_config_t *c) {
+  c->threshold = 50;
+  c->adapt = 10;
+  c->reacquire = 1;
+  c->scale = 1;
+}
+
+size_t mxp_pack_line_config(const mxp_line_config_t *c, uint8_t out[MXP_FUNC_CONFIG_SIZE]) {
+  out[0] = MXP_FUNC_LINE;
+  out[1] = MXP_LINE_CONFIG_VERSION;
+  out[2] = c->mode;
+  out[3] = c->threshold;
+  out[4] = c->roi_pct;
+  out[5] = c->bands;
+  out[6] = c->min_width;
+  out[7] = c->max_width;
+  out[8] = c->color_tolerance;
+  out[9] = 0;
+  return MXP_FUNC_CONFIG_SIZE;
+}
+
+bool mxp_unpack_line_config(const uint8_t *p, uint16_t len, mxp_line_config_t *out) {
+  if (len != MXP_FUNC_CONFIG_SIZE || p[0] != MXP_FUNC_LINE || p[1] != MXP_LINE_CONFIG_VERSION)
+    return false;
+  out->mode = p[2] > MXP_LINE_MODE_LEARNED ? MXP_LINE_MODE_DARK : p[2];
+  out->threshold = p[3];
+  out->roi_pct = clamp_u8(p[4], 20, 100);
+  out->bands = clamp_u8(p[5], 4, 12);
+  out->min_width = clamp_u8(p[6], 1, 100);
+  out->max_width = p[7] < out->min_width ? out->min_width : p[7];
+  out->color_tolerance = clamp_u8(p[8], 0, 100);
+  return true;
+}
+
+size_t mxp_pack_track_config(const mxp_track_config_t *c, uint8_t out[MXP_FUNC_CONFIG_SIZE]) {
+  memset(out, 0, MXP_FUNC_CONFIG_SIZE);
+  out[0] = MXP_FUNC_TRACK;
+  out[1] = MXP_TRACK_CONFIG_VERSION;
+  out[2] = c->threshold;
+  out[3] = c->adapt;
+  out[4] = c->reacquire;
+  out[5] = c->scale;
+  return MXP_FUNC_CONFIG_SIZE;
+}
+
+bool mxp_unpack_track_config(const uint8_t *p, uint16_t len, mxp_track_config_t *out) {
+  if (len != MXP_FUNC_CONFIG_SIZE || p[0] != MXP_FUNC_TRACK || p[1] != MXP_TRACK_CONFIG_VERSION)
+    return false;
+  out->threshold = clamp_u8(p[2], 10, 95);
+  out->adapt = clamp_u8(p[3], 0, 50);
+  out->reacquire = p[4] ? 1 : 0;
+  out->scale = p[5] ? 1 : 0;
+  return true;
+}
+
+void mxp_pack_line_extra(const mxp_line_extra_t *e, mxp_result_t *r) {
+  uint8_t *x = r->extra;
+  put_u16(x, (uint16_t)e->angle_cdeg);
+  put_u16(x + 2, (uint16_t)e->offset_x);
+  put_u16(x + 4, (uint16_t)e->x0);
+  put_u16(x + 6, (uint16_t)e->y0);
+  put_u16(x + 8, (uint16_t)e->x1);
+  put_u16(x + 10, (uint16_t)e->y1);
+  x[12] = e->flags;
+  x[13] = 0;
+  r->extra_len = MXP_LINE_EXTRA_SIZE;
+}
+
+bool mxp_unpack_line_extra(const mxp_result_t *r, mxp_line_extra_t *out) {
+  if (r->extra_len != MXP_LINE_EXTRA_SIZE) return false;
+  const uint8_t *x = r->extra;
+  out->angle_cdeg = get_i16(x);
+  out->offset_x = get_i16(x + 2);
+  out->x0 = get_i16(x + 4);
+  out->y0 = get_i16(x + 6);
+  out->x1 = get_i16(x + 8);
+  out->y1 = get_i16(x + 10);
+  out->flags = x[12];
+  return true;
 }

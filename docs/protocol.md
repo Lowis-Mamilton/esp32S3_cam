@@ -67,6 +67,8 @@ CRC 錯誤的封包**不回應**：因為內容不可信，連 `seq` 都不能�
 | 1 | 顏色 | M2 |
 | 2 | AprilTag（tag36h11） | M2 |
 | 3 | 人臉偵測（已實作，M3） | M3 |
+| 4 | 線條追蹤 | M6 |
+| 5 | 物體追蹤 | M6 |
 
 ## 5. 指令總表
 
@@ -80,12 +82,14 @@ CRC 錯誤的封包**不回應**：因為內容不可信，連 `seq` 都不能�
 | 0x30–0x33 | LEARN / FORGET / SET_NAME / GET_LEARNED | M2 |
 | 0x34 | 保留 | — |
 | 0x40–0x43 | GET_CONFIG / SET_CONFIG / SAVE / FACTORY_RESET | M2 |
+| 0x44 | GET_FUNC_CONFIG | M6 |
+| 0x45 | SET_FUNC_CONFIG | M6 |
 | 0x50 | STREAM_START（僅 USB） | M1 |
 | 0x51 | STREAM_STOP（僅 USB） | M1 |
 | 0x60 | 推送 FRAME | M1 |
 | 0x61 | 推送 RESULTS | M2 |
 
-M2 的指令細節見第 7 節；M3 以後新增的指令在各自的里程碑定稿。
+M2 的指令細節見第 7 節，M6 的見第 9 節（第 8 節保留給 M4 的 I2C 傳輸）；之後新增的指令在各自的里程碑定稿。
 
 ## 6. M1 指令細節
 
@@ -101,10 +105,10 @@ M2 的指令細節見第 7 節；M3 以後新增的指令在各自的里程碑�
 | serial | u8[6] | 晶片 MAC 位址，當作裝置序號 |
 | frame_width, frame_height | u16 ×2 | 320, 240 |
 | max_results | u8 | 一次最多回傳幾筆結果，`8` |
-| function_count | u8 | 支援幾個功能（不含 0「無功能」） |
+| function_count | u8 | 支援幾個功能（不含 0「無功能」），**最多 32**（M6 起；ADR-0016） |
 | function_ids | u8[function_count] | 支援的功能 ID |
 
-M1 的 `function_count` 是 0。
+M1 的 `function_count` 是 0。`function_count` 超過 32 的回應是不合法的，主機可以整包拒絕。功能清單就是能力清單：列出的功能才能用 SET_FUNCTION 切換，列出 4／5 的韌體也支援它們的 GET／SET_FUNC_CONFIG（第 9 節）。
 
 ### 0x02 PING（心跳）
 
@@ -159,7 +163,9 @@ M2 定稿於 2026-11-19（決策見 ADR-0007～0010）。
 | extra_len | u8 | 後面附加資料的長度 |
 | extra | u8[extra_len] | 依功能而定（見下） |
 
-AprilTag 的 `extra`（18 bytes）：`rotation_cdeg (i16，-18000～18000，百分之一度)`，接著四個角 `x0,y0,x1,y1,x2,y2,x3,y3 (i16 ×8)`。顏色和人臉的 `extra_len` 是 0。
+AprilTag 的 `extra`（18 bytes）：`rotation_cdeg (i16，-18000～18000，百分之一度)`，接著四個角 `x0,y0,x1,y1,x2,y2,x3,y3 (i16 ×8)`。顏色和人臉的 `extra_len` 是 0。線條（功能 4）的 `extra` 是 14 bytes，見第 9 節。
+
+`extra_len` 最大 18。主機依 `function_id` 解讀 `extra`；遇到不認得的長度（0–18）要**略過這段 extra、照常使用其他欄位**，不可以整包失敗（之後的功能可能帶新的 extra）；只有 `extra_len` > 18 或長度超出 payload 才是格式錯誤。
 
 - 四個角的順序是 tag 自己的**左上、右上、右下、左下**（在畫面上順時針）。tag 的「上」以官方 AprilRobotics tag36h11 圖片（apriltag-imgs）為準；OpenCV／ArUco 的 `DICT_APRILTAG_36h11` 產生的圖案方向相差 180°，所以 OpenCV 對同一個 tag 算出的角順序與角度會差 180°。
 - `rotation_cdeg = atan2(右上.y − 左上.y, 右上.x − 左上.x)`，影像座標（y 向下）：tag 正放是 0，在畫面上順時針轉為正、逆時針為負。
@@ -189,7 +195,7 @@ payload 與 GET_RESULTS 的回應相同。每處理完一張畫面推送一次�
 
 請求：`function_id (u8)`，`x, y, width, height (u16 ×4)` —— 要學習的區域，**左上角**座標（320×240）。
 
-- 只有顏色（1）支援，而且 MXCam **目前的功能也必須是顏色（1）**；`function_id` 不是 1，或目前功能不是顏色，都回 `BAD_PARAM`
+- 只有顏色（1）支援，而且 MXCam **目前的功能也必須是顏色（1）**；`function_id` 不是 1，或目前功能不是顏色，都回 `BAD_PARAM`（M6 起線條（4）、物體追蹤（5）也支援，`function_id` 一樣必須等於目前功能；M6 另外定義了 11 bytes 的格式，見第 9 節）
 - MXCam 在**下一張畫面**取區域內的顏色，因此回應最多晚一張畫面（約 100 ms）才送出；主機的逾時應 ≥ 1 秒。取樣的那張畫面可能是請求抵達前不久才抓到的
 - 約 1 秒內沒有畫面可取樣（例如鏡頭抓圖持續失敗）時，MXCam 以 `BAD_PARAM` 取消這個 LEARN，不會一直回 `BUSY`
 - 回應 `0xB0`：`id (u8)` —— 分配到的 ID（同一個顏色已學過就是原本的 ID）
@@ -202,6 +208,7 @@ payload 與 GET_RESULTS 的回應相同。每處理完一張畫面推送一次�
 - 顏色（1）：刪除學到的顏色和它的名字
 - AprilTag（2）：tag 不需要學習，只刪除名字（`0xFFFF` 刪除所有 tag 名字）
 - 人臉偵測（3）：不需要學習、也不能取名，沒有東西可忘，直接回成功
+- 線條（4）、物體追蹤（5）：見第 9 節
 - 其他功能 → `BAD_PARAM`
 
 ### 0x32 SET_NAME
@@ -210,6 +217,7 @@ payload 與 GET_RESULTS 的回應相同。每處理完一張畫面推送一次�
 
 - 顏色：ID 必須已經學過，否則 `BAD_PARAM`
 - AprilTag：任何 0–586 的 tag ID 都可以取名（不需要先學習）
+- 線條（4）：`BAD_PARAM`（不能取名）；物體追蹤（5）：見第 9 節
 - 人臉偵測（3）與其他功能：`BAD_PARAM`
 - 名字超過 48 bytes 或不是合法 UTF-8 → `BAD_LENGTH` / `BAD_PARAM`
 - 名字表已滿（所有功能合計 32 筆）→ `FULL`；改已有的名字或清除名字不受影響
@@ -225,7 +233,7 @@ payload 與 GET_RESULTS 的回應相同。每處理完一張畫面推送一次�
 | name_len | u8 | |
 | name | UTF-8 | |
 
-- 顏色（1）：學到的顏色（依 ID 排序）；AprilTag（2）：有名字的 tag（依 ID 排序）
+- 顏色（1）：學到的顏色（依 ID 排序）；AprilTag（2）：有名字的 tag（依 ID 排序）；線條（4）、物體追蹤（5）見第 9 節
 - 人臉偵測（3）與其他功能：`BAD_PARAM`（人臉沒有學習資料）
 
 ### 0x40 GET_CONFIG / 0x41 SET_CONFIG
@@ -254,8 +262,8 @@ UART 鮑率、I2C 位址的變更**存檔並重開機後**才生效（避免改�
 
 ### 0x42 SAVE / 0x43 FACTORY_RESET
 
-- SAVE：把學習資料、名字和 Config 寫進 NVS。回應 `0xC2`：空。之後 `dirty` = 0。
-- FACTORY_RESET：清除 NVS 中的學習資料、名字和 Config，回到預設值（不重開機）。回應 `0xC3`：空。
+- SAVE：把學習資料、名字和 Config 寫進 NVS（M6 起也包括各功能的參數、學到的線色和物體，第 9 節）。回應 `0xC2`：空。之後 `dirty` = 0。
+- FACTORY_RESET：清除 NVS 中的學習資料、名字和 Config，回到預設值（不重開機；M6 起各功能的參數也回預設、學到的線色和物體也清掉）。回應 `0xC3`：空。
 - 兩者都在寫完 flash 後才回應（通常 < 100 ms，主機逾時應 ≥ 1 秒）；寫入失敗回 `INTERNAL`（資料不變）。同時只能有一個 SAVE / FACTORY_RESET，第二個回 `BUSY`。
 
 ### 新增錯誤碼
@@ -263,3 +271,99 @@ UART 鮑率、I2C 位址的變更**存檔並重開機後**才生效（避免改�
 | 碼 | 名稱 | 意義 |
 |---|---|---|
 | 0x07 | FULL | 學習數量已達上限 |
+
+## 9. M6 指令細節
+
+M6 定稿於 2026-11-19（協定成長方式見 ADR-0016）。第 8 節保留給 M4 的 I2C 傳輸。
+
+### 0x44 GET_FUNC_CONFIG / 0x45 SET_FUNC_CONFIG
+
+各功能自己的參數（Config v1 之外）。每個功能一個**固定版面**，各自有版本號：
+
+| 欄位 | 型別 | 說明 |
+|---|---|---|
+| function_id | u8 | 4 = 線條、5 = 物體追蹤 |
+| layout_version | u8 | 這個功能的版面版本（線條、物體追蹤目前都是 1） |
+| body | 依功能 | 線條 v1、物體追蹤 v1 都是 8 bytes，整包 10 bytes |
+
+- GET_FUNC_CONFIG 請求：`function_id (u8)`。回應 `0xC4`：目前的整包。
+- SET_FUNC_CONFIG 請求：整包，**整包取代**。回應 `0xC5`：夾限後實際套用的整包。保留欄位送什麼都會被忽略，回應裡是 0。
+- 錯誤（依序檢查）：payload 是空的（SET）或不是 1 byte（GET）→ `BAD_LENGTH`；`function_id` 沒有 func config（0–3、GET_INFO 沒列出的功能、不認得的 ID）→ `BAD_PARAM`；SET 的長度不是這個功能版面的長度 → `BAD_LENGTH`；`layout_version` 不符 → `BAD_PARAM`。
+- 功能 1–3 的參數仍在 Config v1（第 7 節），不搬過來。
+- 參數不必是目前的功能，任何時候都可以讀寫。
+- 存檔：套用後的值和原本不同時設 `dirty`（GET_CONFIG 的 `dirty` 欄位），SAVE 才寫進 flash；FACTORY_RESET 回到預設值。
+- 舊韌體不認得 `0x44`／`0x45`，會回 `UNKNOWN_CMD`；主機應先看 GET_INFO 的功能清單，沒有 4／5 就不要送。
+
+#### 線條 Line config v1（function_id 4，layout_version 1）
+
+| 欄位 | 型別 | 預設 | 範圍／夾限 | 說明 |
+|---|---|---|---|---|
+| mode | u8 | 0 | 0–2；> 2 → 0 | 0 = 自動深線（白底黑線）、1 = 自動淺線、2 = 學到的顏色 |
+| threshold | u8 | 0 | 0–255 | 0 = 自動（Otsu）；1–255 = 固定灰階門檻 |
+| roi_pct | u8 | 60 | 20–100（夾到邊界） | 只看畫面下方幾 % |
+| bands | u8 | 8 | 4–12（夾到邊界） | 把 ROI 分成幾條水平帶 |
+| min_width | u8 | 4 | 1–100（夾到邊界） | 線寬下限（px） |
+| max_width | u8 | 80 | min_width–255；< min_width → min_width | 線寬上限（px），比它寬的深色段算路口／橫線 |
+| color_tolerance | u8 | 30 | 0–100（夾到邊界） | 只在模式 2 使用，規則同顏色功能的 tolerance |
+| reserved | u8 | 0 | | |
+
+模式 2 但還沒學過線色時，照模式 0 運作。
+
+#### 物體追蹤 Track config v1（function_id 5，layout_version 1）
+
+| 欄位 | 型別 | 預設 | 範圍／夾限 | 說明 |
+|---|---|---|---|---|
+| threshold | u8 | 50 | 10–95（夾到邊界） | 信心度門檻，低於它算跟丟 |
+| adapt | u8 | 10 | 0–50（夾到邊界） | 追得很穩時（信心度 ≥ max(threshold, 70)）每張畫面以幾 % 更新目前的範本；0 = 不更新 |
+| reacquire | u8 | 1 | 0／1；非 0 → 1 | 跟丟時在全畫面找回 |
+| scale | u8 | 1 | 0／1；非 0 → 1 | 搜尋 0.9／1.0／1.1 三個尺度；0 = 只用 1.0 |
+| reserved | u8 ×4 | 0 | | |
+
+### LEARN 可指定 ID（11 bytes）
+
+LEARN 請求（第 7 節）可以在後面多帶 `id (u16)`，共 11 bytes，意思是「學到指定的 ID」。9 bytes 的請求語意不變；其他長度 → `BAD_LENGTH`。
+
+M6 的韌體對 11 bytes 的 LEARN **一律回 `BAD_PARAM`**（格式先定下來，給之後的人臉辨識、自學習分類使用）。
+
+### 線條（功能 4）的學習與名字
+
+- LEARN 4（目前功能必須是 4）：取區域的平均色當作線色（HSV 規則同顏色功能，ADR-0009），存下來並把 `mode` 設成 2；回應 `0xB0` 的 id 是 `1`。區域沒有顏色（黑、白、灰膠帶沒有飽和度）→ `BAD_PARAM`，請改用模式 0／1。再學一次就取代舊的線色。延後回應的規則同第 7 節（ADR-0007）。
+- FORGET 4：`id` 1 或 `0xFFFF` 清掉學到的線色，並把 `mode` 改回 0；其他 id 沒有東西可忘，回成功。
+- SET_NAME 4：`BAD_PARAM`（線條不能取名）。
+- GET_LEARNED 4：0 或 1 筆（`id 1`，`r, g, b` = 線色，沒有名字）。
+- LEARN、FORGET 改到線色或 `mode` 時同樣設 `dirty`。
+
+### 物體追蹤（功能 5）的學習與名字
+
+一次只追一個物體，ID 固定是 `1`。
+
+- LEARN 5（目前功能必須是 5）：框選的區域就是要追的物體；回應 `0xB0` 的 id 是 `1`。區域裁到畫面內後小於 16×16，或沒有紋理 → `BAD_PARAM`。再學一次就**取代**舊的物體（名字也清掉）。延後回應的規則同第 7 節。
+- SET_NAME 5：只接受已經學過物體時的 `id 1`，其他 → `BAD_PARAM`；名字表與其他功能合計 32 筆（第 7 節）。
+- FORGET 5：`id` 1 或 `0xFFFF` 清掉物體和它的名字；其他 id 回成功。
+- GET_LEARNED 5：0 或 1 筆（`id 1`，`r, g, b` = 物體的平均色，名字）。
+
+### 辨識結果
+
+**線條（功能 4）**：只回報一條主線，`id = 1`；沒有線、或找到線的帶少於 2 條 → 0 筆。
+
+| 欄位 | 說明 |
+|---|---|
+| x, y | 線段中點 |
+| width, height | 兩端點含端點的外接框：`abs(x1 − x0) + 1`、`abs(y0 − y1) + 1`，至少 2 |
+| confidence | 找到線的帶數 × 100 ÷ 帶數 |
+| extra_len | 14 |
+
+線條的 `extra`（14 bytes）：
+
+| 欄位 | 型別 | 說明 |
+|---|---|---|
+| angle_cdeg | i16 | 百分之一度，−9000～9000；0 = 垂直向上，在真實影像上順時針為正 |
+| offset_x | i16 | 底端 x − 160；正 = 線在畫面右邊 |
+| x0, y0 | i16 ×2 | 底端（靠近畫面下緣的一端） |
+| x1, y1 | i16 ×2 | 頂端 |
+| flags | u8 | bit0 `BRANCH`：某一帶有 2 段以上的線（岔路）；bit1 `CROSS`：某一帶有比 `max_width` 寬的深色段（十字路口、T 字路口、橫線）；其他位元填 0 |
+| reserved | u8 | 0 |
+
+座標、角度、偏移都是真實影像座標（ADR-0010）：機器人上鏡頭朝前時，「右」就是車子的右邊。
+
+**物體追蹤（功能 5）**：追到時 1 筆，`id = 1`，`x, y, width, height` 是目前的框，`confidence` = 比對分數（0–100），`extra_len` 0；分數低於 `threshold`（跟丟）或還沒學過物體時**沒有紀錄**（count = 0）。

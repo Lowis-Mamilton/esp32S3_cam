@@ -21,6 +21,7 @@ extern "C" {
 #define MXP_NAME_MAX 48
 #define MXP_RESULT_EXTRA_MAX 18
 #define MXP_CONFIG_SIZE 18
+#define MXP_INFO_MAX_FUNCS 32 /* GET_INFO function list limit (ADR-0016) */
 #define MXP_RESPONSE(cmd) ((uint8_t)((cmd) | 0x80))
 
 enum {
@@ -37,6 +38,8 @@ enum {
   MXP_CMD_SET_CONFIG = 0x41,
   MXP_CMD_SAVE = 0x42,
   MXP_CMD_FACTORY_RESET = 0x43,
+  MXP_CMD_GET_FUNC_CONFIG = 0x44,
+  MXP_CMD_SET_FUNC_CONFIG = 0x45,
   MXP_CMD_STREAM_START = 0x50,
   MXP_CMD_STREAM_STOP = 0x51,
   MXP_CMD_PUSH_FRAME = 0x60,
@@ -58,7 +61,9 @@ enum {
   MXP_FUNC_NONE = 0,
   MXP_FUNC_COLOR = 1,
   MXP_FUNC_APRILTAG = 2,
-  MXP_FUNC_FACE = 3
+  MXP_FUNC_FACE = 3,
+  MXP_FUNC_LINE = 4,
+  MXP_FUNC_TRACK = 5
 };
 
 /* CRC-16/CCITT-FALSE (poly 0x1021, init 0xFFFF). */
@@ -90,13 +95,13 @@ void mxp_decoder_init(mxp_decoder_t *d, uint8_t *buf, size_t cap);
  * into buf and stays valid until the next feed call. */
 bool mxp_decoder_feed(mxp_decoder_t *d, uint8_t byte, mxp_frame_t *out);
 
-/* GET_INFO response payload (23 + function_count bytes). */
+/* GET_INFO response payload (23 + function_count bytes, function_count <= 32). */
 typedef struct {
   uint8_t protocol_version, fw_major, fw_minor, fw_patch;
   char fw_git[7];
   uint8_t serial[6];
   uint16_t frame_width, frame_height;
-  uint8_t max_results, function_count, function_ids[8];
+  uint8_t max_results, function_count, function_ids[MXP_INFO_MAX_FUNCS];
 } mxp_info_t;
 size_t mxp_pack_info(const mxp_info_t *in, uint8_t *out, size_t out_cap);
 bool mxp_unpack_info(const uint8_t *p, uint16_t len, mxp_info_t *out);
@@ -146,11 +151,15 @@ size_t mxp_pack_config(const mxp_config_t *c, uint8_t out[MXP_CONFIG_SIZE]);
 /* Requires len == 18 and config_version == 1; clamps out-of-range values (protocol.md 7). */
 bool mxp_unpack_config(const uint8_t *p, uint16_t len, mxp_config_t *out);
 
-/* LEARN request; x, y is the top-left corner. */
+/* LEARN request; x, y is the top-left corner. The optional trailing id (u16,
+ * payload 11 bytes) asks to learn into that ID; has_id is 0 for the 9-byte form. */
 typedef struct {
   uint8_t function_id;
   uint16_t x, y, w, h;
+  uint8_t has_id;
+  uint16_t id;
 } mxp_learn_req_t;
+/* Accepts 9 bytes (has_id 0, id 0) or 11 bytes (has_id 1); any other length is false. */
 bool mxp_unpack_learn(const uint8_t *p, uint16_t len, mxp_learn_req_t *out);
 
 /* Strict UTF-8 check (rejects overlong forms, surrogates, > U+10FFFF and
@@ -175,6 +184,49 @@ typedef struct {
   char name[MXP_NAME_MAX];
 } mxp_learned_t;
 size_t mxp_pack_learned(const mxp_learned_t *items, uint8_t n, uint8_t *out, size_t cap);
+
+/* ---- M6 (protocol.md 9) ---- */
+
+/* GET_FUNC_CONFIG response / SET_FUNC_CONFIG request and response:
+ * function_id u8, layout_version u8, 8-byte body (line v1 and track v1). */
+#define MXP_FUNC_CONFIG_SIZE 10
+#define MXP_LINE_CONFIG_VERSION 1
+#define MXP_TRACK_CONFIG_VERSION 1
+
+enum { MXP_LINE_MODE_DARK = 0, MXP_LINE_MODE_LIGHT = 1, MXP_LINE_MODE_LEARNED = 2 };
+
+/* Line config v1. threshold 0 = automatic (Otsu). */
+typedef struct {
+  uint8_t mode, threshold, roi_pct, bands, min_width, max_width, color_tolerance;
+} mxp_line_config_t;
+/* Object tracking config v1. reacquire and scale are 0/1. */
+typedef struct {
+  uint8_t threshold, adapt, reacquire, scale;
+} mxp_track_config_t;
+
+void mxp_line_config_defaults(mxp_line_config_t *c);   /* 0, 0, 60, 8, 4, 80, 30 */
+void mxp_track_config_defaults(mxp_track_config_t *c); /* 50, 10, 1, 1 */
+/* pack writes function_id, layout_version, the body and zero reserved bytes; returns 10. */
+size_t mxp_pack_line_config(const mxp_line_config_t *c, uint8_t out[MXP_FUNC_CONFIG_SIZE]);
+size_t mxp_pack_track_config(const mxp_track_config_t *c, uint8_t out[MXP_FUNC_CONFIG_SIZE]);
+/* Require len 10, the right function_id and layout_version 1; clamp out-of-range
+ * values (protocol.md 9) and ignore reserved bytes. */
+bool mxp_unpack_line_config(const uint8_t *p, uint16_t len, mxp_line_config_t *out);
+bool mxp_unpack_track_config(const uint8_t *p, uint16_t len, mxp_track_config_t *out);
+
+/* Line ResultRecord extra (14 bytes): angle_cdeg, offset_x, x0, y0 (bottom end),
+ * x1, y1 (top end) as i16, then flags u8 and reserved u8 = 0. */
+#define MXP_LINE_EXTRA_SIZE 14
+#define MXP_LINE_FLAG_BRANCH 0x01
+#define MXP_LINE_FLAG_CROSS 0x02
+typedef struct {
+  int16_t angle_cdeg, offset_x, x0, y0, x1, y1;
+  uint8_t flags;
+} mxp_line_extra_t;
+/* Writes r->extra and sets r->extra_len = 14; other record fields are untouched. */
+void mxp_pack_line_extra(const mxp_line_extra_t *e, mxp_result_t *r);
+/* false when r->extra_len != 14. */
+bool mxp_unpack_line_extra(const mxp_result_t *r, mxp_line_extra_t *out);
 
 #ifdef __cplusplus
 }

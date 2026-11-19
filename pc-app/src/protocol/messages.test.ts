@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
-  Cmd, ErrorCode, encodeConfig, encodeForget, encodeLearn, encodeSetName, encodeStreamStart, parseConfig, parseError,
-  parseFramePush, parseInfo, parseLearned, parseResults, responseOf,
+  Cmd, ErrorCode, FunctionId, encodeConfig, encodeForget, encodeFuncConfig, encodeGetFuncConfig, encodeLearn,
+  encodeSetName, encodeStreamStart, parseConfig, parseError, parseFramePush, parseFuncConfig, parseInfo, parseLearned,
+  parseResults, responseOf,
 } from "./messages";
 import { frameVector, fromHex, payloadVectors as pv, toHex } from "./vectors";
 
@@ -192,5 +193,105 @@ describe("config", () => {
     expect(() => parseConfig(p.slice(0, 17))).toThrow();
     const q = p.slice(); q[0] = 2;
     expect(() => parseConfig(q)).toThrow();
+  });
+});
+
+describe("M6 groundwork", () => {
+  it("command and function ids", () => {
+    expect([Cmd.GetFuncConfig, Cmd.SetFuncConfig]).toEqual([0x44, 0x45]);
+    expect([FunctionId.Line, FunctionId.Track]).toEqual([4, 5]);
+  });
+
+  it("parseInfo reads 5 function ids", () => {
+    expect(parseInfo(fromHex(frameVector("get_info_response_m6").payload_hex)).functionIds).toEqual([1, 2, 3, 4, 5]);
+  });
+
+  it("encodeGetFuncConfig", () => {
+    expect(frameVector("get_func_config_line_request").cmd).toBe(Cmd.GetFuncConfig);
+    expect(toHex(encodeGetFuncConfig(FunctionId.Line))).toBe(frameVector("get_func_config_line_request").payload_hex);
+  });
+
+  it("func config vectors round trip", () => {
+    const l = pv.line_config_default;
+    const line = parseFuncConfig(fromHex(frameVector("func_config_line_default").payload_hex));
+    expect(line).toEqual({
+      functionId: 4,
+      line: {
+        mode: l.mode, threshold: l.threshold, roiPct: l.roi_pct, bands: l.bands, minWidth: l.min_width,
+        maxWidth: l.max_width, colorTolerance: l.color_tolerance,
+      },
+    });
+    expect(toHex(encodeFuncConfig(line))).toBe(frameVector("func_config_line_default").payload_hex);
+
+    const t = pv.track_config_set;
+    const track = parseFuncConfig(fromHex(frameVector("set_func_config_track_request").payload_hex));
+    expect(track).toEqual({
+      functionId: 5,
+      track: { threshold: t.threshold, adapt: t.adapt, reacquire: t.reacquire !== 0, scale: t.scale !== 0 },
+    });
+    expect(toHex(encodeFuncConfig(track))).toBe(frameVector("set_func_config_track_request").payload_hex);
+  });
+
+  it("encodeFuncConfig writes reserved bytes as 0", () => {
+    const b = encodeFuncConfig({ functionId: 5, track: { threshold: 50, adapt: 10, reacquire: true, scale: true } });
+    expect(toHex(b)).toBe("0501320a010100000000");
+  });
+
+  it("parseFuncConfig rejects wrong fn/version/length", () => {
+    const line = fromHex(frameVector("func_config_line_default").payload_hex);
+    expect(() => parseFuncConfig(line.slice(0, 9))).toThrow();
+    expect(() => parseFuncConfig(new Uint8Array([...line, 0]))).toThrow();
+    const v2 = line.slice(); v2[1] = 2;
+    expect(() => parseFuncConfig(v2)).toThrow();
+    const fn1 = line.slice(); fn1[0] = 1;
+    expect(() => parseFuncConfig(fn1)).toThrow();
+    const fn6 = line.slice(); fn6[0] = 6;
+    expect(() => parseFuncConfig(fn6)).toThrow();
+    const track = fromHex(frameVector("set_func_config_track_request").payload_hex);
+    const tv0 = track.slice(); tv0[1] = 0;
+    expect(() => parseFuncConfig(tv0)).toThrow();
+  });
+
+  it("parseFuncConfig does not clamp", () => {
+    const p = fromHex(frameVector("func_config_line_default").payload_hex);
+    p[4] = 150;
+    expect(parseFuncConfig(p)).toMatchObject({ functionId: 4, line: { roiPct: 150 } });
+  });
+
+  it("encodeLearn with id", () => {
+    const v = pv.learn_request_with_id;
+    const rect = { x: v.x, y: v.y, width: v.width, height: v.height };
+    expect(toHex(encodeLearn(v.function_id, rect, v.id))).toBe(frameVector("learn_request_with_id").payload_hex);
+    expect(encodeLearn(v.function_id, rect)).toHaveLength(9);
+  });
+
+  it("parseResults decodes line extra", () => {
+    const r = parseResults(fromHex(frameVector("results_line_one").payload_hex));
+    const e = pv.results_line_one.results[0];
+    expect(r.frameId).toBe(77);
+    expect(r.functionId).toBe(FunctionId.Line);
+    expect(r.results[0]).toMatchObject({ id: 1, x: e.x, y: e.y, width: e.width, height: e.height, confidence: 88 });
+    expect(r.results[0].line).toEqual({
+      angleDeg: -8.49, offsetX: 20, start: [180, 231], end: [160, 97], branch: false, cross: true,
+    });
+    expect(r.results[0].extra).toBeUndefined();
+  });
+
+  it("parseResults accepts unknown extra lengths", () => {
+    // function 9, one record with extra_len 5
+    const p = new Uint8Array([1, 0, 0, 0, 9, 1, 1, 0, 10, 0, 20, 0, 4, 0, 4, 0, 50, 5, 1, 2, 3, 4, 5]);
+    const r = parseResults(p);
+    expect(r.results).toHaveLength(1);
+    expect(r.results[0]).toEqual({ id: 1, x: 10, y: 20, width: 4, height: 4, confidence: 50 });
+    // an 18-byte extra on the line function and a 14-byte extra on AprilTag are skipped too
+    const line18 = new Uint8Array([1, 0, 0, 0, 4, 1, 1, 0, 10, 0, 20, 0, 4, 0, 4, 0, 50, 18, ...new Array(18).fill(0)]);
+    expect(parseResults(line18).results[0]).toEqual({ id: 1, x: 10, y: 20, width: 4, height: 4, confidence: 50 });
+    const tag14 = new Uint8Array([1, 0, 0, 0, 2, 1, 1, 0, 10, 0, 20, 0, 4, 0, 4, 0, 50, 14, ...new Array(14).fill(0)]);
+    expect(parseResults(tag14).results[0]).toEqual({ id: 1, x: 10, y: 20, width: 4, height: 4, confidence: 50 });
+  });
+
+  it("parseResults rejects extra_len 19", () => {
+    const p = new Uint8Array([1, 0, 0, 0, 9, 1, 1, 0, 10, 0, 20, 0, 4, 0, 4, 0, 50, 19, ...new Array(19).fill(0)]);
+    expect(() => parseResults(p)).toThrow();
   });
 });

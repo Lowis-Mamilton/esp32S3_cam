@@ -339,6 +339,204 @@ static void test_error_full(void) {
         "error full frame");
 }
 
+/* ---- M6 groundwork (protocol.md 9) ---- */
+
+static void test_info_32(void) {
+  CHECK(MXP_INFO_MAX_FUNCS == 32, "MXP_INFO_MAX_FUNCS");
+  mxp_info_t info, back;
+  memset(&info, 0, sizeof info);
+  info.protocol_version = 1;
+  info.frame_width = 320;
+  info.frame_height = 240;
+  info.max_results = 8;
+  info.function_count = 32;
+  for (int i = 0; i < 32; i++) info.function_ids[i] = (uint8_t)(i + 1);
+  uint8_t out[23 + 33 + 4];
+  size_t n = mxp_pack_info(&info, out, sizeof out);
+  CHECK(n == 23 + 32, "pack 32 ids: %d", (int)n);
+  CHECK(mxp_unpack_info(out, (uint16_t)n, &back) && back.function_count == 32 &&
+            memcmp(back.function_ids, info.function_ids, 32) == 0,
+        "32 ids round trip");
+  CHECK(mxp_pack_info(&info, out, 23 + 31) == 0, "pack 32 ids small buffer");
+  info.function_count = 33;
+  CHECK(mxp_pack_info(&info, out, sizeof out) == 0, "pack 33 ids rejected");
+  out[22] = 33;
+  out[23 + 32] = 33;
+  CHECK(!mxp_unpack_info(out, 23 + 33, &back), "unpack 33 ids rejected");
+
+  uint8_t pl[64];
+  size_t pn = vec_payload("get_info_response_m6", pl, sizeof pl);
+  static const uint8_t ids[5] = {1, 2, 3, 4, 5};
+  CHECK(mxp_unpack_info(pl, (uint16_t)pn, &back) && back.function_count == 5 &&
+            memcmp(back.function_ids, ids, 5) == 0,
+        "get_info_response_m6 ids");
+  CHECK(mxp_pack_info(&back, out, sizeof out) == pn && memcmp(out, pl, pn) == 0, "m6 info round trip");
+}
+
+static void test_m6_codes(void) {
+  CHECK(MXP_FUNC_LINE == 4 && MXP_FUNC_TRACK == 5, "function ids 4, 5");
+  CHECK(MXP_CMD_GET_FUNC_CONFIG == 0x44 && MXP_CMD_SET_FUNC_CONFIG == 0x45, "func config cmds");
+  CHECK(MXP_FUNC_CONFIG_SIZE == 10 && MXP_LINE_CONFIG_VERSION == 1 && MXP_TRACK_CONFIG_VERSION == 1,
+        "func config sizes");
+  CHECK(MXP_LINE_MODE_DARK == 0 && MXP_LINE_MODE_LIGHT == 1 && MXP_LINE_MODE_LEARNED == 2, "line modes");
+  CHECK(MXP_LINE_EXTRA_SIZE == 14 && MXP_LINE_FLAG_BRANCH == 0x01 && MXP_LINE_FLAG_CROSS == 0x02,
+        "line extra constants");
+}
+
+static bool line_cfg_eq(const mxp_line_config_t *a, const mxp_line_config_t *b) {
+  return a->mode == b->mode && a->threshold == b->threshold && a->roi_pct == b->roi_pct &&
+         a->bands == b->bands && a->min_width == b->min_width && a->max_width == b->max_width &&
+         a->color_tolerance == b->color_tolerance;
+}
+
+static bool track_cfg_eq(const mxp_track_config_t *a, const mxp_track_config_t *b) {
+  return a->threshold == b->threshold && a->adapt == b->adapt && a->reacquire == b->reacquire &&
+         a->scale == b->scale;
+}
+
+static void test_func_config_vectors(void) {
+  uint8_t pl[32], out[MXP_FUNC_CONFIG_SIZE];
+  /* line default */
+  size_t pn = vec_payload("func_config_line_default", pl, sizeof pl);
+  CHECK(pn == MXP_FUNC_CONFIG_SIZE, "line config 10 bytes");
+  mxp_line_config_t lc, ld;
+  memset(&ld, 0xAA, sizeof ld);
+  mxp_line_config_defaults(&ld);
+  CHECK(line_cfg_eq(&ld, &VEC_P_LINE_CONFIG_DEFAULT), "line defaults match vector");
+  CHECK(ld.mode == 0 && ld.threshold == 0 && ld.roi_pct == 60 && ld.bands == 8 && ld.min_width == 4 &&
+            ld.max_width == 80 && ld.color_tolerance == 30,
+        "line defaults");
+  CHECK(mxp_unpack_line_config(pl, (uint16_t)pn, &lc) && line_cfg_eq(&lc, &VEC_P_LINE_CONFIG_DEFAULT),
+        "unpack line default");
+  memset(out, 0xEE, sizeof out);
+  CHECK(mxp_pack_line_config(&ld, out) == MXP_FUNC_CONFIG_SIZE && memcmp(out, pl, pn) == 0,
+        "pack line default");
+  /* track set */
+  pn = vec_payload("set_func_config_track_request", pl, sizeof pl);
+  CHECK(pn == MXP_FUNC_CONFIG_SIZE, "track config 10 bytes");
+  mxp_track_config_t tc, td;
+  CHECK(mxp_unpack_track_config(pl, (uint16_t)pn, &tc) && track_cfg_eq(&tc, &VEC_P_TRACK_CONFIG_SET) &&
+            tc.threshold == 60 && tc.adapt == 20 && tc.reacquire == 1 && tc.scale == 0,
+        "unpack track set");
+  memset(out, 0xEE, sizeof out);
+  CHECK(mxp_pack_track_config(&tc, out) == MXP_FUNC_CONFIG_SIZE && memcmp(out, pl, pn) == 0,
+        "pack track set");
+  memset(&td, 0xAA, sizeof td);
+  mxp_track_config_defaults(&td);
+  CHECK(td.threshold == 50 && td.adapt == 10 && td.reacquire == 1 && td.scale == 1, "track defaults");
+}
+
+static void test_func_config_clamp(void) {
+  uint8_t out[MXP_FUNC_CONFIG_SIZE];
+  const uint8_t line_in[10] = {4, 1, 7, 0, 5, 30, 0, 0, 150, 9};
+  mxp_line_config_t lc;
+  CHECK(mxp_unpack_line_config(line_in, 10, &lc), "unpack line clamp");
+  CHECK(lc.mode == 0 && lc.threshold == 0 && lc.roi_pct == 20 && lc.bands == 12 && lc.min_width == 1 &&
+            lc.max_width == 1 && lc.color_tolerance == 100,
+        "line clamped: mode %d roi %d bands %d min %d max %d tol %d", lc.mode, lc.roi_pct, lc.bands,
+        lc.min_width, lc.max_width, lc.color_tolerance);
+  static const uint8_t line_exp[10] = {4, 1, 0, 0, 20, 12, 1, 1, 100, 0};
+  CHECK(mxp_pack_line_config(&lc, out) == 10 && memcmp(out, line_exp, 10) == 0, "line repack, reserved 0");
+  const uint8_t line_in2[10] = {4, 1, 2, 255, 150, 3, 50, 20, 0, 0};
+  CHECK(mxp_unpack_line_config(line_in2, 10, &lc) && lc.mode == 2 && lc.threshold == 255 &&
+            lc.roi_pct == 100 && lc.bands == 4 && lc.min_width == 50 && lc.max_width == 50 &&
+            lc.color_tolerance == 0,
+        "line clamp upper/lower bounds");
+  const uint8_t line_in3[10] = {4, 1, 1, 0, 60, 8, 200, 255, 30, 0};
+  CHECK(mxp_unpack_line_config(line_in3, 10, &lc) && lc.mode == 1 && lc.min_width == 100 &&
+            lc.max_width == 255,
+        "line min_width 100, max_width kept");
+
+  const uint8_t track_in[10] = {5, 1, 0, 80, 2, 5, 1, 2, 3, 4};
+  mxp_track_config_t tc;
+  CHECK(mxp_unpack_track_config(track_in, 10, &tc) && tc.threshold == 10 && tc.adapt == 50 &&
+            tc.reacquire == 1 && tc.scale == 1,
+        "track clamped");
+  static const uint8_t track_exp[10] = {5, 1, 10, 50, 1, 1, 0, 0, 0, 0};
+  CHECK(mxp_pack_track_config(&tc, out) == 10 && memcmp(out, track_exp, 10) == 0, "track repack, reserved 0");
+  const uint8_t track_in2[10] = {5, 1, 200, 0, 0, 0, 0, 0, 0, 0};
+  CHECK(mxp_unpack_track_config(track_in2, 10, &tc) && tc.threshold == 95 && tc.adapt == 0 &&
+            tc.reacquire == 0 && tc.scale == 0,
+        "track clamp upper bound / zeros");
+}
+
+static void test_func_config_reject(void) {
+  uint8_t pl[16];
+  mxp_line_config_t lc;
+  mxp_track_config_t tc;
+  vec_payload("func_config_line_default", pl, sizeof pl);
+  pl[10] = 0;
+  CHECK(!mxp_unpack_line_config(pl, 9, &lc) && !mxp_unpack_line_config(pl, 11, &lc), "line length");
+  pl[0] = 5;
+  CHECK(!mxp_unpack_line_config(pl, 10, &lc), "line wrong fn");
+  pl[0] = 4;
+  pl[1] = 2;
+  CHECK(!mxp_unpack_line_config(pl, 10, &lc), "line version 2");
+  pl[1] = 0;
+  CHECK(!mxp_unpack_line_config(pl, 10, &lc), "line version 0");
+
+  vec_payload("set_func_config_track_request", pl, sizeof pl);
+  pl[10] = 0;
+  CHECK(!mxp_unpack_track_config(pl, 9, &tc) && !mxp_unpack_track_config(pl, 11, &tc), "track length");
+  pl[0] = 4;
+  CHECK(!mxp_unpack_track_config(pl, 10, &tc), "track wrong fn");
+  pl[0] = 5;
+  pl[1] = 2;
+  CHECK(!mxp_unpack_track_config(pl, 10, &tc), "track version 2");
+}
+
+static void test_learn_with_id(void) {
+  uint8_t pl[16];
+  mxp_learn_req_t l;
+  size_t pn = vec_payload("learn_request_with_id", pl, sizeof pl);
+  const mxp_learn_req_t *e = &VEC_P_LEARN_REQUEST_WITH_ID;
+  CHECK(pn == 11 && mxp_unpack_learn(pl, 11, &l), "unpack learn with id");
+  CHECK(l.function_id == 5 && l.x == 100 && l.y == 80 && l.w == 40 && l.h == 40 && l.has_id == 1 &&
+            l.id == 1 && l.function_id == e->function_id && l.id == e->id && e->has_id == 1,
+        "learn with id fields");
+  memset(&l, 0xAA, sizeof l);
+  CHECK(mxp_unpack_learn(pl, 9, &l) && l.has_id == 0 && l.id == 0 && l.x == 100, "9 bytes: no id");
+  CHECK(!mxp_unpack_learn(pl, 10, &l) && !mxp_unpack_learn(pl, 12, &l), "learn length 10 / 12");
+  CHECK(VEC_P_LEARN_REQUEST.has_id == 0, "old learn vector has no id");
+}
+
+static void test_line_extra(void) {
+  uint8_t pl[128], out[128];
+  size_t pn = vec_payload("results_line_one", pl, sizeof pl);
+  mxp_results_t r;
+  CHECK(mxp_unpack_results(pl, (uint16_t)pn, &r), "unpack results_line_one");
+  check_results_equal(&r, &VEC_P_RESULTS_LINE_ONE, "results_line_one");
+  CHECK(r.r[0].extra_len == MXP_LINE_EXTRA_SIZE, "line extra_len 14");
+  CHECK(mxp_pack_results(&VEC_P_RESULTS_LINE_ONE, out, sizeof out) == pn && memcmp(out, pl, pn) == 0,
+        "pack results_line_one");
+
+  mxp_line_extra_t le;
+  memset(&le, 0, sizeof le);
+  CHECK(mxp_unpack_line_extra(&r.r[0], &le), "unpack line extra");
+  const mxp_line_extra_t *e = &VEC_P_LINE_EXTRA_ONE;
+  CHECK(le.angle_cdeg == -849 && le.offset_x == 20 && le.x0 == 180 && le.y0 == 231 && le.x1 == 160 &&
+            le.y1 == 97 && le.flags == MXP_LINE_FLAG_CROSS,
+        "line extra fields");
+  CHECK(le.angle_cdeg == e->angle_cdeg && le.offset_x == e->offset_x && le.x0 == e->x0 && le.y0 == e->y0 &&
+            le.x1 == e->x1 && le.y1 == e->y1 && le.flags == e->flags,
+        "line extra matches vector");
+
+  mxp_result_t packed;
+  memset(&packed, 0xFF, sizeof packed);
+  mxp_pack_line_extra(e, &packed);
+  CHECK(packed.extra_len == MXP_LINE_EXTRA_SIZE &&
+            memcmp(packed.extra, r.r[0].extra, MXP_LINE_EXTRA_SIZE) == 0 && packed.extra[13] == 0,
+        "pack line extra bytes, reserved 0");
+
+  mxp_result_t bad = r.r[0];
+  bad.extra_len = 13;
+  CHECK(!mxp_unpack_line_extra(&bad, &le), "extra_len 13 rejected");
+  bad.extra_len = 0;
+  CHECK(!mxp_unpack_line_extra(&bad, &le), "extra_len 0 rejected");
+  bad.extra_len = 18;
+  CHECK(!mxp_unpack_line_extra(&bad, &le), "extra_len 18 rejected");
+}
+
 int main(void) {
   test_crc();
   test_encode();
@@ -353,6 +551,13 @@ int main(void) {
   test_set_name();
   test_learned();
   test_error_full();
+  test_info_32();
+  test_m6_codes();
+  test_func_config_vectors();
+  test_func_config_clamp();
+  test_func_config_reject();
+  test_learn_with_id();
+  test_line_extra();
   if (failures) {
     printf("%d failure(s)\n", failures);
     return 1;

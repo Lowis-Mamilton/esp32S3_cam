@@ -14,6 +14,8 @@ export const Cmd = {
   SetConfig: 0x41,
   Save: 0x42,
   FactoryReset: 0x43,
+  GetFuncConfig: 0x44,
+  SetFuncConfig: 0x45,
   StreamStart: 0x50,
   StreamStop: 0x51,
   PushFrame: 0x60,
@@ -33,7 +35,7 @@ export const ErrorCode = {
   Full: 7,
 } as const;
 
-export const FunctionId = { None: 0, Color: 1, AprilTag: 2, Face: 3 } as const;
+export const FunctionId = { None: 0, Color: 1, AprilTag: 2, Face: 3, Line: 4, Track: 5 } as const;
 
 export interface DeviceInfo {
   protocolVersion: number;
@@ -119,6 +121,10 @@ export const NAME_MAX_BYTES = 48;
 const RESULTS_FIXED_LEN = 6;
 const RECORD_FIXED_LEN = 12;
 const TAG_EXTRA_LEN = 18;
+const LINE_EXTRA_LEN = 14;
+const EXTRA_MAX_LEN = 18;
+const LINE_FLAG_BRANCH = 0x01;
+const LINE_FLAG_CROSS = 0x02;
 const CONFIG_LEN = 18;
 
 export interface ResultRecord {
@@ -132,6 +138,13 @@ export interface ResultRecord {
   confidence: number | undefined;
   /** AprilTag only. rotationDeg is degrees (rotation_cdeg / 100). */
   extra?: { rotationDeg: number; corners: [number, number][] };
+  /**
+   * Line tracking (function 4) only. angleDeg: 0 = straight up, clockwise positive in the true image;
+   * offsetX: bottom end x - 160; start is the bottom end, end the top end (docs/protocol.md section 9).
+   */
+  line?: {
+    angleDeg: number; offsetX: number; start: [number, number]; end: [number, number]; branch: boolean; cross: boolean;
+  };
 }
 
 export interface ResultsPush {
@@ -140,10 +153,15 @@ export interface ResultsPush {
   results: ResultRecord[];
 }
 
-/** GET_RESULTS response (0xA0) and PUSH_RESULTS (0x61) payload. */
+/**
+ * GET_RESULTS response (0xA0) and PUSH_RESULTS (0x61) payload. The extra is decoded by function:
+ * AprilTag with 18 bytes -> extra, line with 14 bytes -> line. Any other extra of 0-18 bytes is
+ * skipped so newer firmware does not break older hosts; only extra_len > 18 is rejected.
+ */
 export function parseResults(payload: Uint8Array): ResultsPush {
   if (payload.length < RESULTS_FIXED_LEN) throw new Error(`RESULTS payload too short: ${payload.length}`);
   const v = view(payload);
+  const functionId = payload[4];
   const count = payload[5];
   if (count > MAX_RESULTS) throw new Error(`RESULTS count ${count} exceeds ${MAX_RESULTS}`);
   const results: ResultRecord[] = [];
@@ -151,7 +169,7 @@ export function parseResults(payload: Uint8Array): ResultsPush {
   for (let i = 0; i < count; i++) {
     if (o + RECORD_FIXED_LEN > payload.length) throw new Error("RESULTS payload truncated");
     const extraLen = payload[o + 11];
-    if (extraLen !== 0 && extraLen !== TAG_EXTRA_LEN) throw new Error(`RESULTS extra_len ${extraLen} is invalid`);
+    if (extraLen > EXTRA_MAX_LEN) throw new Error(`RESULTS extra_len ${extraLen} is invalid`);
     if (o + RECORD_FIXED_LEN + extraLen > payload.length) throw new Error("RESULTS payload truncated");
     const rec: ResultRecord = {
       id: v.getUint16(o, true),
@@ -161,31 +179,46 @@ export function parseResults(payload: Uint8Array): ResultsPush {
       height: v.getUint16(o + 8, true),
       confidence: payload[o + 10] === 255 ? undefined : payload[o + 10],
     };
-    if (extraLen === TAG_EXTRA_LEN) {
-      const e = o + RECORD_FIXED_LEN;
+    const e = o + RECORD_FIXED_LEN;
+    if (functionId === FunctionId.AprilTag && extraLen === TAG_EXTRA_LEN) {
       const corners: [number, number][] = [];
       for (let k = 0; k < 4; k++) corners.push([v.getInt16(e + 2 + 4 * k, true), v.getInt16(e + 4 + 4 * k, true)]);
       rec.extra = { rotationDeg: v.getInt16(e, true) / 100, corners };
+    } else if (functionId === FunctionId.Line && extraLen === LINE_EXTRA_LEN) {
+      const flags = payload[e + 12];
+      rec.line = {
+        angleDeg: v.getInt16(e, true) / 100,
+        offsetX: v.getInt16(e + 2, true),
+        start: [v.getInt16(e + 4, true), v.getInt16(e + 6, true)],
+        end: [v.getInt16(e + 8, true), v.getInt16(e + 10, true)],
+        branch: (flags & LINE_FLAG_BRANCH) !== 0,
+        cross: (flags & LINE_FLAG_CROSS) !== 0,
+      };
     }
     results.push(rec);
     o += RECORD_FIXED_LEN + extraLen;
   }
   if (o !== payload.length) throw new Error(`RESULTS has ${payload.length - o} trailing bytes`);
-  return { frameId: v.getUint32(0, true), functionId: payload[4], results };
+  return { frameId: v.getUint32(0, true), functionId, results };
 }
 
-/** LEARN request: rect is the top-left corner and size, 320x240 coordinates. */
+/**
+ * LEARN request: rect is the top-left corner and size, 320x240 coordinates. With id the request is
+ * 11 bytes ("learn into this ID"); M6 firmware answers that form with BAD_PARAM.
+ */
 export function encodeLearn(
   functionId: number,
   rect: { x: number; y: number; width: number; height: number },
+  id?: number,
 ): Uint8Array {
-  const out = new Uint8Array(9);
+  const out = new Uint8Array(id === undefined ? 9 : 11);
   const v = view(out);
   out[0] = functionId;
   v.setUint16(1, rect.x, true);
   v.setUint16(3, rect.y, true);
   v.setUint16(5, rect.width, true);
   v.setUint16(7, rect.height, true);
+  if (id !== undefined) v.setUint16(9, id, true);
   return out;
 }
 
@@ -287,4 +320,83 @@ export function parseConfig(payload: Uint8Array): DeviceConfig {
     ledBrightness: payload[14],
     dirty: payload[15] !== 0,
   };
+}
+
+// --- M6 (docs/protocol.md section 9) ---
+
+const FUNC_CONFIG_LEN = 10;
+const LINE_CONFIG_VERSION = 1;
+const TRACK_CONFIG_VERSION = 1;
+
+/** Line config v1. mode 0 = dark line, 1 = light line, 2 = learned colour; threshold 0 = automatic. */
+export interface LineConfig {
+  mode: 0 | 1 | 2;
+  threshold: number;
+  roiPct: number;
+  bands: number;
+  minWidth: number;
+  maxWidth: number;
+  colorTolerance: number;
+}
+
+/** Object tracking config v1. */
+export interface TrackConfig {
+  threshold: number;
+  adapt: number;
+  reacquire: boolean;
+  scale: boolean;
+}
+
+export type FuncConfig =
+  | { functionId: typeof FunctionId.Line; line: LineConfig }
+  | { functionId: typeof FunctionId.Track; track: TrackConfig };
+
+/** GET_FUNC_CONFIG request. */
+export function encodeGetFuncConfig(functionId: number): Uint8Array {
+  return new Uint8Array([functionId]);
+}
+
+/** SET_FUNC_CONFIG request (10 bytes). Values are not clamped here; the firmware clamps. Reserved bytes are 0. */
+export function encodeFuncConfig(c: FuncConfig): Uint8Array {
+  const out = new Uint8Array(FUNC_CONFIG_LEN);
+  out[0] = c.functionId;
+  if (c.functionId === FunctionId.Line) {
+    const l = c.line;
+    out.set([LINE_CONFIG_VERSION, l.mode, l.threshold, l.roiPct, l.bands, l.minWidth, l.maxWidth, l.colorTolerance], 1);
+  } else {
+    const t = c.track;
+    out.set([TRACK_CONFIG_VERSION, t.threshold, t.adapt, t.reacquire ? 1 : 0, t.scale ? 1 : 0], 1);
+  }
+  return out;
+}
+
+/** GET_FUNC_CONFIG (0xC4) / SET_FUNC_CONFIG (0xC5) response. Throws on wrong length, function or layout_version. */
+export function parseFuncConfig(payload: Uint8Array): FuncConfig {
+  if (payload.length !== FUNC_CONFIG_LEN) {
+    throw new Error(`FUNC_CONFIG payload must be ${FUNC_CONFIG_LEN} bytes, got ${payload.length}`);
+  }
+  const [fn, version] = payload;
+  if (fn === FunctionId.Line) {
+    if (version !== LINE_CONFIG_VERSION) throw new Error(`unsupported line config layout_version ${version}`);
+    return {
+      functionId: FunctionId.Line,
+      line: {
+        mode: payload[2] as LineConfig["mode"],
+        threshold: payload[3],
+        roiPct: payload[4],
+        bands: payload[5],
+        minWidth: payload[6],
+        maxWidth: payload[7],
+        colorTolerance: payload[8],
+      },
+    };
+  }
+  if (fn === FunctionId.Track) {
+    if (version !== TRACK_CONFIG_VERSION) throw new Error(`unsupported track config layout_version ${version}`);
+    return {
+      functionId: FunctionId.Track,
+      track: { threshold: payload[2], adapt: payload[3], reacquire: payload[4] !== 0, scale: payload[5] !== 0 },
+    };
+  }
+  throw new Error(`function ${fn} has no func config`);
 }

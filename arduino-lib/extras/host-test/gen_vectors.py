@@ -17,10 +17,14 @@ def cstr(s):
     return '"' + "".join(chr(b) if safe(b) else "\\%03o" % b for b in s.encode("utf-8")) + '"'
 
 
+# Line extra (protocol.md 9): six i16 fields, then flags u8 and reserved u8.
+LINE_I16 = ("angle_cdeg", "offset_x", "x0", "y0", "x1", "y1")
+
+
 def emit_payloads(v, o):
     """Typed C constants for the decoded expectations. Needs mxcam_proto.h included first."""
     pl = v["payloads"]
-    for name in ("results_color_two", "results_tag_one"):
+    for name in ("results_color_two", "results_tag_one", "results_line_one"):
         p = pl[name]
         recs = []
         for r in p["results"]:
@@ -31,6 +35,12 @@ def emit_payloads(v, o):
                 for n in vals:
                     n &= 0xFFFF
                     extra += [n & 0xFF, n >> 8]
+            if "line" in r:
+                e = r["line"]
+                for k in LINE_I16:
+                    n = e[k] & 0xFFFF
+                    extra += [n & 0xFF, n >> 8]
+                extra += [e["flags"], 0]  # flags, reserved
             recs.append("{%d, %d, %d, %d, %d, %d, %d, {%s}}" % (
                 r["id"], r["x"], r["y"], r["width"], r["height"], r["confidence"], len(extra),
                 ", ".join(str(b) for b in extra) or "0"))
@@ -40,9 +50,21 @@ def emit_payloads(v, o):
     o.append("static const mxp_config_t VEC_P_CONFIG_DEFAULT = {%d, %d, %d, %d, %d, %d, %d, %du, %d, %d, %d};" % (
         c["tolerance"], c["min_area"], c["color_max_results"], c["color_show_names"], c["tag_show_names"],
         c["face_threshold"], c["face_max_results"], c["uart_baud"], c["i2c_address"], c["led_brightness"], c["dirty"]))
-    l = pl["learn_request"]
-    o.append("static const mxp_learn_req_t VEC_P_LEARN_REQUEST = {%d, %d, %d, %d, %d};" % (
-        l["function_id"], l["x"], l["y"], l["width"], l["height"]))
+    for name in ("learn_request", "learn_request_with_id"):
+        l = pl[name]
+        o.append("static const mxp_learn_req_t VEC_P_%s = {%d, %d, %d, %d, %d, %d, %d};" % (
+            name.upper(), l["function_id"], l["x"], l["y"], l["width"], l["height"],
+            1 if "id" in l else 0, l.get("id", 0)))
+    lc = pl["line_config_default"]
+    o.append("static const mxp_line_config_t VEC_P_LINE_CONFIG_DEFAULT = {%d, %d, %d, %d, %d, %d, %d};" % (
+        lc["mode"], lc["threshold"], lc["roi_pct"], lc["bands"], lc["min_width"], lc["max_width"],
+        lc["color_tolerance"]))
+    tc = pl["track_config_set"]
+    o.append("static const mxp_track_config_t VEC_P_TRACK_CONFIG_SET = {%d, %d, %d, %d};" % (
+        tc["threshold"], tc["adapt"], tc["reacquire"], tc["scale"]))
+    le = pl["results_line_one"]["results"][0]["line"]
+    o.append("static const mxp_line_extra_t VEC_P_LINE_EXTRA_ONE = {%s, %d};" % (
+        ", ".join(str(le[k]) for k in LINE_I16), le["flags"]))
     n = pl["set_name_utf8"]
     o.append("static const mxp_set_name_t VEC_P_SET_NAME_UTF8 = {%d, %d, %d, %s};" % (
         n["function_id"], n["id"], len(n["name"].encode("utf-8")), cstr(n["name"])))

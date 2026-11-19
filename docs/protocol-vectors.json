@@ -154,6 +154,54 @@
       "seq": 9,
       "payload_hex": "020100ff000006e7b485e889b202000000ff04626c7565",
       "encoded_hex": "4d5801b3091700020100ff000006e7b485e889b202000000ff04626c756556e1"
+    },
+    {
+      "name": "get_info_response_m6",
+      "ver": 1,
+      "cmd": 129,
+      "seq": 2,
+      "payload_hex": "010001006131623263336424ec4a0011ff4001f00008050102030405",
+      "encoded_hex": "4d580181021c00010001006131623263336424ec4a0011ff4001f000080501020304057e11"
+    },
+    {
+      "name": "get_func_config_line_request",
+      "ver": 1,
+      "cmd": 68,
+      "seq": 10,
+      "payload_hex": "04",
+      "encoded_hex": "4d5801440a010004c1cc"
+    },
+    {
+      "name": "func_config_line_default",
+      "ver": 1,
+      "cmd": 196,
+      "seq": 10,
+      "payload_hex": "040100003c0804501e00",
+      "encoded_hex": "4d5801c40a0a00040100003c0804501e009229"
+    },
+    {
+      "name": "set_func_config_track_request",
+      "ver": 1,
+      "cmd": 69,
+      "seq": 11,
+      "payload_hex": "05013c14010000000000",
+      "encoded_hex": "4d5801450b0a0005013c14010000000000dc59"
+    },
+    {
+      "name": "learn_request_with_id",
+      "ver": 1,
+      "cmd": 48,
+      "seq": 12,
+      "payload_hex": "0564005000280028000100",
+      "encoded_hex": "4d5801300c0b0005640050002800280001003fde"
+    },
+    {
+      "name": "results_line_one",
+      "ver": 1,
+      "cmd": 97,
+      "seq": 0,
+      "payload_hex": "4d00000004010100aa00a40015008700580eaffc1400b400e700a00061000200",
+      "encoded_hex": "4d5801610020004d00000004010100aa00a40015008700580eaffc1400b400e700a000610002003201"
     }
   ],
   "decoder": [
@@ -358,6 +406,56 @@
             255
           ],
           "name": "blue"
+        }
+      ]
+    },
+    "line_config_default": {
+      "function_id": 4,
+      "layout_version": 1,
+      "mode": 0,
+      "threshold": 0,
+      "roi_pct": 60,
+      "bands": 8,
+      "min_width": 4,
+      "max_width": 80,
+      "color_tolerance": 30
+    },
+    "track_config_set": {
+      "function_id": 5,
+      "layout_version": 1,
+      "threshold": 60,
+      "adapt": 20,
+      "reacquire": 1,
+      "scale": 0
+    },
+    "learn_request_with_id": {
+      "function_id": 5,
+      "x": 100,
+      "y": 80,
+      "width": 40,
+      "height": 40,
+      "id": 1
+    },
+    "results_line_one": {
+      "frame_id": 77,
+      "function_id": 4,
+      "results": [
+        {
+          "id": 1,
+          "x": 170,
+          "y": 164,
+          "width": 21,
+          "height": 135,
+          "confidence": 88,
+          "line": {
+            "angle_cdeg": -849,
+            "offset_x": 20,
+            "x0": 180,
+            "y0": 231,
+            "x1": 160,
+            "y1": 97,
+            "flags": 2
+          }
         }
       ]
     }

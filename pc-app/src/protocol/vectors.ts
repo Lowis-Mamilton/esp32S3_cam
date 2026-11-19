@@ -24,6 +24,7 @@ export function frameVector(name: string): FrameVector {
 export interface PayloadResultVector {
   id: number; x: number; y: number; width: number; height: number; confidence: number;
   extra?: { rotation_cdeg: number; corners: [number, number][] };
+  line?: { angle_cdeg: number; offset_x: number; x0: number; y0: number; x1: number; y1: number; flags: number };
 }
 export interface PayloadVectors {
   results_color_two: { frame_id: number; function_id: number; results: PayloadResultVector[] };
@@ -35,5 +36,14 @@ export interface PayloadVectors {
   learn_request: { function_id: number; x: number; y: number; width: number; height: number };
   set_name_utf8: { function_id: number; id: number; name: string };
   learned_list: { items: { id: number; rgb: [number, number, number]; name: string }[] };
+  line_config_default: {
+    function_id: number; layout_version: number; mode: number; threshold: number; roi_pct: number; bands: number;
+    min_width: number; max_width: number; color_tolerance: number;
+  };
+  track_config_set: {
+    function_id: number; layout_version: number; threshold: number; adapt: number; reacquire: number; scale: number;
+  };
+  learn_request_with_id: { function_id: number; x: number; y: number; width: number; height: number; id: number };
+  results_line_one: { frame_id: number; function_id: number; results: PayloadResultVector[] };
 }
 export const payloadVectors = vectors.payloads as PayloadVectors;
