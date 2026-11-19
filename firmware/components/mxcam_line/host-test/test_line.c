@@ -355,6 +355,101 @@ static void test_trace_points(void) {
   CHECK(r.confidence == 100);
 }
 
+/* Band rows in 320 units with the defaults (8 bands of 18 rows over 96..239):
+ * band k covers rows 222 - 18k .. 239 - 18k. */
+
+static void test_line_only_in_upper_bands(void) {
+  fill(WHITE);
+  rect(194, 0, 12, 204, BLACK); /* rows 0..203: bands 2..7 only, bands 0 and 1 empty */
+  mxp_line_config_t cfg = defaults();
+  mxp_result_t r;
+  mxp_line_extra_t e;
+  mxl_trace_t tr;
+  mxl_state_t st;
+  memset(&st, 0, sizeof st);
+  CHECK(mxl_detect(frame, &cfg, NULL, &st, &r, &tr) == 1);
+  CHECK(mxp_unpack_line_extra(&r, &e));
+  NEAR(e.x0, 200, 2);
+  NEAR(e.y0, 195, 1); /* centre of band 2 */
+  CHECK(tr.n == 6);
+  CHECK(r.confidence == 6 * 100 / 8);
+}
+
+static void test_off_centre_line_band0_empty(void) {
+  fill(WHITE);
+  rect(254, 0, 12, 222, BLACK); /* x 254..265 (100 px right of centre), bands 1..7 */
+  mxp_line_config_t cfg = defaults();
+  mxp_result_t r;
+  mxp_line_extra_t e;
+  CHECK(detect(&cfg, NULL, &r, &e) == 1);
+  NEAR(e.x0, 260, 2);
+  NEAR(e.offset_x, 100, 2);
+  CHECK(abs(e.angle_cdeg) <= 100);
+}
+
+static void test_left_leaning_line(void) {
+  fill(WHITE);
+  draw_thick_line(frame, 220, 239, 100, 96, 12, BLACK);
+  mxp_line_config_t cfg = defaults();
+  mxp_result_t r;
+  mxp_line_extra_t e;
+  CHECK(detect(&cfg, NULL, &r, &e) == 1);
+  int want = -(int)lroundf(atan2f(120.0f, 143.0f) * 18000.0f / PI_F);
+  NEAR(e.angle_cdeg, want, 200);
+  CHECK(e.angle_cdeg < 0);
+  CHECK(e.x1 < e.x0);
+  CHECK(e.offset_x > 0);
+}
+
+static void test_gap_stops_walk(void) {
+  fill(WHITE);
+  rect(154, 186, 12, 54, BLACK); /* bands 0..2 */
+  rect(154, 96, 12, 54, BLACK); /* bands 5..7; bands 3 and 4 empty */
+  mxp_line_config_t cfg = defaults();
+  mxp_result_t r;
+  mxp_line_extra_t e;
+  mxl_trace_t tr;
+  mxl_state_t st;
+  memset(&st, 0, sizeof st);
+  CHECK(mxl_detect(frame, &cfg, NULL, &st, &r, &tr) == 1);
+  CHECK(mxp_unpack_line_extra(&r, &e));
+  CHECK(tr.n == 3); /* two empty bands in a row after the first pick stop the walk */
+  NEAR(e.y0, 231, 1); /* band 0 centre */
+  NEAR(e.y1, 195, 1); /* band 2 centre: the upper part is not used */
+  NEAR(e.x0, 160, 2);
+  CHECK(r.confidence == 3 * 100 / 8);
+  /* one empty band is bridged */
+  rect(154, 150, 12, 18, BLACK); /* fill band 4 back in: only band 3 is empty */
+  CHECK(mxl_detect(frame, &cfg, NULL, &st, &r, &tr) == 1);
+  CHECK(tr.n == 7);
+}
+
+/* From the third pick on, the prediction is extrapolated from the last two
+ * picks. A distractor placed beside the line on the "behind" side is nearer
+ * the last pick but farther from the extrapolated position than the line. */
+static void test_extrapolation_follows_slope(void) {
+  fill(WHITE);
+  draw_thick_line(frame, 60, 239, 251, 96, 12, BLACK); /* ~24 px right per band */
+  mxp_line_config_t cfg = defaults();
+  mxp_result_t r;
+  mxl_trace_t ref, tr;
+  mxl_state_t st;
+  memset(&st, 0, sizeof st);
+  CHECK(mxl_detect(frame, &cfg, NULL, &st, &r, &ref) == 1);
+  CHECK(ref.n == 8);
+  if (ref.n < 4) return;
+  int step = ref.pts[2][0] - ref.pts[1][0];
+  CHECK(step >= 18 && step <= 30);
+  /* distractor centred 12 px left of the band 2 pick, in band 3 (rows 168..185) */
+  int dx = (ref.pts[2][0] - 12) & ~1;
+  rect(dx - 3, 168, 6, 18, BLACK);
+  memset(&st, 0, sizeof st);
+  CHECK(mxl_detect(frame, &cfg, NULL, &st, &r, &tr) == 1);
+  CHECK(tr.n == 8);
+  NEAR(tr.pts[3][0], ref.pts[3][0], 2); /* still on the line, not on the distractor */
+  CHECK(abs(tr.pts[3][0] - dx) > 10);
+}
+
 static void test_timing(void) {
   fill(WHITE);
   draw_thick_line(frame, 100, 239, 220, 96, 12, BLACK);
@@ -386,6 +481,11 @@ int main(void) {
   test_continuity();
   test_shadow_half_frame();
   test_trace_points();
+  test_line_only_in_upper_bands();
+  test_off_centre_line_band0_empty();
+  test_left_leaning_line();
+  test_gap_stops_walk();
+  test_extrapolation_follows_slope();
   test_timing();
   if (fails) {
     printf("%d failure(s)\n", fails);

@@ -145,7 +145,9 @@ uint8_t mxl_detect(const uint16_t *frame, const mxp_line_config_t *cfg, const ui
     if (ns >= 2) flags |= MXP_LINE_FLAG_BRANCH;
   }
 
-  /* 3. Walk the bands bottom-up, picking the segment nearest the prediction. */
+  /* 3. Walk the bands bottom-up, picking the segment nearest the prediction
+   * (before the first pick: last_x0 or the centre; one pick: that x; then
+   * extrapolated from the last two picks). */
   float sel_x[MXL_MAX_BANDS], sel_y[MXL_MAX_BANDS];
   int nsel = 0, skips = 0;
   float pred0 = st->has_last ? (float)st->last_x0 : CENTRE_X;
@@ -171,12 +173,16 @@ uint8_t mxl_detect(const uint16_t *frame, const mxp_line_config_t *cfg, const ui
         bc = dc;
       }
     }
-    if (best >= 0 && (k == 0 || bd <= limit)) {
+    /* Acquisition: until the first band is picked there is no distance limit
+     * and empty bands are not skips (the line may start above an empty band 0).
+     * After that, a segment farther than `limit` is skipped, and two skipped
+     * bands in a row end the walk. */
+    if (best >= 0 && (nsel == 0 || bd <= limit)) {
       sel_x[nsel] = (float)s_w.segs[k][best] * 0.5f;
       sel_y[nsel] = yc;
       nsel++;
       skips = 0;
-    } else if (++skips >= 2) {
+    } else if (nsel > 0 && ++skips >= 2) {
       break;
     }
   }

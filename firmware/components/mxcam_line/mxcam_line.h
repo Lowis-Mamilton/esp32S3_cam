@@ -20,8 +20,11 @@ extern "C" {
  * is "line" when at least half its rows are; runs of such columns are
  * segments, valid when their width (x2 = 320 px) is within
  * [min_width, max_width]; wider runs set CROSS. Bands are walked bottom-up
- * picking the valid segment nearest a prediction; a least-squares fit over the
- * picked band centres gives one main line. All output coordinates are 320x240
+ * picking the valid segment nearest a prediction: the first pick has no
+ * distance limit and empty bands before it are passed over; after it, a
+ * segment farther than max(8, 2 * band height) half-res px is skipped and two
+ * skipped bands in a row stop the walk. A least-squares fit over the picked
+ * band centres gives one main line. All output coordinates are 320x240
  * real-image coordinates (ADR-0010). */
 
 #define MXL_MAX_BANDS 12
