@@ -526,3 +526,100 @@ test('gesture code tab uses MXCAM_ALGO_GESTURE', () => {
   expect(document.body.textContent).toContain('MXCAM_ALGO_GESTURE')
   expect(snippetFor(8, 'en')).toContain('MXCAM_GESTURE_LIKE')
 })
+
+// ---- line tracking (4) and object tracking (5) ----
+test('line params: bands slider sends the whole line config; learned colour mode is disabled until learned', async () => {
+  const { device } = setup(4)
+  const spy = vi.spyOn(device, 'setParams')
+  tab('參數')
+  expect(screen.getByRole('button', { name: '學到的顏色' })).toBeDisabled()
+  expect(screen.queryByRole('slider', { name: '顏色容許度' })).toBeNull()
+  fireEvent.change(screen.getByRole('slider', { name: '分帶數' }), { target: { value: '10' } })
+  await waitFor(() => expect(spy).toHaveBeenCalled())
+  expect(spy.mock.calls[0][0].line).toEqual({ ...device.snapshot().params.line, bands: 10 })
+  expect(device.snapshot().params.line.bands).toBe(10)
+})
+
+test('line params: automatic threshold toggles 0 and a manual value', async () => {
+  const { device } = setup(4)
+  tab('參數')
+  expect(screen.getByRole('slider', { name: '灰階門檻' })).toBeDisabled()
+  fireEvent.click(screen.getByRole('checkbox', { name: '自動' }))
+  await waitFor(() => expect(device.snapshot().params.line.threshold).toBe(128))
+  expect(screen.getByRole('slider', { name: '灰階門檻' })).toBeEnabled()
+})
+
+test('line learn tab: explains the automatic modes; nothing to forget until a colour is learned', () => {
+  setup(4)
+  tab('學習')
+  expect(screen.getByText(/黑線、白線不用學/)).toBeInTheDocument()
+  expect(screen.getByRole('button', { name: '忘記（改回自動）' })).toBeDisabled()
+})
+
+test('line results tab shows angle, offset and flags', () => {
+  setup(4, [{ id: 1, kind: 'line', x: 170, y: 150, width: 21, height: 181, line: { angleDeg: -8, offsetX: 20, start: [180, 240], end: [160, 60], branch: false, cross: true } }])
+  expect(screen.getByRole('columnheader', { name: '角度' })).toBeInTheDocument()
+  expect(screen.getByRole('cell', { name: '−8°' })).toBeInTheDocument()
+  expect(screen.getByRole('cell', { name: '+20' })).toBeInTheDocument()
+  expect(screen.getByRole('cell', { name: '路口' })).toBeInTheDocument()
+})
+
+test('line code tab reads angle, offset and the crossing flag', () => {
+  setup(4)
+  tab('程式')
+  expect(document.body.textContent).toContain('MXCAM_ALGO_LINE')
+  const code = snippetFor(4, 'en')
+  expect(code).toContain('r.angle')
+  expect(code).toContain('r.offset')
+  expect(code).toContain('r.flags & MXCAM_LINE_CROSS')
+})
+
+test('track code tab uses MXCAM_ALGO_TRACK and treats an empty answer as lost', () => {
+  const code = snippetFor(5, 'zh-TW')
+  expect(code).toContain('MXCAM_ALGO_TRACK')
+  expect(code).toContain('r.confidence')
+  expect(code).toContain('else')
+})
+
+test('track results tab: 尚未學習 / 目標遺失 / a row with confidence', async () => {
+  const { device, unmount } = setup(5)
+  expect(screen.getByText('尚未學習')).toBeInTheDocument()
+  await act(async () => {
+    await device.setFunction(5)
+    await device.learn(5, FULL)
+  })
+  expect(await screen.findByText('目標遺失')).toBeInTheDocument()
+  unmount()
+  setup(5, [{ id: 1, kind: 'track', x: 100, y: 90, width: 40, height: 30, confidence: 92 }])
+  expect(screen.getByRole('columnheader', { name: '信心度' })).toBeInTheDocument()
+  expect(screen.getByText('92%')).toBeInTheDocument()
+})
+
+test('track learn tab: shows the learned object, names it and forgets it', async () => {
+  const { device } = setup(5)
+  tab('學習')
+  expect(screen.getByText(/還沒有學習物體/)).toBeInTheDocument()
+  expect(screen.getByRole('button', { name: '忘記' })).toBeDisabled()
+  await act(async () => {
+    await device.setFunction(5)
+    await device.learn(5, FULL)
+  })
+  const spy = vi.spyOn(device, 'setName')
+  const input = await screen.findByRole('textbox', { name: '物體 名稱' })
+  fireEvent.change(input, { target: { value: '小車' } })
+  fireEvent.blur(input)
+  await waitFor(() => expect(spy).toHaveBeenCalledWith(5, 1, '小車'))
+  fireEvent.click(screen.getByRole('button', { name: '忘記' }))
+  await waitFor(() => expect(device.snapshot().learned[5]).toHaveLength(0))
+})
+
+test('track params: threshold, template update, reacquire and multi-scale', async () => {
+  const { device } = setup(5)
+  tab('參數')
+  fireEvent.change(screen.getByRole('slider', { name: '比對門檻' }), { target: { value: '70' } })
+  await waitFor(() => expect(device.snapshot().params.track.threshold).toBe(70))
+  fireEvent.click(screen.getByRole('checkbox', { name: '多尺度搜尋' }))
+  await waitFor(() => expect(device.snapshot().params.track.multiScale).toBe(false))
+  expect(screen.getByRole('slider', { name: '範本更新' })).toBeInTheDocument()
+  expect(screen.getByRole('checkbox', { name: '跟丟時自動找回' })).toBeChecked()
+})

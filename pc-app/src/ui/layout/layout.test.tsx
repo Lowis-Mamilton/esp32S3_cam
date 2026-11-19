@@ -134,7 +134,7 @@ test('sidebar has a gesture item with the Hand icon and its own category colour'
   expect(b).not.toHaveAttribute('aria-disabled')
   expect(b.querySelector('svg')!.getAttribute('class')).toContain('lucide-hand')
   expect((b.querySelector('.nav-disc') as HTMLElement).style.background).toBe('var(--cat-gesture)')
-  expect(container.querySelectorAll('.nav-item')).toHaveLength(6)
+  expect(container.querySelectorAll('.nav-item')).toHaveLength(8)
 })
 
 test('gesture item is disabled with the firmware hint when the board does not list it', () => {
@@ -145,4 +145,33 @@ test('gesture item is disabled with the firmware hint when the board does not li
   )
   expect(screen.getByRole('button', { name: '手勢' })).toHaveAttribute('aria-disabled', 'true')
   expect(screen.getByRole('button', { name: '手勢' })).toHaveAccessibleDescription('需要更新韌體')
+})
+
+test('sidebar lists line and object tracking; old firmware (1,2,3) disables them with a firmware hint', () => {
+  const onSelect = vi.fn()
+  render(
+    <I18nProvider>
+      <Sidebar view={{ kind: 'function', id: 1 }} supported={[1, 2, 3]} onSelect={onSelect} />
+    </I18nProvider>,
+  )
+  for (const name of ['線條追蹤', '物體追蹤']) {
+    const b = screen.getByRole('button', { name })
+    expect(b).toHaveAttribute('aria-disabled', 'true')
+    expect(b).toHaveAccessibleDescription('需要更新韌體')
+    fireEvent.click(b)
+  }
+  expect(onSelect).not.toHaveBeenCalled()
+})
+
+test('sidebar: with line and track supported they select', () => {
+  const onSelect = vi.fn()
+  render(
+    <I18nProvider>
+      <Sidebar view={{ kind: 'function', id: 1 }} supported={[1, 2, 3, 4, 5]} onSelect={onSelect} />
+    </I18nProvider>,
+  )
+  fireEvent.click(screen.getByRole('button', { name: '線條追蹤' }))
+  fireEvent.click(screen.getByRole('button', { name: '物體追蹤' }))
+  expect(onSelect).toHaveBeenNthCalledWith(1, { kind: 'function', id: 4 })
+  expect(onSelect).toHaveBeenNthCalledWith(2, { kind: 'function', id: 5 })
 })

@@ -8,7 +8,7 @@ import { FN_CATEGORY, FN_ICON } from '../layout/categories'
 import type { FunctionId } from '../layout/types'
 import { useMirror } from './mirror'
 import { FRAME_H, FRAME_W, boxToScreen, mirrorRegion, toFrame, toScreen, type Viewport } from './geometry'
-import { LEARN_ERROR_KEY, idColorVar, labelFor } from './labels'
+import { DRAG_HINT_KEY, FN_KIND, LEARNED_KEY, LEARN_ERROR_KEY, STAGE_KEY, idColorVar, labelFor } from './labels'
 
 export interface LiveStageHandle {
   draw(f: FrameSource): void
@@ -23,7 +23,7 @@ interface Props {
   /** null hides the KB/s figure (demo mode has no real link). */
   kbps: number | null
   fn: FunctionId
-  /** Colour function and a device that can learn. */
+  /** A learning function (colour, line colour, object) and a device that can learn. */
   canLearn: boolean
   onLearn: (region: Region) => Promise<number>
   /** Only this component and the results tab subscribe, so pushes do not re-render the whole app. */
@@ -31,6 +31,8 @@ interface Props {
   /** Learned IDs of the displayed function. */
   learned: LearnedId[]
   showNames: boolean
+  /** Line tracking: the share of the picture (from the bottom) the device looks at, drawn as a dashed edge. */
+  lineRoi?: number
   /** Frames are not sent; results keep coming (the device layer owns the state). */
   previewPaused?: boolean
   onPausePreview?: (paused: boolean) => void
@@ -43,7 +45,7 @@ const tabWidth = (text: string) => Math.ceil([...text].reduce((w, c) => w + (c.c
 const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v))
 const CENTRE: Region = { x: 152, y: 112, width: 16, height: 16 }
 
-export default function LiveStage({ ref, connected, fps, kbps, fn, canLearn, onLearn, results: store, learned, showNames, previewPaused = false, onPausePreview }: Props) {
+export default function LiveStage({ ref, connected, fps, kbps, fn, canLearn, onLearn, results: store, learned, showNames, lineRoi = 60, previewPaused = false, onPausePreview }: Props) {
   const { t } = useT()
   const results = useSyncExternalStore(store.subscribe, store.paired)
   const stageRef = useRef<HTMLDivElement>(null)
@@ -179,7 +181,7 @@ export default function LiveStage({ ref, connected, fps, kbps, fn, canLearn, onL
     async (region: Region) => {
       try {
         const id = await onLearn(region)
-        say(t('learned', { id }), false)
+        say(t(LEARNED_KEY[fn] ?? 'learned', { id }), false)
       } catch (e) {
         if (e instanceof NotSupportedError) say(t('learnNeedFirmware'), true)
         else if (e instanceof NotConnectedError) say(t('needConnect'), true)
@@ -187,7 +189,7 @@ export default function LiveStage({ ref, connected, fps, kbps, fn, canLearn, onL
         else say(t('learnFailed'), true)
       }
     },
-    [onLearn, say, t],
+    [fn, onLearn, say, t],
   )
 
   const frameAt = (clientX: number, clientY: number) => {
@@ -233,8 +235,10 @@ export default function LiveStage({ ref, connected, fps, kbps, fn, canLearn, onL
     dragCleanup.current = cleanup
   }
 
-  const kind = fn === 1 ? 'color' : fn === 2 ? 'tag' : fn === 8 ? 'gesture' : 'face'
-  const shown = results.filter((r) => r.kind === kind)
+  const shown = results.filter((r) => r.kind === FN_KIND[fn])
+  const lineRows = shown.filter((r) => r.line)
+  const roiY = toScreen(vp, 0, FRAME_H - (FRAME_H * lineRoi) / 100, mirror).py
+  const lost = fn === 5 && connected && learned.length > 0 && shown.length === 0
   const centre = toScreen(vp, FRAME_W / 2, FRAME_H / 2, mirror)
   let dragBox: { left: number; top: number; width: number; height: number } | null = null
   if (drag) {
@@ -249,38 +253,60 @@ export default function LiveStage({ ref, connected, fps, kbps, fn, canLearn, onL
       {/* A hat block on top of the picture: what the board is running right now. */}
       <div className="ls-hat">
         <CategoryDisc cat={FN_CATEGORY[fn]} Icon={FN_ICON[fn]} size={15} />
-        <span>{t(fn === 1 ? 'stageColor' : fn === 2 ? 'stageTag' : fn === 8 ? 'stageGesture' : 'stageFace')}</span>
+        <span>{t(STAGE_KEY[fn])}</span>
       </div>
       <div ref={stageRef} className={`stage${canLearn ? ' learnable' : ''}`} onMouseDown={onMouseDown}>
         <canvas ref={canvasRef} width={FRAME_W} height={FRAME_H} className={mirror ? 'mirrored' : undefined} />
         {previewPaused && connected && <div className="stage-paused">{t('previewPausedNote')}</div>}
         <div className="ls-overlay" aria-hidden="true">
           <div className="ls-boxes">
-            {shown.map((r, i) => {
+            {shown.filter((r) => r.kind !== 'line').map((r, i) => {
               // Result x/y are the box centre, in true-image coordinates.
               const style = { '--c': idColorVar(r), ...boxToScreen(vp, r, mirror) } as CSSProperties
               return <div key={i} className={`ls-box${(r.kind === 'color' || r.kind === 'gesture') && r.id === 0 ? ' unlearned' : ''}`} style={style} />
             })}
           </div>
+          {fn === 4 && lineRows.length > 0 && (
+            <svg className="ls-line" width={vp.width} height={vp.height} viewBox={`0 0 ${vp.width} ${vp.height}`}>
+              <line className="ls-roi" x1={0} x2={vp.width} y1={roiY} y2={roiY} />
+              {lineRows.map((r, i) => {
+                const a = toScreen(vp, r.line!.start[0], r.line!.start[1], mirror)
+                const b = toScreen(vp, r.line!.end[0], r.line!.end[1], mirror)
+                return (
+                  <g key={i}>
+                    <line className="ls-seg" x1={a.px} y1={a.py} x2={b.px} y2={b.py} />
+                    <circle className="ls-end" cx={a.px} cy={a.py} r={5} />
+                  </g>
+                )
+              })}
+            </svg>
+          )}
           <div className="ls-labels">
             {shown.map((r, i) => {
               const box = boxToScreen(vp, r, mirror)
               const bottom = box.top + box.height
-              const text = labelFor(r, learned, showNames, t)
-              const w = tabWidth(text)
-              const left = clamp(box.left - 2, 0, Math.max(0, vp.width - w))
+              // The line gets its flags as extra badges beside the main tab.
+              const tabs = [labelFor(r, learned, showNames, t)]
+              if (r.line?.cross) tabs.push(t('lineCross'))
+              if (r.line?.branch) tabs.push(t('lineBranch'))
               let top = box.top - TAB_H - 1 // above the box
               if (top < 0) top = bottom + 1 // below, if there is room
               if (top + TAB_H > vp.height) top = box.top + 1 // otherwise inside the box top
               top = clamp(top, 0, Math.max(0, vp.height - TAB_H))
-              const style = { '--c': idColorVar(r), left, top, width: w } as CSSProperties
-              return (
-                <span key={i} className="ls-label" style={style}>
-                  {text}
-                </span>
-              )
+              let left = clamp(box.left - 2, 0, Math.max(0, vp.width - tabs.map(tabWidth).reduce((a, w) => a + w + 2, -2)))
+              return tabs.map((text, j) => {
+                const w = tabWidth(text)
+                const style = { '--c': idColorVar(r), left, top, width: w } as CSSProperties
+                left += w + 2
+                return (
+                  <span key={`${i}-${j}`} className={`ls-label${j > 0 ? ' ls-badge' : ''}`} style={style}>
+                    {text}
+                  </span>
+                )
+              })
             })}
           </div>
+          {lost && <div className="ls-lost">{t('targetLost')}</div>}
           {connected && !previewPaused && <div className="ls-crosshair" style={{ left: centre.px, top: centre.py }} />}
           {dragBox && <div className="ls-drag" style={dragBox} />}
         </div>
@@ -316,7 +342,7 @@ export default function LiveStage({ ref, connected, fps, kbps, fn, canLearn, onL
                 {toast.text}
               </span>
             ) : (
-              <span className="muted">{t('dragHint')}</span>
+              <span className="muted">{t(DRAG_HINT_KEY[fn] ?? 'dragHint')}</span>
             )}
           </>
         )}

@@ -59,3 +59,22 @@ test('gesture colours: id 0 unlearned, ids cycle 8 colours', () => {
   expect(idColorVar({ id: 9, kind: 'gesture', ...box })).toBe('var(--id-1)')
   expect(idColorVar({ id: 3, kind: 'gesture', ...box })).toBe('var(--id-3)')
 })
+
+test('line label: signed angle and offset with a real minus sign, localised', () => {
+  const r: Result = { id: 1, kind: 'line', ...box, line: { angleDeg: -8, offsetX: 20, start: [0, 0], end: [0, 0], branch: false, cross: false } }
+  expect(labelFor(r, [], false, tz)).toBe('角度 −8°・偏移 +20')
+  expect(labelFor(r, [], false, te)).toBe('Angle −8°・Offset +20')
+  expect(labelFor({ ...r, line: { ...r.line!, angleDeg: 0, offsetX: 0 } }, [], false, tz)).toBe('角度 0°・偏移 0')
+})
+
+test('track label: learned name, or 物體, plus confidence', () => {
+  const r: Result = { id: 1, kind: 'track', ...box, confidence: 92.4 }
+  expect(labelFor(r, [], true, tz)).toBe('物體 92%')
+  expect(labelFor(r, [{ id: 1, name: '小車' }], true, tz)).toBe('小車 92%')
+  expect(labelFor(r, [], true, te)).toBe('Object 92%')
+})
+
+test('line and track have their own colours', () => {
+  expect(idColorVar({ id: 1, kind: 'line', ...box })).toBe('var(--cat-line)')
+  expect(idColorVar({ id: 1, kind: 'track', ...box })).toBe('var(--cat-track)')
+})

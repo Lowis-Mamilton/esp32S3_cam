@@ -18,6 +18,8 @@ const FUNCTIONS: { id: FunctionId; key: MessageKey }[] = [
   { id: 1, key: 'fnColor' },
   { id: 2, key: 'fnTag' },
   { id: 3, key: 'fnFace' },
+  { id: 4, key: 'fnLine' },
+  { id: 5, key: 'fnTrack' },
   { id: 8, key: 'fnGesture' },
 ]
 

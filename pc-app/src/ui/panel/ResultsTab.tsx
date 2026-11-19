@@ -3,17 +3,8 @@ import type { ResultsStore } from "../../device/resultsStore";
 import type { LearnedId, Result } from "../../device/types";
 import { useT, type MessageKey } from "../../i18n";
 import type { FunctionId } from "../layout/types";
-import { idColorVar } from "../live/labels";
+import { FN_KIND, idColorVar, signed } from "../live/labels";
 import { useMirror } from "../live/mirror";
-
-const KIND: Record<FunctionId, Result["kind"]> = {
-  1: "color",
-  2: "tag",
-  3: "face",
-  4: "line",
-  5: "track",
-  8: "gesture",
-};
 
 interface Props {
   fn: FunctionId;
@@ -22,14 +13,55 @@ interface Props {
   learned: LearnedId[];
 }
 
+function LineTable({ rows, mirror }: { rows: Result[]; mirror: boolean }) {
+  const { t } = useT();
+  return (
+    <>
+      <table className="rp-table">
+        <thead>
+          <tr>
+            <th scope="col">{t("colAngle")}</th>
+            <th scope="col">{t("colOffset")}</th>
+            <th scope="col">{t("colStart")}</th>
+            <th scope="col">{t("colEnd")}</th>
+            <th scope="col">{t("colFlags")}</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((r, i) => {
+            const l = r.line;
+            const flags = [l?.cross ? t("lineCross") : "", l?.branch ? t("lineBranch") : ""].filter(Boolean).join(" ");
+            return (
+              <tr key={i}>
+                <td>{signed(l?.angleDeg ?? 0)}°</td>
+                <td>{signed(l?.offsetX ?? 0)}</td>
+                <td>{l ? `${l.start[0]}, ${l.start[1]}` : "—"}</td>
+                <td>{l ? `${l.end[0]}, ${l.end[1]}` : "—"}</td>
+                <td>{flags || "—"}</td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+      {mirror && <p className="muted">{t("coordsTrueImage")}</p>}
+    </>
+  );
+}
+
 export default function ResultsTab({ fn, results: store, learned }: Props) {
   const { t } = useT();
   const [mirror] = useMirror();
   const results = useSyncExternalStore(store.subscribe, store.latest);
-  const rows = results.filter((r) => r.kind === KIND[fn]);
-  if (rows.length === 0) return <p className="muted">{t("resultsEmpty")}</p>;
+  const rows = results.filter((r) => r.kind === FN_KIND[fn]);
+  if (rows.length === 0) {
+    // Object tracking: nothing to show means either no object yet or the target is gone.
+    if (fn === 5) return <p className="muted">{t(learned.length > 0 ? "targetLost" : "notLearnedYet")}</p>;
+    return <p className="muted">{t("resultsEmpty")}</p>;
+  }
+  if (fn === 4) return <LineTable rows={rows} mirror={mirror} />;
   const face = fn === 3;
   const gesture = fn === 8;
+  const track = fn === 5;
   const idText = (r: Result) =>
     r.kind === "face"
       ? t("catFace")
@@ -52,7 +84,7 @@ export default function ResultsTab({ fn, results: store, learned }: Props) {
             <th scope="col">y</th>
             <th scope="col">{t("colWidth")}</th>
             <th scope="col">{t("colHeight")}</th>
-            {face && <th scope="col">{t("colConfidence")}</th>}
+            {(face || track) && <th scope="col">{t("colConfidence")}</th>}
             {gesture && <th scope="col">{t("colConfidence")}</th>}
           </tr>
         </thead>
@@ -75,7 +107,7 @@ export default function ResultsTab({ fn, results: store, learned }: Props) {
               <td>{Math.round(r.y)}</td>
               <td>{Math.round(r.width)}</td>
               <td>{Math.round(r.height)}</td>
-              {(face || gesture) && <td>{Math.round(r.confidence ?? 0)}%</td>}
+              {(face || gesture || track) && <td>{Math.round(r.confidence ?? 0)}%</td>}
             </tr>
           ))}
         </tbody>

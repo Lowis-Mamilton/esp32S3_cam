@@ -19,7 +19,8 @@ function stubRect(w: number, h: number) {
 
 interface Over {
   connected?: boolean
-  fn?: 1 | 2 | 3 | 8
+  fn?: 1 | 2 | 3 | 4 | 5 | 8
+  lineRoi?: number
   canLearn?: boolean
   onLearn?: (r: { x: number; y: number; width: number; height: number }) => Promise<number>
   results?: Result[] | ResultsStore
@@ -50,6 +51,7 @@ function setup(o: Over = {}) {
         results={o.results instanceof ResultsStore ? o.results : storeOf(o.results ?? [])}
         learned={o.learned ?? []}
         showNames={o.showNames ?? true}
+        lineRoi={o.lineRoi}
         previewPaused={o.previewPaused}
         onPausePreview={o.onPausePreview}
       />
@@ -406,4 +408,78 @@ test('a gesture id 0 box (hand, not recognised) is drawn thin like an unlearned 
   const boxes = [...container.querySelectorAll('.ls-box')]
   expect(boxes[0]).toHaveClass('unlearned')
   expect(boxes[1]).not.toHaveClass('unlearned')
+})
+
+// ---- line tracking (4) and object tracking (5) ----
+const lineResult: Result = {
+  id: 1, kind: 'line', x: 170, y: 150, width: 21, height: 181, confidence: 100,
+  line: { angleDeg: -8, offsetX: 20, start: [180, 240], end: [160, 60], branch: false, cross: true },
+}
+
+test('line: draws a segment with its end points, the dashed ROI edge, the label and a crossing badge', () => {
+  stubRect(320, 240)
+  const { container } = setup({ fn: 4, canLearn: false, results: [lineResult], lineRoi: 60 })
+  const seg = container.querySelector('line.ls-seg')!
+  expect([seg.getAttribute('x1'), seg.getAttribute('y1'), seg.getAttribute('x2'), seg.getAttribute('y2')]).toEqual(['180', '240', '160', '60'])
+  expect(Number(container.querySelector('circle.ls-end')!.getAttribute('cx'))).toBe(180)
+  expect(Number(container.querySelector('line.ls-roi')!.getAttribute('y1'))).toBe(96) // 240 - 60% of 240
+  expect(screen.getByText('角度 −8°・偏移 +20')).toBeInTheDocument()
+  expect(screen.getByText('路口')).toBeInTheDocument()
+  expect(screen.queryByText('岔路')).toBeNull()
+  expect(container.querySelector('.ls-box')).toBeNull()
+})
+
+test('line: mirrored view uses 320 - x for the end points', () => {
+  localStorage.setItem('mxcam.mirror', '1')
+  stubRect(320, 240)
+  const { container } = setup({ fn: 4, canLearn: false, results: [lineResult] })
+  const seg = container.querySelector('line.ls-seg')!
+  expect([seg.getAttribute('x1'), seg.getAttribute('x2')]).toEqual(['140', '160'])
+})
+
+test('line: a branch gets its own badge; learning is available when canLearn', async () => {
+  stubRect(320, 240)
+  const onLearn = vi.fn(async () => 1)
+  const { container } = setup({ fn: 4, canLearn: true, onLearn, results: [{ ...lineResult, line: { ...lineResult.line!, cross: false, branch: true } }] })
+  expect(screen.getByText('岔路')).toBeInTheDocument()
+  fireEvent.mouseDown(container.querySelector('.stage')!, { clientX: 20, clientY: 20 })
+  await act(async () => {
+    fireEvent.mouseUp(window, { clientX: 100, clientY: 80 })
+  })
+  expect(onLearn).toHaveBeenCalledWith({ x: 20, y: 20, width: 80, height: 60 })
+  expect(await screen.findByText('已學習線的顏色')).toBeInTheDocument()
+})
+
+test('track: a box labelled 物體 92%, the learned name when there is one, and the lost note', async () => {
+  stubRect(320, 240)
+  const r: Result = { id: 1, kind: 'track', x: 100, y: 100, width: 40, height: 40, confidence: 92 }
+  const { container, unmount } = setup({ fn: 5, canLearn: true, results: [r] })
+  expect(container.querySelectorAll('.ls-box')).toHaveLength(1)
+  expect(screen.getByText('物體 92%')).toBeInTheDocument()
+  expect(screen.getByText('物體追蹤')).toBeInTheDocument() // hat block
+  unmount()
+  setup({ fn: 5, results: [r], learned: [{ id: 1, name: '小車' }] })
+  expect(screen.getByText('小車 92%')).toBeInTheDocument()
+  expect(screen.queryByText('目標遺失')).toBeNull()
+})
+
+test('track: learned but no result shows 目標遺失; never learned does not', () => {
+  const { unmount } = setup({ fn: 5, results: [], learned: [{ id: 1, name: '' }] })
+  expect(screen.getByText('目標遺失')).toBeInTheDocument()
+  unmount()
+  setup({ fn: 5, results: [], learned: [] })
+  expect(screen.queryByText('目標遺失')).toBeNull()
+})
+
+test('no-target error has its own message', async () => {
+  const onLearn = vi.fn(async () => {
+    throw new LearnError('no-target')
+  })
+  const { container } = setup({ fn: 5, onLearn })
+  stubRect(320, 240)
+  fireEvent.mouseDown(container.querySelector('.stage')!, { clientX: 20, clientY: 20 })
+  await act(async () => {
+    fireEvent.mouseUp(window, { clientX: 100, clientY: 80 })
+  })
+  expect(await screen.findByText(/找不到可追蹤的物體/)).toBeInTheDocument()
 })

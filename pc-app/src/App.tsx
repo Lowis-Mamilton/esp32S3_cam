@@ -1,7 +1,7 @@
 import { X } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { ResultsStore } from './device/resultsStore'
-import { needsConnection, NotSupportedError, type Device, type FunctionId, type LearnableFn } from './device/types'
+import { needsConnection, NotSupportedError, type Device, type DeviceSnapshot, type FunctionId, type LearnableFn } from './device/types'
 import { useDevice } from './device/useDevice'
 import { describeError, type ErrorText } from './i18n/core'
 import { useT, type MessageKey } from './i18n'
@@ -13,7 +13,17 @@ import FirmwarePage from './ui/pages/FirmwarePage'
 import SettingsPage from './ui/pages/SettingsPage'
 import LiveStage, { type LiveStageHandle } from './ui/live/LiveStage'
 
-const FN_KEY: Record<FunctionId, MessageKey> = { 1: 'fnColor', 2: 'fnTag', 3: 'fnFace', 4: 'fnColor' /* TODO M6 Task 7 */, 5: 'fnColor' /* TODO M6 Task 7 */, 8: 'fnGesture' }
+const FN_KEY: Record<FunctionId, MessageKey> = { 1: 'fnColor', 2: 'fnTag', 3: 'fnFace', 4: 'fnLine', 5: 'fnTrack', 8: 'fnGesture' }
+/** Whether names are shown on the stage; a Record so a new function must decide (no silent fall-through). */
+const SHOW_NAMES: Record<FunctionId, (p: DeviceSnapshot['params']) => boolean> = {
+  1: (p) => p.color.showNames,
+  2: (p) => p.tag.showNames,
+  3: () => false,
+  4: () => false,
+  5: () => true,
+  8: () => true,
+}
+const CAN_LEARN: Record<FunctionId, boolean> = { 1: true, 2: false, 3: false, 4: true, 5: true, 8: false }
 const NOTICE_MS = 4000
 const SET_FUNCTION_RETRY_MS = 500
 
@@ -172,11 +182,12 @@ export default function App({ serial }: Props) {
               fps={stats.fps}
               kbps={demo ? null : stats.kbps}
               fn={view.id}
-              canLearn={view.id === 1 && !!device && (demo || supported.includes(1))}
+              canLearn={CAN_LEARN[view.id] && !!device && (demo || supported.includes(view.id))}
+              lineRoi={snapshot.params.line.roiPercent}
               onLearn={onLearn}
               results={results}
               learned={snapshot.learned[view.id]}
-              showNames={view.id === 3 ? false : view.id === 8 ? true : snapshot.params[view.id === 1 ? 'color' : 'tag'].showNames}
+              showNames={SHOW_NAMES[view.id](snapshot.params)}
               previewPaused={snapshot.previewPaused}
               onPausePreview={onPausePreview}
             />

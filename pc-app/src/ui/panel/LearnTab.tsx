@@ -186,6 +186,60 @@ function TagLearn({ device, learned, disabled, guard }: Omit<Props, 'fn'>) {
   )
 }
 
+const swatch = (l?: LearnedId) => (
+  <span className="rp-swatch" style={{ background: l?.color ? `rgb(${l.color.join(',')})` : 'var(--unlearned)' }} aria-hidden="true" />
+)
+
+/** Black and white tape use the automatic modes; only coloured tape needs its colour learned (drag on the picture). */
+function LineLearn({ device, learned, disabled, guard }: Omit<Props, 'fn'>) {
+  const { t } = useT()
+  const l = learned[0]
+  return (
+    <>
+      <p className="muted">{t('lineNoLearn')}</p>
+      <h3 className="rp-h">{t('lineColorHeading')}</h3>
+      {l ? (
+        <ul className="rp-list">
+          <li>
+            {swatch(l)}
+            <span className="rp-id">{t('lineColorHeading')}</span>
+          </li>
+        </ul>
+      ) : (
+        <p className="muted">{t('lineNoColorYet')}</p>
+      )}
+      <button type="button" className="btn rp-forget" disabled={disabled || !l} onClick={() => device && void guard.run(() => device.forget(4, 1))}>
+        {t('forgetToAuto')}
+      </button>
+    </>
+  )
+}
+
+/** One tracked object: drag a box on the picture to learn it, then name it or forget it. */
+function TrackLearn({ device, learned, disabled, guard }: Omit<Props, 'fn'>) {
+  const { t } = useT()
+  const o = learned[0]
+  return (
+    <>
+      <p className="muted">{t('trackLearnNote')}</p>
+      <h3 className="rp-h">{t('trackObjectHeading')}</h3>
+      {o ? (
+        <ul className="rp-list">
+          <li>
+            {swatch(o)}
+            <NameInput value={o.name} label={t('nameOf', { label: t('catObject') })} disabled={disabled} onCommit={(v) => device && void guard.run(() => device.setName(5, 1, v))} />
+          </li>
+        </ul>
+      ) : (
+        <p className="muted">{t('trackNoneYet')}</p>
+      )}
+      <button type="button" className="btn rp-forget" disabled={disabled || !o} onClick={() => device && void guard.run(() => device.forget(5, 1))}>
+        {t('forgetObject')}
+      </button>
+    </>
+  )
+}
+
 const GESTURE_IDS = [1, 2, 3, 4, 5, 6, 7, 8, 9] as const
 
 /** Gestures are fixed classes: nothing to learn, but each can be given a name (like AprilTag IDs). */
@@ -223,6 +277,8 @@ function GestureNames({ device, learned, disabled, guard }: Omit<Props, 'fn'>) {
 export default function LearnTab({ fn, ...rest }: Props) {
   const { t } = useT()
   if (fn === 3) return <p className="muted">{t('faceNoLearn')}</p>
+  if (fn === 4) return <LineLearn {...rest} />
+  if (fn === 5) return <TrackLearn {...rest} />
   if (fn === 8) return <GestureNames {...rest} />
   return fn === 1 ? <ColorLearn {...rest} /> : <TagLearn {...rest} />
 }

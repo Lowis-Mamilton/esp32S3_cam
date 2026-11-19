@@ -1,6 +1,6 @@
 import { useEffect, useId, useRef, useState } from 'react'
 import { ConfigFileError } from '../../device/config'
-import { NotSupportedError, type Device, type FunctionParams } from '../../device/types'
+import { NotSupportedError, type Device, type FunctionParams, type LearnedId } from '../../device/types'
 import { useT, type MessageKey } from '../../i18n'
 import type { FunctionId } from '../layout/types'
 import type { Guard } from './guard'
@@ -72,6 +72,8 @@ interface Props {
   device: Device | null
   fn: FunctionId
   params: FunctionParams
+  /** Learned items of this function (line mode 'learned' needs a learned colour). */
+  learned?: LearnedId[]
   disabled: boolean
   guard: Guard
 }
@@ -179,7 +181,7 @@ function ConfigIO({ device, disabled, guard }: { device: Device | null; disabled
   )
 }
 
-function FnParams({ device, fn, params, disabled, guard }: Props) {
+function FnParams({ device, fn, params, learned = [], disabled, guard }: Props) {
   const { t } = useT()
   const set = (patch: (p: FunctionParams) => Partial<FunctionParams>) =>
     device ? guard.run(() => device.setParams(patch(device.snapshot().params))) : undefined
@@ -210,6 +212,48 @@ function FnParams({ device, fn, params, disabled, guard }: Props) {
           <code className="rp-readonly">tag36h11</code>
         </div>
         {checkbox(params.tag.showNames, (v) => void set((p) => ({ tag: { ...p.tag, showNames: v } })), 'paramShowNames')}
+      </div>
+    )
+  }
+  if (fn === 4) {
+    const l = params.line
+    const line = (patch: Partial<FunctionParams['line']>) => set((p) => ({ line: { ...p.line, ...patch } }))
+    const modes = [
+      ['dark', 'lineModeDark'],
+      ['light', 'lineModeLight'],
+      ['learned', 'lineModeLearned'],
+    ] as const
+    return (
+      <div className="rp-params">
+        <div className="rp-field" role="group" aria-label={t('paramLineMode')}>
+          <span>{t('paramLineMode')}</span>
+          <div className="rp-actions">
+            {modes.map(([mode, key]) => (
+              <button key={mode} type="button" className="btn" aria-pressed={l.mode === mode} disabled={disabled || (mode === 'learned' && learned.length === 0)} onClick={() => void line({ mode })}>
+                {t(key)}
+              </button>
+            ))}
+          </div>
+        </div>
+        {checkbox(l.threshold === 0, (v) => void line({ threshold: v ? 0 : 128 }), 'paramAuto')}
+        <Slider key="4-threshold" label={t('paramLineThreshold')} value={l.threshold || 128} min={1} max={255} disabled={disabled || l.threshold === 0} onCommit={(v) => line({ threshold: v })} />
+        <Slider key="4-roi" label={t('paramRoi')} value={l.roiPercent} min={20} max={100} disabled={disabled} onCommit={(v) => line({ roiPercent: v })} />
+        <Slider key="4-bands" label={t('paramBands')} value={l.bands} min={4} max={12} disabled={disabled} onCommit={(v) => line({ bands: v })} />
+        <Slider key="4-minWidth" label={t('paramMinWidth')} value={l.minWidth} min={1} max={100} disabled={disabled} onCommit={(v) => line({ minWidth: v })} />
+        <Slider key="4-maxWidth" label={t('paramMaxWidth')} value={l.maxWidth} min={l.minWidth} max={255} disabled={disabled} onCommit={(v) => line({ maxWidth: v })} />
+        {l.mode === 'learned' && <Slider key="4-colorTol" label={t('paramColorTol')} value={l.colorTolerance} min={0} max={100} disabled={disabled} onCommit={(v) => line({ colorTolerance: v })} />}
+      </div>
+    )
+  }
+  if (fn === 5) {
+    const k = params.track
+    const track = (patch: Partial<FunctionParams['track']>) => set((p) => ({ track: { ...p.track, ...patch } }))
+    return (
+      <div className="rp-params">
+        <Slider key="5-threshold" label={t('paramTrackThreshold')} value={k.threshold} min={10} max={95} disabled={disabled} onCommit={(v) => track({ threshold: v })} />
+        <Slider key="5-adapt" label={t('paramAdapt')} value={k.adapt} min={0} max={50} disabled={disabled} onCommit={(v) => track({ adapt: v })} />
+        {checkbox(k.reacquire, (v) => void track({ reacquire: v }), 'paramReacquire')}
+        {checkbox(k.multiScale, (v) => void track({ multiScale: v }), 'paramMultiScale')}
       </div>
     )
   }

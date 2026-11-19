@@ -83,7 +83,7 @@ export default function RightPanel({ device, snapshot, fn, results }: Props) {
         )}
         {tab === 'results' && <ResultsTab fn={fn} results={results} learned={snapshot.learned[fn]} />}
         {tab === 'learn' && <LearnTab device={device} fn={fn} learned={snapshot.learned[fn]} disabled={blocked} guard={guard} />}
-        {tab === 'params' && <ParamsTab device={device} fn={fn} params={snapshot.params} disabled={paramsBlocked} guard={guard} />}
+        {tab === 'params' && <ParamsTab device={device} fn={fn} params={snapshot.params} learned={snapshot.learned[fn]} disabled={paramsBlocked} guard={guard} />}
         {tab === 'code' && <CodeTab fn={fn} />}
       </div>
       <SaveBar device={device} dirty={snapshot.dirty} disabled={needConnect || !snapshot.supported.includes(fn)} />

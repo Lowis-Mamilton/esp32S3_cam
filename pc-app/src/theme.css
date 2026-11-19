@@ -53,6 +53,8 @@
   --cat-tag: #ffa828;
   --cat-face: #a56bff;
   --cat-gesture: #29b6f6;
+  --cat-line: #12b8a6;
+  --cat-track: #5c6bf2;
   --cat-settings: #3ace3a;
   --cat-firmware: #dc8f47;
 
@@ -648,6 +650,45 @@ button {
   font: 600 12px/18px var(--font-ui);
   white-space: nowrap;
   overflow: hidden;
+}
+/* Line tracking (function 4): segment, bottom end and the dashed top edge of the region the device looks at. */
+.ls-line {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  overflow: visible;
+}
+.ls-line .ls-seg {
+  stroke: var(--cat-line);
+  stroke-width: 3;
+  stroke-linecap: round;
+}
+.ls-line .ls-end {
+  fill: var(--cat-line);
+  stroke: #fff;
+  stroke-width: 1.5;
+}
+.ls-line .ls-roi {
+  stroke: var(--cat-line);
+  stroke-width: 1;
+  stroke-dasharray: 6 4;
+  opacity: 0.8;
+}
+.ls-badge {
+  background: #0d0c0b;
+  color: var(--c);
+  box-shadow: inset 0 0 0 1px var(--c);
+}
+.ls-lost {
+  position: absolute;
+  z-index: 3;
+  top: 8px;
+  right: 8px;
+  padding: 0 8px;
+  border-radius: 3px;
+  background: rgba(13, 12, 11, 0.8);
+  color: var(--cat-track);
+  font: 600 12px/20px var(--font-ui);
 }
 .ls-crosshair {
   position: absolute;
