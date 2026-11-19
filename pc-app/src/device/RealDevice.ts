@@ -48,6 +48,10 @@ const FLASH_TIMEOUT_MS = 5000
 /** RESULTS of another function within this window after our own SET_FUNCTION are stale in-flight frames. */
 const OWN_SWITCH_QUIET_MS = 1000
 const FORGET_ALL = 0xffff
+/** The firmware's name table holds 32 names over all functions (protocol.md §7 SET_NAME). */
+const NAME_TABLE_SIZE = 32
+const REFRESH_RETRY_MS = 500
+const REFRESH_RETRIES = 3
 const KIND: Record<FunctionId, Result['kind']> = { 1: 'color', 2: 'tag', 3: 'face' }
 const ERROR_NAME: Record<number, string> = {
   [ErrorCode.UnknownCmd]: 'UNKNOWN_CMD',
@@ -63,6 +67,17 @@ const isFn = (n: number): n is FunctionId => n === 1 || n === 2 || n === 3
 const isUnsupported = (e: unknown) =>
   e instanceof MxcamError && (e.code === ErrorCode.UnknownCmd || e.code === ErrorCode.NotSupported)
 const clampInt = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, Math.round(v)))
+const isTimeout = (e: unknown) => e instanceof Error && !(e instanceof MxcamError) && /timeout/.test(e.message)
+
+/** Retries once when the reply was lost (timeout); device ERRORs are not retried. */
+async function retryOnTimeout<T>(op: () => Promise<T>): Promise<T> {
+  try {
+    return await op()
+  } catch (e) {
+    if (!isTimeout(e)) throw e
+    return op()
+  }
+}
 
 function toParams(c: DeviceConfig): FunctionParams {
   return {
@@ -131,6 +146,11 @@ export class RealDevice implements Device {
   private snap: DeviceSnapshot | null = null
   /** Config edits run one at a time, each merged into the config the previous one left. */
   private configQueue: Promise<unknown> = Promise.resolve()
+  private learnInFlight = 0
+  /** Our own SET_FUNCTION switched function while a LEARN was pending: the firmware cancels it (BAD_PARAM). */
+  private learnCancelled = false
+  private refreshTimer: ReturnType<typeof setTimeout> | undefined
+  private readonly retryFns = new Set<FunctionId>()
   private readonly auto: ReturnType<typeof setTimeout>
   private disposed = false
 
@@ -178,6 +198,11 @@ export class RealDevice implements Device {
     this.ownFnSet = false
     this.fnInFlight = 0
     this.quietUntil = 0
+    this.learnInFlight = 0
+    this.learnCancelled = false
+    clearTimeout(this.refreshTimer)
+    this.refreshTimer = undefined
+    this.retryFns.clear()
   }
 
   private changed() {
@@ -256,9 +281,10 @@ export class RealDevice implements Device {
     }
   }
 
-  private async loadConfig() {
+  private async loadConfig(retry = false) {
     try {
-      this.config = parseWireConfig((await this.call(Cmd.GetConfig)).payload)
+      const get = () => this.call(Cmd.GetConfig)
+      this.config = parseWireConfig((await (retry ? retryOnTimeout(get) : get())).payload)
       this.configSupported = true
     } catch (e) {
       if (!(e instanceof NotSupportedError)) throw e
@@ -267,13 +293,15 @@ export class RealDevice implements Device {
     }
   }
 
-  private async loadLearned(fn: FunctionId) {
+  private async loadLearned(fn: FunctionId, retry = false) {
     let list: LearnedId[] = []
     try {
       // older firmware, or a function without learned data (BAD_PARAM): nothing learned
-      const f = await this.call(Cmd.GetLearned, new Uint8Array([fn]), undefined, (code) =>
-        code === ErrorCode.BadParam ? new NotSupportedError() : undefined,
-      )
+      const get = () =>
+        this.call(Cmd.GetLearned, new Uint8Array([fn]), undefined, (code) =>
+          code === ErrorCode.BadParam ? new NotSupportedError() : undefined,
+        )
+      const f = await (retry ? retryOnTimeout(get) : get())
       list = parseLearned(f.payload).map((i) => (fn === 1 ? { id: i.id, name: i.name, color: i.rgb } : { id: i.id, name: i.name }))
     } catch (e) {
       if (!(e instanceof NotSupportedError)) throw e
@@ -281,10 +309,10 @@ export class RealDevice implements Device {
     this.learned = { ...this.learned, [fn]: list }
   }
 
-  /** Runs during connect (status 'connecting'): GET_CONFIG, then GET_LEARNED per supported function. */
+  /** Runs during connect (status 'connecting'): GET_CONFIG, then GET_LEARNED per supported function. A lost reply is retried once. */
   private async loadAll() {
-    await this.loadConfig()
-    for (const fn of this.supportedFns()) await this.loadLearned(fn)
+    await this.loadConfig(true)
+    for (const fn of this.supportedFns()) await this.loadLearned(fn, true)
     this.changed()
   }
 
@@ -293,6 +321,26 @@ export class RealDevice implements Device {
     for (const fn of fns) if (this.supportedFns().includes(fn)) await this.loadLearned(fn)
     if (this.configSupported) await this.loadConfig()
     this.changed()
+  }
+
+  /**
+   * Refresh after an operation the device already accepted: the operation succeeded, so a failed re-read is not
+   * reported as a failure; it is retried in the background instead.
+   */
+  private async refreshAfter(fns: FunctionId[], attempt = 0): Promise<void> {
+    try {
+      await this.refresh(fns)
+    } catch {
+      if (attempt + 1 >= REFRESH_RETRIES || this.status !== 'connected' || this.disposed) return
+      // One pending retry covers every function still waiting for a re-read.
+      for (const fn of fns) this.retryFns.add(fn)
+      clearTimeout(this.refreshTimer)
+      this.refreshTimer = setTimeout(() => {
+        const all = [...this.retryFns]
+        this.retryFns.clear()
+        void this.refreshAfter(all, attempt + 1)
+      }, REFRESH_RETRY_MS)
+    }
   }
 
   private onResultsPush(r: ResultsPush) {
@@ -319,6 +367,7 @@ export class RealDevice implements Device {
   async setFunction(id: FunctionId): Promise<void> {
     this.ensureConnected()
     this.requireFn(id)
+    if (this.learnInFlight > 0 && id !== this.active) this.learnCancelled = true
     this.fnInFlight++
     this.quietUntil = this.now() + OWN_SWITCH_QUIET_MS
     try {
@@ -339,10 +388,24 @@ export class RealDevice implements Device {
     const x = clampInt(region.x, 0, FRAME_W - 1)
     const y = clampInt(region.y, 0, FRAME_H - 1)
     const rect = { x, y, width: clampInt(region.width, 1, FRAME_W - x), height: clampInt(region.height, 1, FRAME_H - y) }
-    const f = await this.call(Cmd.Learn, encodeLearn(1, rect), LEARN_TIMEOUT_MS, (code) =>
-      code === ErrorCode.Full ? new LearnError('full') : code === ErrorCode.BadParam ? new LearnError('no-color') : undefined,
-    )
-    await this.refresh([1])
+    this.learnInFlight++
+    let f: Frame
+    try {
+      f = await this.call(Cmd.Learn, encodeLearn(1, rect), LEARN_TIMEOUT_MS, (code) => {
+        if (code === ErrorCode.Full) return new LearnError('full')
+        if (code === ErrorCode.Busy) return new LearnError('busy')
+        // BAD_PARAM: no colour in the region, or the LEARN was cancelled by our function switch
+        if (code === ErrorCode.BadParam) return new LearnError(this.learnCancelled ? 'cancelled' : 'no-color')
+        return undefined
+      })
+    } finally {
+      if (--this.learnInFlight <= 0) {
+        this.learnInFlight = 0
+        this.learnCancelled = false
+      }
+    }
+    await this.refreshAfter([1])
+    if (f.payload.length !== 1) throw new DeviceOpError('failed', `0x30 reply length ${f.payload.length}`)
     return f.payload[0]
   }
 
@@ -350,7 +413,7 @@ export class RealDevice implements Device {
     this.ensureConnected()
     this.requireFn(fn)
     await this.call(Cmd.Forget, encodeForget(fn, id))
-    await this.refresh([fn])
+    await this.refreshAfter([fn])
   }
 
   forgetAll(fn: FunctionId): Promise<void> {
@@ -369,7 +432,7 @@ export class RealDevice implements Device {
     const n = nameBytes(name)
     if (n > NAME_MAX_BYTES) throw new Error(`name is ${n} bytes in UTF-8, max ${NAME_MAX_BYTES}`)
     await this.sendName(fn, id, name)
-    await this.refresh([fn])
+    await this.refreshAfter([fn])
   }
 
   /** SET_CONFIG with the whole config; the device answers with what it applied (clamped). */
@@ -404,16 +467,20 @@ export class RealDevice implements Device {
     })
   }
 
-  async save(): Promise<void> {
-    this.ensureConnected()
-    await this.call(Cmd.Save, undefined, FLASH_TIMEOUT_MS)
-    await this.refresh([])
+  save(): Promise<void> {
+    return this.queued(async () => {
+      this.ensureConnected()
+      await this.call(Cmd.Save, undefined, FLASH_TIMEOUT_MS)
+      await this.refreshAfter([])
+    })
   }
 
-  async factoryReset(): Promise<void> {
-    this.ensureConnected()
-    await this.call(Cmd.FactoryReset, undefined, FLASH_TIMEOUT_MS)
-    await this.loadAll()
+  factoryReset(): Promise<void> {
+    return this.queued(async () => {
+      this.ensureConnected()
+      await this.call(Cmd.FactoryReset, undefined, FLASH_TIMEOUT_MS)
+      await this.refreshAfter(this.supportedFns())
+    })
   }
 
   exportConfig(): string {
@@ -434,8 +501,10 @@ export class RealDevice implements Device {
   private async applyFile(file: ReturnType<typeof parseConfig>): Promise<ImportOutcome> {
     this.ensureConnected()
     const cur = this.requireConfig()
-    await this.applyConfig(toWire(cur, file.params, file.system))
     const fns = this.supportedFns()
+    // Check the shared name table first, so a file that cannot fit never wipes the tag names.
+    if (this.namesAfterImport(file, fns) > NAME_TABLE_SIZE) throw new DeviceOpError('names-full', 'name table full')
+    await this.applyConfig(toWire(cur, file.params, file.system))
     let colorsNeedRelearn = false
     if (fns.includes(1)) {
       for (const e of file.learned[1]) {
@@ -453,14 +522,27 @@ export class RealDevice implements Device {
       await this.call(Cmd.Forget, encodeForget(2, FORGET_ALL))
       for (const e of file.learned[2]) if (e.name) await this.sendName(2, e.id, e.name)
     }
-    await this.refresh(fns)
+    await this.refreshAfter(fns)
     return { colorsNeedRelearn }
+  }
+
+  /** Names on the board after applying `file`: colour names stay per board ID, tag names come from the file. */
+  private namesAfterImport(file: ReturnType<typeof parseConfig>, fns: FunctionId[]): number {
+    const colours = this.learned[1].filter((b) => {
+      const e = file.learned[1].find((x) => x.id === b.id)
+      const want = e?.color
+      const same = !!want && !!b.color && b.color.every((v, i) => v === want[i])
+      return (same && e ? e.name : b.name) !== ''
+    }).length
+    const tags = (fns.includes(2) ? file.learned[2] : this.learned[2]).filter((e) => e.name !== '').length
+    return colours + tags
   }
 
   dispose() {
     if (this.disposed) return
     this.disposed = true
     clearTimeout(this.auto)
+    clearTimeout(this.refreshTimer)
     this.changes.clear()
     this.frames.clear()
     this.results.clear()

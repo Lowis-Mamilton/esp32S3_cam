@@ -4,7 +4,7 @@ import { afterEach, beforeEach, expect, test, vi } from 'vitest'
 import { DemoDevice } from '../../device/DemoDevice'
 import { RealDevice } from '../../device/RealDevice'
 import { ResultsStore } from '../../device/resultsStore'
-import { Cmd } from '../../protocol/messages'
+import { Cmd, ErrorCode } from '../../protocol/messages'
 import { FakeFirmware } from '../../testing/fakeFirmware'
 import type { Device, FunctionId } from '../../device/types'
 import { I18nProvider } from '../../i18n'
@@ -394,4 +394,39 @@ test('real board settings show the device values once connected', async () => {
   expect(i2c()).toHaveValue('31')
   expect(screen.getByRole('radio', { name: '9600' })).toBeChecked()
   expect(screen.getByRole('slider', { name: '亮度' })).toHaveValue('12')
+})
+
+// ---- review fix round ----
+test('a device error during import is an operation failure with a localized reason, not a bad file', async () => {
+  const fw = new FakeFirmware()
+  const r = new RealDevice(fw.serial())
+  await waitFor(() => expect(r.snapshot().status).toBe('connected'))
+  mount((x) => <PanelHarness device={x} fn={1} />, r)
+  fw.failWith.set(Cmd.SetName, ErrorCode.Full)
+  const file = JSON.parse(r.exportConfig())
+  file.learned[2] = [{ id: 3, name: '起點' }]
+  openParams()
+  upload(JSON.stringify(file))
+  expect(await screen.findByText('名字已達上限（最多 32 個）')).toBeInTheDocument()
+  expect(screen.getByText('操作失敗', { exact: false })).toBeInTheDocument()
+  expect(screen.getByText('板子上的設定可能只更新了一部分')).toBeInTheDocument()
+  expect(screen.queryByText(/設定檔格式不正確/)).toBeNull()
+  expect(screen.queryByText('已匯入設定')).toBeNull()
+})
+
+test('older firmware without config: settings and params are disabled up front with 需要更新韌體', async () => {
+  const r = await connectedReal([1])
+  mount((x) => <SettingsHarness device={x} />, r)
+  expect(screen.getByText('需要更新韌體')).toBeInTheDocument()
+  expect(screen.getByRole('radio', { name: '9600' })).toBeDisabled()
+  expect(screen.getByRole('slider', { name: '亮度' })).toBeDisabled()
+  expect(screen.getByRole('button', { name: '恢復原廠設定' })).toBeDisabled()
+})
+
+test('older firmware without config: params tab is disabled up front', async () => {
+  mount((x) => <PanelHarness device={x} fn={1} />, await connectedReal([1]))
+  openParams()
+  expect(screen.getAllByText('需要更新韌體').length).toBeGreaterThan(0)
+  expect(screen.getByRole('slider', { name: '容許範圍' })).toBeDisabled()
+  expect(screen.getByRole('button', { name: '匯出' })).toBeDisabled()
 })

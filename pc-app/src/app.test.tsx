@@ -372,6 +372,9 @@ test('when the R4 changes the function, Studio follows and says so; its own stal
   expect(await screen.findByText('已切換到 AprilTag（由其他裝置變更）')).toBeInTheDocument()
   expect(screen.getByRole('button', { name: 'AprilTag' })).toHaveAttribute('aria-current', 'page')
   expect((await screen.findAllByText('Tag 3')).length).toBeGreaterThan(0)
+  // the board already runs AprilTag: no echo SET_FUNCTION(2)
+  await new Promise((r) => setTimeout(r, 50))
+  expect(fw.requests.filter((r) => r.cmd === Cmd.SetFunction && r.payload[0] === 2)).toHaveLength(0)
 })
 
 test('real board: results pushes show up in the results tab', async () => {

@@ -316,3 +316,85 @@ test('concurrent config edits do not undo each other (each is merged into the co
   expect(d.snapshot().system.ledBrightness).toBe(10)
   expect(d.snapshot().params.color.tolerance).toBe(80)
 })
+
+// ---- review fix round ----
+test('connect retries GET_CONFIG and GET_LEARNED once when a reply is lost', async () => {
+  const fw = new FakeFirmware()
+  fw.drop.set(Cmd.GetConfig, 1)
+  fw.drop.set(Cmd.GetLearned, 1)
+  fw.colors = [{ id: 1, rgb: [255, 0, 0] }]
+  const d = new RealDevice(fw.serial())
+  devices.push(d)
+  await waitFor(() => expect(d.snapshot().status).toBe('connected'), { timeout: 4000 })
+  expect(d.snapshot().configKnown).toBe(true)
+  expect(d.snapshot().learned[1]).toHaveLength(1)
+  expect(sent(fw, Cmd.GetConfig)).toHaveLength(2)
+}, 10000)
+
+test('a second LEARN while one is pending is BUSY -> LearnError busy; the first still succeeds', async () => {
+  const fw = new FakeFirmware()
+  fw.learnDelayMs = 300
+  const d = await connected(fw)
+  const first = d.learnColor({ x: 0, y: 0, width: 8, height: 8 })
+  await expect(d.learnColor({ x: 0, y: 0, width: 8, height: 8 })).rejects.toEqual(expect.objectContaining({ code: 'busy' }))
+  await expect(first).resolves.toBe(1)
+})
+
+test('a LEARN cancelled by our own function switch rejects as cancelled, not as "no colour"', async () => {
+  const fw = new FakeFirmware()
+  fw.learnDelayMs = 300
+  const d = await connected(fw)
+  await d.setFunction(1)
+  const learning = d.learnColor({ x: 0, y: 0, width: 8, height: 8 })
+  await d.setFunction(2)
+  await expect(learning).rejects.toEqual(expect.objectContaining({ code: 'cancelled' }))
+})
+
+test('a malformed LEARN reply is an error, not a made-up id', async () => {
+  const fw = new FakeFirmware()
+  fw.learnDelayMs = 0
+  fw.learnReply = new Uint8Array([1, 2])
+  const d = await connected(fw)
+  await expect(d.learnColor({ x: 0, y: 0, width: 8, height: 8 })).rejects.toThrow(/length/)
+})
+
+test('out-of-order replies settle the right operations', async () => {
+  const fw = new FakeFirmware()
+  fw.colors = [{ id: 1, rgb: [255, 0, 0] }]
+  const d = await connected(fw)
+  fw.replyDelay.set(Cmd.SetConfig, 200)
+  await Promise.all([d.setSystem({ ledBrightness: 10 }), d.setName(1, 1, 'red')])
+  expect(d.snapshot().system.ledBrightness).toBe(10)
+  expect(d.snapshot().learned[1][0].name).toBe('red')
+})
+
+test('a failed refresh after a successful operation still resolves and is retried in the background', async () => {
+  const fw = new FakeFirmware()
+  const d = await connected(fw)
+  fw.failWith.set(Cmd.GetLearned, ErrorCode.Busy)
+  await expect(d.setName(2, 4, 'four')).resolves.toBeUndefined()
+  fw.failWith.delete(Cmd.GetLearned)
+  await waitFor(() => expect(d.snapshot().learned[2]).toEqual([{ id: 4, name: 'four' }]), { timeout: 3000 })
+})
+
+test('save and factoryReset wait for queued config edits and later edits wait for them', async () => {
+  const fw = new FakeFirmware()
+  fw.saveDelayMs = 300
+  const d = await connected(fw)
+  const reset = d.factoryReset()
+  const edit = d.setSystem({ ledBrightness: 10 })
+  await Promise.all([reset, edit])
+  expect(fw.config.ledBrightness).toBe(10)
+  expect(d.snapshot().system.ledBrightness).toBe(10)
+})
+
+test('import checks the 32-name table before wiping tag names', async () => {
+  const fw = new FakeFirmware()
+  fw.names.set('2:9', 'keep')
+  const d = await connected(fw)
+  const file = JSON.parse(d.exportConfig())
+  file.learned[2] = Array.from({ length: 33 }, (_, i) => ({ id: i, name: `t${i}` }))
+  await expect(d.importConfig(JSON.stringify(file))).rejects.toEqual(expect.objectContaining({ code: 'names-full' }))
+  expect(sent(fw, Cmd.Forget)).toHaveLength(0)
+  expect(fw.names.get('2:9')).toBe('keep')
+})

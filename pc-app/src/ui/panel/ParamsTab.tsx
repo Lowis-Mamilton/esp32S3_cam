@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { ConfigFileError } from '../../device/config'
 import { NotSupportedError, type Device, type FunctionParams } from '../../device/types'
 import { useT, type MessageKey } from '../../i18n'
 import type { FunctionId } from '../layout/types'
@@ -81,7 +82,13 @@ function readText(file: File): Promise<string> {
 const MAX_CONFIG_BYTES = 1024 * 1024
 const REVOKE_DELAY_MS = 1000
 
-type ImportState = { kind: 'ok'; relearn: boolean } | { kind: 'bad'; key?: MessageKey; raw?: string } | null
+type ImportState =
+  | { kind: 'ok'; relearn: boolean }
+  | { kind: 'bad'; key?: MessageKey; raw?: string }
+  /** The device refused part of a valid file; the reason is shown by the guard. */
+  | { kind: 'partial' }
+  | null
+const isFileError = (e: unknown) => e instanceof ConfigFileError || (e instanceof Error && e.name === 'ConfigFileError')
 
 /** Export / import of the whole device config (all functions + system). */
 function ConfigIO({ device, disabled, guard }: { device: Device | null; disabled: boolean; guard: Guard }) {
@@ -115,12 +122,14 @@ function ConfigIO({ device, disabled, guard }: { device: Device | null; disabled
       const out = await device.importConfig(await readText(file))
       setState({ kind: 'ok', relearn: out.colorsNeedRelearn })
     } catch (e) {
-      // A firmware that cannot take the config is not a bad file.
-      if (isNotSupported(e)) void guard.run(() => Promise.reject(e))
-      else {
+      if (isFileError(e)) {
         const msg = e instanceof Error ? e.message : String(e)
         setState(/not JSON/.test(msg) ? { kind: 'bad', key: 'cfgNotJson' } : { kind: 'bad', raw: msg })
+        return
       }
+      // Not a bad file: the device refused or failed (names full, busy, timeout, disconnected, old firmware).
+      void guard.run(() => Promise.reject(e))
+      if (!isNotSupported(e)) setState({ kind: 'partial' })
     }
   }
   return (
@@ -152,6 +161,7 @@ function ConfigIO({ device, disabled, guard }: { device: Device | null; disabled
         </p>
       )}
       {state?.kind === 'ok' && state.relearn && <p className="rp-hint">{t('cfgRelearn')}</p>}
+      {state?.kind === 'partial' && <p className="rp-hint">{t('cfgPartial')}</p>}
       {state?.kind === 'bad' && (
         <p role="alert" className="rp-error">
           {t('cfgBad')} <small>{state.key ? t(state.key) : state.raw}</small>

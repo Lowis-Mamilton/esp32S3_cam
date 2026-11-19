@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { isValidI2cAddress } from '../../device/config'
-import { needsConnection, type Device, type DeviceSnapshot } from '../../device/types'
+import { lacksConfig, needsConnection, type Device, type DeviceSnapshot } from '../../device/types'
 import { useT } from '../../i18n'
 import { useGuard } from '../panel/guard'
 import { Slider } from '../panel/ParamsTab'
@@ -27,13 +27,14 @@ export default function SettingsPage({ device, snapshot }: Props) {
   const needConnect = needsConnection(snapshot)
   // Not read from the device (disconnected or older firmware): the defaults are not the device's values.
   const unknown = !snapshot.configKnown
-  const disabled = !device || needConnect || guard.needFirmware
+  const needFirmware = guard.needFirmware || lacksConfig(snapshot)
+  const disabled = !device || needConnect || needFirmware
   const set = (patch: Partial<typeof system>) => (device ? guard.run(() => device.setSystem(patch)) : undefined)
 
   // The address is only sent on Enter or blur: a half-typed value must never reach the bus.
   const [draft, setDraft] = useState<string | null>(null)
   const [rangeError, setRangeError] = useState(false)
-  const shown = guard.needFirmware ? null : draft
+  const shown = needFirmware ? null : draft
   const hex = shown ?? (unknown ? DASH : system.i2cAddress.toString(16).toUpperCase())
   const commitHex = () => {
     if (shown === null) return
@@ -71,7 +72,7 @@ export default function SettingsPage({ device, snapshot }: Props) {
   return (
     <section className="pg">
       <h2>{t('pageSettings')}</h2>
-      {(needConnect || guard.needFirmware) && <p className="rp-hint rp-firmware">{t(needConnect ? 'needConnect' : 'needFirmware')}</p>}
+      {(needConnect || needFirmware) && <p className="rp-hint rp-firmware">{t(needConnect ? 'needConnect' : 'needFirmware')}</p>}
       {guard.error && (
         <p role="alert" className="rp-error">
           {t('opFailed')} <small>{guard.error}</small>

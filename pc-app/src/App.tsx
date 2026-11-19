@@ -83,10 +83,20 @@ export default function App({ serial }: Props) {
   useEffect(() => {
     if (!connected) results.clear()
   }, [connected, results])
+  // Skipped when the board already runs that function (e.g. after following the R4), and sent at most once per
+  // function and connection so an unexpected reply can never cause a request loop.
+  const active = snapshot.activeFunction
+  const sentFor = useRef<{ device: Device; fn: FunctionId } | null>(null)
   useEffect(() => {
-    if (!device || !connected) return
+    if (!device || !connected) {
+      sentFor.current = null
+      return
+    }
+    const already = sentFor.current?.device === device && sentFor.current.fn === lastFn
+    sentFor.current = { device, fn: lastFn }
+    if (active === lastFn || already) return
     device.setFunction(lastFn).catch(() => {})
-  }, [device, connected, lastFn])
+  }, [device, connected, lastFn, active])
 
   const onConnect = () => {
     if (!device) return

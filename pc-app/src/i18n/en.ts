@@ -113,5 +113,8 @@ export const en: Record<keyof typeof zhTW, string> = {
   cfgRelearn: 'Colors need to be learned again',
   nameLimit: 'Names are at most 48 bytes (UTF-8)',
   namesFull: 'Name table is full (max 32 names)',
-  mirrorView: 'Mirror view'
+  mirrorView: 'Mirror view',
+  learnBusy: 'Still learning, please wait',
+  learnCancelled: 'Learning cancelled (function changed)',
+  cfgPartial: 'The board may be only partly updated'
 }

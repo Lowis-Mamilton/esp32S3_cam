@@ -54,6 +54,8 @@ export interface DeviceSnapshot {
 }
 /** Real mode and not connected: nothing can be configured yet; the hint is "connect first". */
 export const needsConnection = (s: DeviceSnapshot): boolean => s.mode === 'real' && s.status !== 'connected'
+/** Connected, but the firmware has no config commands (GET_CONFIG unknown): config edits need newer firmware. */
+export const lacksConfig = (s: DeviceSnapshot): boolean => s.status === 'connected' && !s.configKnown
 
 export type FrameSource =
   | { kind: 'jpeg'; jpeg: Uint8Array; frameId?: number }
@@ -104,9 +106,10 @@ export class NotConnectedError extends Error {
 }
 
 /** learnColor rejection, shared by both backends; `code` selects the message. */
+export type LearnErrorCode = 'no-color' | 'full' | 'busy' | 'cancelled'
 export class LearnError extends Error {
-  readonly code: 'no-color' | 'full'
-  constructor(code: 'no-color' | 'full') {
+  readonly code: LearnErrorCode
+  constructor(code: LearnErrorCode) {
     super(code)
     this.name = 'LearnError'
     this.code = code

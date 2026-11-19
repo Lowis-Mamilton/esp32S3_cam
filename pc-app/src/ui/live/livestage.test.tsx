@@ -3,7 +3,7 @@ import { createRef } from 'react'
 import { afterEach, beforeEach, expect, test, vi } from 'vitest'
 import { DemoLearnError } from '../../device/demo/recognize'
 import { ResultsStore } from '../../device/resultsStore'
-import { NotConnectedError, NotSupportedError, type LearnedId, type Result } from '../../device/types'
+import { LearnError, NotConnectedError, NotSupportedError, type LearnedId, type Result } from '../../device/types'
 import { I18nProvider } from '../../i18n'
 import LiveStage, { type LiveStageHandle } from './LiveStage'
 
@@ -128,6 +128,8 @@ test('errors map to messages', async () => {
     [new DemoLearnError('full'), '最多只能學 7 個顏色'],
     [new NotSupportedError(), '需要更新韌體'],
     [new NotConnectedError(), '請先連線 MXCam'],
+    [new LearnError('busy'), '學習中，請稍候'],
+    [new LearnError('cancelled'), '學習已取消（功能已切換）'],
   ]
   for (const [err, msg] of cases) {
     const { unmount } = setup({ onLearn: () => Promise.reject(err) })

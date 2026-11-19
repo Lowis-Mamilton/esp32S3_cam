@@ -20,8 +20,16 @@ export const I2C_MIN = 0x08
 export const I2C_MAX = 0x77
 export const isValidI2cAddress = (v: unknown): v is number => isInt(v, I2C_MIN, I2C_MAX)
 
+/** The file itself is malformed (as opposed to a device refusing it). */
+export class ConfigFileError extends Error {
+  constructor(what: string) {
+    super(`invalid config: ${what}`)
+    this.name = 'ConfigFileError'
+  }
+}
+
 function bad(what: string): never {
-  throw new Error(`invalid config: ${what}`)
+  throw new ConfigFileError(what)
 }
 
 function parseLearned(fn: FunctionId, list: unknown): LearnedId[] {

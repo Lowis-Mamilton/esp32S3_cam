@@ -1,6 +1,6 @@
 import { useId, useRef, useState, type KeyboardEvent } from 'react'
 import type { ResultsStore } from '../../device/resultsStore'
-import { needsConnection, type Device, type DeviceSnapshot } from '../../device/types'
+import { lacksConfig, needsConnection, type Device, type DeviceSnapshot } from '../../device/types'
 import { useT, type MessageKey } from '../../i18n'
 import CodeTab from '../panel/CodeTab'
 import { useGuard } from '../panel/guard'
@@ -29,7 +29,10 @@ export default function RightPanel({ device, snapshot, fn, results }: Props) {
   const guard = useGuard(device)
   const needConnect = needsConnection(snapshot)
   const blocked = !device || needConnect || !snapshot.supported.includes(fn) || guard.needFirmware
+  // Params live in the device config; older firmware cannot read or change it.
+  const paramsBlocked = blocked || lacksConfig(snapshot)
   const [tab, setTab] = useState<PanelTab>('results')
+  const tabBlocked = tab === 'params' ? paramsBlocked : blocked
   const base = useId()
   const refs = useRef<Record<PanelTab, HTMLButtonElement | null>>({ results: null, learn: null, params: null, code: null })
 
@@ -72,7 +75,7 @@ export default function RightPanel({ device, snapshot, fn, results }: Props) {
         ))}
       </div>
       <div role="tabpanel" id={`${base}-panel`} aria-labelledby={`${base}-${tab}`} className="rp-tabpanel">
-        {tab !== 'results' && tab !== 'code' && blocked && <p className="rp-hint rp-firmware">{t(needConnect ? 'needConnect' : 'needFirmware')}</p>}
+        {tab !== 'results' && tab !== 'code' && tabBlocked && <p className="rp-hint rp-firmware">{t(needConnect ? 'needConnect' : 'needFirmware')}</p>}
         {guard.error && (
           <p role="alert" className="rp-error">
             {t('opFailed')} <small>{guard.error}</small>
@@ -80,7 +83,7 @@ export default function RightPanel({ device, snapshot, fn, results }: Props) {
         )}
         {tab === 'results' && <ResultsTab fn={fn} results={results} learned={snapshot.learned[fn]} />}
         {tab === 'learn' && <LearnTab device={device} fn={fn} learned={snapshot.learned[fn]} disabled={blocked} guard={guard} />}
-        {tab === 'params' && <ParamsTab device={device} fn={fn} params={snapshot.params} disabled={blocked} guard={guard} />}
+        {tab === 'params' && <ParamsTab device={device} fn={fn} params={snapshot.params} disabled={paramsBlocked} guard={guard} />}
         {tab === 'code' && <CodeTab fn={fn} />}
       </div>
       <SaveBar device={device} dirty={snapshot.dirty} disabled={needConnect || !snapshot.supported.includes(fn)} />

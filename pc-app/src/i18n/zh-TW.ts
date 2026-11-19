@@ -111,5 +111,8 @@ export const zhTW = {
   cfgRelearn: '顏色需要重新學習',
   nameLimit: '名稱最多 48 bytes（中文約 16 字）',
   namesFull: '名字已達上限（最多 32 個）',
-  mirrorView: '鏡像顯示'
+  mirrorView: '鏡像顯示',
+  learnBusy: '學習中，請稍候',
+  learnCancelled: '學習已取消（功能已切換）',
+  cfgPartial: '板子上的設定可能只更新了一部分'
 } as const

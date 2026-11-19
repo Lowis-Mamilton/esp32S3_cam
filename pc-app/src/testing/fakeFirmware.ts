@@ -88,6 +88,13 @@ export class FakeFirmware {
   unknown = new Set<number>()
   /** Per-command error override: cmd -> error code. */
   failWith = new Map<number, number>()
+  /** cmd -> how many of the next requests to leave unanswered (lost reply). */
+  drop = new Map<number, number>()
+  /** cmd -> reply delay in ms, so a later request can be answered first (out of order). */
+  replyDelay = new Map<number, number>()
+  /** Replaces the LEARN reply payload (e.g. a malformed one). */
+  learnReply: Uint8Array | null = null
+  private pendingLearn: { f: Frame; timer: ReturnType<typeof setTimeout> } | null = null
   requests: Frame[] = []
   readonly port: {
     getInfo(): SerialPortInfo
@@ -162,6 +169,15 @@ export class FakeFirmware {
 
   private reply(f: Frame, r: Reply) {
     if (r === null) return
+    const delay = this.replyDelay.get(f.cmd)
+    if (delay) {
+      setTimeout(() => this.replyNow(f, r), delay)
+      return
+    }
+    this.replyNow(f, r)
+  }
+
+  private replyNow(f: Frame, r: Uint8Array | { error: number }) {
     if (r instanceof Uint8Array) this.send(responseOf(f.cmd), f.seq, r)
     else this.send(Cmd.Error, f.seq, new Uint8Array([f.cmd, r.error]))
   }
@@ -193,6 +209,11 @@ export class FakeFirmware {
   }
 
   private answer(f: Frame) {
+    const dropping = this.drop.get(f.cmd) ?? 0
+    if (dropping > 0) {
+      this.drop.set(f.cmd, dropping - 1)
+      return
+    }
     if (this.unknown.has(f.cmd)) return this.reply(f, { error: ErrorCode.UnknownCmd })
     const forced = this.failWith.get(f.cmd)
     if (forced !== undefined) return this.reply(f, { error: forced })
@@ -207,6 +228,12 @@ export class FakeFirmware {
         return this.reply(f, new Uint8Array(0))
       case Cmd.SetFunction:
         if (p[0] !== 0 && !this.functionIds.includes(p[0])) return this.reply(f, { error: ErrorCode.BadParam })
+        if (p[0] !== this.active && this.pendingLearn) {
+          // a function switch cancels a pending LEARN, which then answers BAD_PARAM
+          clearTimeout(this.pendingLearn.timer)
+          this.reply(this.pendingLearn.f, { error: ErrorCode.BadParam })
+          this.pendingLearn = null
+        }
         this.active = p[0]
         return this.reply(f, new Uint8Array([p[0]]))
       case Cmd.GetFunction:
@@ -229,7 +256,10 @@ export class FakeFirmware {
         return this.reply(f, this.learnedPayload(p[0]))
       case Cmd.Learn: {
         if (p[0] !== 1) return this.reply(f, { error: ErrorCode.BadParam })
-        setTimeout(() => {
+        if (this.pendingLearn) return this.reply(f, { error: ErrorCode.Busy })
+        const timer = setTimeout(() => {
+          this.pendingLearn = null
+          if (this.learnReply) return this.reply(f, this.learnReply)
           const rgb = this.learnRgb
           if (!rgb) return this.reply(f, { error: ErrorCode.BadParam })
           const same = this.colors.find((c) => c.rgb.join() === rgb.join())
@@ -242,6 +272,7 @@ export class FakeFirmware {
           this.config.dirty = true
           this.reply(f, new Uint8Array([id]))
         }, this.learnDelayMs)
+        this.pendingLearn = { f, timer }
         return
       }
       case Cmd.Forget: {

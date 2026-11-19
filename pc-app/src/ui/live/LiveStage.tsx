@@ -4,7 +4,7 @@ import { LearnError, NotConnectedError, NotSupportedError, type FrameSource, typ
 import { useT } from '../../i18n'
 import type { FunctionId } from '../layout/types'
 import { FRAME_H, FRAME_W, boxToScreen, mirrorRegion, toFrame, toScreen, type Viewport } from './geometry'
-import { idColorVar, labelFor } from './labels'
+import { LEARN_ERROR_KEY, idColorVar, labelFor } from './labels'
 
 export interface LiveStageHandle {
   draw(f: FrameSource): void
@@ -163,7 +163,7 @@ export default function LiveStage({ ref, connected, fps, kbps, fn, canLearn, onL
       } catch (e) {
         if (e instanceof NotSupportedError) say(t('learnNeedFirmware'), true)
         else if (e instanceof NotConnectedError) say(t('needConnect'), true)
-        else if (e instanceof LearnError) say(t(e.code === 'full' ? 'learnFull' : 'learnNoColor'), true)
+        else if (e instanceof LearnError) say(t(LEARN_ERROR_KEY[e.code]), true)
         else say(t('learnFailed'), true)
       }
     },

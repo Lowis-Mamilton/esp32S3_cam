@@ -1,5 +1,13 @@
-import type { LearnedId, Result } from '../../device/types'
-import type { TFn } from '../../i18n'
+import type { LearnErrorCode, LearnedId, Result } from '../../device/types'
+import type { MessageKey, TFn } from '../../i18n'
+
+/** Message for a LearnError, shared by the live view and the panels. */
+export const LEARN_ERROR_KEY: Record<LearnErrorCode, MessageKey> = {
+  'no-color': 'learnNoColor',
+  full: 'learnFull',
+  busy: 'learnBusy',
+  cancelled: 'learnCancelled',
+}
 
 /** Label text per docs/studio-ui.md section 3. `learned` is the list of the result's own function. */
 export function labelFor(r: Result, learned: LearnedId[], showNames: boolean, t: TFn): string {

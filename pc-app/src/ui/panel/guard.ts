@@ -1,5 +1,6 @@
 import { useCallback, useState } from 'react'
-import { DeviceOpError, LearnError, NotSupportedError, type Device } from '../../device/types'
+import { DeviceOpError, LearnError, NotConnectedError, NotSupportedError, type Device } from '../../device/types'
+import { LEARN_ERROR_KEY } from '../live/labels'
 import { useT, type TFn } from '../../i18n'
 
 export interface Guard {
@@ -23,7 +24,9 @@ const isNotSupported = (e: unknown) => e instanceof NotSupportedError || (e inst
 /** Known device refusals get a localized text; anything else keeps its raw message. */
 function detail(e: unknown, t: TFn): string {
   if (e instanceof DeviceOpError && e.code === 'names-full') return t('namesFull')
-  if (e instanceof LearnError) return t(e.code === 'full' ? 'learnFull' : 'learnNoColor')
+  if (e instanceof LearnError) return t(LEARN_ERROR_KEY[e.code])
+  if (e instanceof NotConnectedError) return t('needConnect')
+  if (e instanceof Error && /timeout|not responding/i.test(e.message)) return t('errNoResponse')
   return e instanceof Error ? e.message || e.name : String(e)
 }
 
