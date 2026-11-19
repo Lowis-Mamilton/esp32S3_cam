@@ -230,6 +230,8 @@ payload 與 GET_RESULTS 的回應相同。每處理完一張畫面推送一次�
 
 UART 鮑率、I2C 位址的變更**存檔並重開機後**才生效（避免改到一半斷線）。
 
+夾限規則：數值欄位超出範圍時夾到最近的邊界；`uart_baud` 不是 115200/9600、`i2c_address` 不在 0x08–0x77 時改回預設值（115200、0x5A）；`config_version` 不是 1 時整包拒絕（`BAD_PARAM`）。
+
 ### 0x42 SAVE / 0x43 FACTORY_RESET
 
 - SAVE：把學習資料、名字和 Config 寫進 NVS。回應 `0xC2`：空。之後 `dirty` = 0。
