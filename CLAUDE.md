@@ -20,7 +20,7 @@ MXCam：ESP32-S3 視覺感測器，搭配 MATRIX Mini R4 使用，設定由電�
 pc-app（MXCam Studio）程式依用途分：
 - `src/i18n`：多語系（繁中 / English）
 - `src/device`：Device 抽象（`RealDevice` 接 Web Serial、`DemoDevice` 展示模式）；`config.ts` 驗證設定；`src/device/demo`（scene / recognize）是展示模式的模擬畫面與辨識
-- `src/ui`：`layout`（外框與導覽）、`live`（`LiveStage` 即時畫面、geometry、labels）、`panel`（側邊面板）、`pages`（功能頁）。CSS class 前綴：`ls-`（live stage）、`rp-`（right panel）、`pg-`（pages）
+- `src/ui`：`layout`（外框與導覽）、`live`（`LiveStage` 即時畫面、geometry、labels）、`panel`（右側面板的分頁內容）、`pages`（設定頁與韌體頁）。CSS class 前綴：`ls-`（live stage）、`rp-`（right panel）、`pg-`（設定／韌體頁）、`tb-`（top bar）、`app-`（外框）
 - 介面規格見 `docs/studio-ui.md`
 
 正式 repo：github.com/Lowis-Mamilton/esp32S3_cam
@@ -60,7 +60,7 @@ arduino-lib（在 repo 根目錄）：
 ```
 arduino-cli compile --fqbn arduino:renesas_uno:unor4wifi --library arduino-lib arduino-lib/examples/HelloMXCam
 ```
-目前沒有單元測試，以編譯通過為準。
+編譯之外，協定的 C 測試在 `arduino-lib/extras/host-test`（見上方「電腦上的 C 測試」）；函式庫其餘部分以編譯通過為準。
 
 CI（`.github/workflows/ci.yml`）：firmware、pc-app、arduino-lib、host-tests 四個 job。
 

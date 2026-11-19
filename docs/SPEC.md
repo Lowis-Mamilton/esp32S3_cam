@@ -146,7 +146,7 @@ USB、UART、I2C 三種傳輸用同一套封包。
 - **Web Serial PWA**，TypeScript + Vite + React（見 ADR-0004）
 - 介面細節（版面、功能頁、學習、參數、展示模式、外觀）見 **`docs/studio-ui.md`**；Studio UI 已依此實作（含展示模式），GitHub Pages 已上線：https://lowis-mamilton.github.io/esp32S3_cam/
 - 支援 Windows、macOS 上的 Chrome / Edge；Safari 不支援 Web Serial
-- 發佈到 GitHub Pages，可安裝到桌面、離線可用
+- 發佈到 GitHub Pages（已完成）；可安裝到桌面、離線可用（**尚未完成**，M5 做 PWA）
 - 介面模仿 HUSKYLENS 的螢幕介面：即時畫面＋辨識框、功能切換、顏色學習、參數調整、存到板子
 - 內建網頁燒錄韌體（esptool-js），使用者不需安裝 ESP-IDF
 - 語言：繁體中文、English（從一開始就做多語系）
