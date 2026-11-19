@@ -211,6 +211,26 @@ describe('MxcamConnection', () => {
     await conn.disconnect()
   })
 
+  test('a stale ERROR for another command with the same seq does not fail the pending request', async () => {
+    const held: Frame[] = []
+    const { conn, port } = setup((f) => {
+      if (f.cmd === Cmd.GetInfo) return infoPayload()
+      if (f.cmd === Cmd.GetFunction) {
+        held.push(f)
+        return null
+      }
+      return new Uint8Array(0)
+    })
+    await conn.connect()
+    const req = conn.request(Cmd.GetFunction, new Uint8Array(0))
+    await vi.waitFor(() => expect(held.length).toBe(1))
+    // e.g. a LEARN-cancel ERROR that was still in the USB ring
+    port.push(encodeFrame(Cmd.Error, held[0].seq, new Uint8Array([Cmd.Learn, 3])))
+    port.push(encodeFrame(responseOf(Cmd.GetFunction), held[0].seq, new Uint8Array([2])))
+    expect([...(await req).payload]).toEqual([2])
+    await conn.disconnect()
+  })
+
   test('request times out and rejects', async () => {
     const { conn } = setup(silentOn(Cmd.GetFunction))
     await conn.connect()

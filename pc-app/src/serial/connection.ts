@@ -290,6 +290,8 @@ export class MxcamConnection {
     if (!p) return // late/unknown response
     if (f.cmd === Cmd.Error) {
       const e = parseError(f.payload)
+      // A stale ERROR (e.g. a LEARN cancel left in the USB ring) with a recycled seq must not fail an unrelated request.
+      if (e.cmd !== p.cmd) return
       this.settle(f.seq, () => p.reject(new MxcamError(e.cmd, e.code)))
     } else if (f.cmd === responseOf(p.cmd)) {
       this.settle(f.seq, () => p.resolve(f))

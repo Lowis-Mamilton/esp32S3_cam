@@ -110,10 +110,13 @@ export const en: Record<keyof typeof zhTW, string> = {
   cfgBad: 'Config file is not valid',
   copyFailed: 'Copy failed. Select the code and copy it by hand',
   fnSwitched: 'Switched to {fn} (changed by another device)',
+  fnSwitchedNone: "Another device switched to 'None'",
+  errFnSwitch: 'Could not switch function',
   cfgRelearn: 'Colors need to be learned again',
   nameLimit: 'Names are at most 48 bytes (UTF-8)',
   namesFull: 'Name table is full (max 32 names)',
   mirrorView: 'Mirror view',
+  coordsTrueImage: "Coordinates are the camera's true-image coordinates (what the R4 receives)",
   learnBusy: 'Still learning, please wait',
   learnCancelled: 'Learning cancelled (function changed)',
   cfgPartial: 'The board may be only partly updated'

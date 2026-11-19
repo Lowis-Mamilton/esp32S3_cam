@@ -106,6 +106,18 @@ test('results tab lists the active results with integers, and an empty hint', ()
   expect(screen.getByText('目前沒有辨識結果')).toBeInTheDocument()
 })
 
+test('results tab hints that coordinates are true-image ones while the mirror view is on', () => {
+  const r: Result[] = [{ id: 1, kind: 'color', x: 10, y: 20, width: 30, height: 40 }]
+  localStorage.setItem('mxcam.mirror', '1')
+  const { unmount } = setup(1, r)
+  expect(screen.getByText('座標是鏡頭真實影像的座標（R4 收到的數字）')).toBeInTheDocument()
+  unmount()
+  localStorage.setItem('mxcam.mirror', '0')
+  setup(1, r)
+  expect(screen.queryByText(/座標是鏡頭真實影像/)).toBeNull()
+  localStorage.removeItem('mxcam.mirror')
+})
+
 test('face results show a confidence column', () => {
   setup(3, [{ id: 0, kind: 'face', x: 1, y: 2, width: 3, height: 4, confidence: 87.6 }])
   expect(screen.getByRole('columnheader', { name: '信心度' })).toBeInTheDocument()

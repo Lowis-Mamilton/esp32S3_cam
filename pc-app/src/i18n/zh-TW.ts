@@ -108,10 +108,13 @@ export const zhTW = {
   cfgBad: '設定檔格式不正確',
   copyFailed: '複製失敗，請手動選取',
   fnSwitched: '已切換到 {fn}（由其他裝置變更）',
+  fnSwitchedNone: '其他裝置把功能切換成「無功能」',
+  errFnSwitch: '切換功能失敗',
   cfgRelearn: '顏色需要重新學習',
   nameLimit: '名稱最多 48 bytes（中文約 16 字）',
   namesFull: '名字已達上限（最多 32 個）',
   mirrorView: '鏡像顯示',
+  coordsTrueImage: '座標是鏡頭真實影像的座標（R4 收到的數字）',
   learnBusy: '學習中，請稍候',
   learnCancelled: '學習已取消（功能已切換）',
   cfgPartial: '板子上的設定可能只更新了一部分'

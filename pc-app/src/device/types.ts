@@ -67,7 +67,7 @@ export interface Device {
   onFrame(cb: (frame: FrameSource) => void): () => void
   onResults(cb: (results: Result[], meta?: ResultsMeta) => void): () => void
   /** The device switched function on another host's request (e.g. the R4). */
-  onFunctionChange(cb: (fn: FunctionId) => void): () => void
+  onFunctionChange(cb: (fn: FunctionId | 0) => void): () => void
   /** Extension: stream statistics for the live view. */
   onStats(cb: (s: { fps: number; kbps: number }) => void): () => void
   connect(): Promise<void>

@@ -1,7 +1,7 @@
 import { X } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { ResultsStore } from './device/resultsStore'
-import { needsConnection, type Device, type FunctionId } from './device/types'
+import { needsConnection, NotSupportedError, type Device, type FunctionId } from './device/types'
 import { useDevice } from './device/useDevice'
 import { describeError, type ErrorText } from './i18n/core'
 import { useT, type MessageKey } from './i18n'
@@ -15,6 +15,7 @@ import LiveStage, { type LiveStageHandle } from './ui/live/LiveStage'
 
 const FN_KEY: Record<FunctionId, MessageKey> = { 1: 'fnColor', 2: 'fnTag', 3: 'fnFace' }
 const NOTICE_MS = 4000
+const SET_FUNCTION_RETRY_MS = 500
 
 interface Props {
   /** Injectable for tests; defaults to navigator.serial. */
@@ -50,7 +51,8 @@ export default function App({ serial }: Props) {
   // oxlint-disable-next-line react-hooks/exhaustive-deps -- device is the store's identity key
   const results = useMemo(() => new ResultsStore(), [device])
   // "Switched by another device" notice; belongs to one device instance.
-  const [noticeOf, setNoticeOf] = useState<{ device: Device; fn: FunctionId } | null>(null)
+  // fn 0 = another device switched the board to "none" (the page stays as it is).
+  const [noticeOf, setNoticeOf] = useState<{ device: Device; fn: FunctionId | 0 } | null>(null)
   const notice = noticeOf && noticeOf.device === device ? noticeOf.fn : null
   const liveRef = useRef<LiveStageHandle>(null)
   const userClosed = useRef(false)
@@ -63,8 +65,10 @@ export default function App({ serial }: Props) {
       device.onStats((x) => setStatsOf({ device, ...x })),
       // Another host (e.g. the R4) changed the function: follow it so the view matches what the board runs.
       device.onFunctionChange((fn) => {
-        setLastFn(fn)
-        setView((v) => (v.kind === 'function' ? { kind: 'function', id: fn } : v))
+        if (fn !== 0) {
+          setLastFn(fn)
+          setView((v) => (v.kind === 'function' ? { kind: 'function', id: fn } : v))
+        }
         setNoticeOf({ device, fn })
       }),
     ]
@@ -95,7 +99,18 @@ export default function App({ serial }: Props) {
     const already = sentFor.current?.device === device && sentFor.current.fn === lastFn
     sentFor.current = { device, fn: lastFn }
     if (active === lastFn || already) return
-    device.setFunction(lastFn).catch(() => {})
+    const fn = lastFn
+    const fail = (e: unknown) => setErrorOf({ device, error: { key: 'errFnSwitch', detail: describeError(e).detail ?? (e as Error)?.message } })
+    device.setFunction(fn).catch((e: unknown) => {
+      if (e instanceof NotSupportedError) return // older firmware: nothing to tell the user
+      // One retry (a busy or briefly stalled board), then say so: recognition would run the wrong function.
+      setTimeout(() => {
+        if (sentFor.current?.device !== device || sentFor.current.fn !== fn) return // superseded or disconnected
+        device.setFunction(fn).catch((e2: unknown) => {
+          if (!(e2 instanceof NotSupportedError)) fail(e2)
+        })
+      }, SET_FUNCTION_RETRY_MS)
+    })
   }, [device, connected, lastFn, active])
 
   const onConnect = () => {
@@ -131,9 +146,9 @@ export default function App({ serial }: Props) {
           </button>
         </p>
       )}
-      {notice && (
+      {notice !== null && (
         <p role="status" className="app-info">
-          {t('fnSwitched', { fn: t(FN_KEY[notice]) })}
+          {notice === 0 ? t('fnSwitchedNone') : t('fnSwitched', { fn: t(FN_KEY[notice]) })}
         </p>
       )}
       <div className="app-columns">

@@ -127,7 +127,7 @@ export class RealDevice implements Device {
   private readonly frames = new Emitter<[FrameSource]>()
   private readonly results = new Emitter<[Result[], ResultsMeta | undefined]>()
   private readonly stats = new Emitter<[{ fps: number; kbps: number }]>()
-  private readonly fnChanges = new Emitter<[FunctionId]>()
+  private readonly fnChanges = new Emitter<[FunctionId | 0]>()
   private readonly now: () => number
   private status: ConnectionStatus
   private info: DeviceInfo | undefined
@@ -236,7 +236,7 @@ export class RealDevice implements Device {
   onResults(cb: (results: Result[], meta?: ResultsMeta) => void) {
     return this.results.on(cb)
   }
-  onFunctionChange(cb: (fn: FunctionId) => void) {
+  onFunctionChange(cb: (fn: FunctionId | 0) => void) {
     return this.fnChanges.on(cb)
   }
   onStats(cb: (s: { fps: number; kbps: number }) => void) {
@@ -346,14 +346,13 @@ export class RealDevice implements Device {
   private onResultsPush(r: ResultsPush) {
     const fn = r.functionId
     if (
-      isFn(fn) &&
+      (fn === 0 || (isFn(fn) && this.supportedFns().includes(fn))) &&
       fn !== this.active &&
       this.ownFnSet &&
       this.fnInFlight === 0 &&
-      this.now() >= this.quietUntil &&
-      this.supportedFns().includes(fn)
+      this.now() >= this.quietUntil
     ) {
-      // Someone else (e.g. the R4 over UART/I2C) changed the function.
+      // Someone else (e.g. the R4 over UART/I2C) changed the function (0 = none).
       this.active = fn
       this.changed()
       this.fnChanges.emit(fn)

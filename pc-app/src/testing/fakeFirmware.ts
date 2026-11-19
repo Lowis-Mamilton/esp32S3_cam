@@ -86,6 +86,8 @@ export class FakeFirmware {
   saveDelayMs = 0
   /** Commands answered with UNKNOWN_CMD (simulates older firmware). */
   unknown = new Set<number>()
+  /** The next n SET_FUNCTION requests answer INTERNAL (and change nothing). */
+  failSetFunction = 0
   /** Per-command error override: cmd -> error code. */
   failWith = new Map<number, number>()
   /** cmd -> how many of the next requests to leave unanswered (lost reply). */
@@ -227,6 +229,10 @@ export class FakeFirmware {
       case Cmd.StreamStop:
         return this.reply(f, new Uint8Array(0))
       case Cmd.SetFunction:
+        if (this.failSetFunction > 0) {
+          this.failSetFunction--
+          return this.reply(f, { error: ErrorCode.Internal })
+        }
         if (p[0] !== 0 && !this.functionIds.includes(p[0])) return this.reply(f, { error: ErrorCode.BadParam })
         if (p[0] !== this.active && this.pendingLearn) {
           // a function switch cancels a pending LEARN, which then answers BAD_PARAM
@@ -255,7 +261,8 @@ export class FakeFirmware {
         if (p[0] !== 1 && p[0] !== 2) return this.reply(f, { error: ErrorCode.BadParam })
         return this.reply(f, this.learnedPayload(p[0]))
       case Cmd.Learn: {
-        if (p[0] !== 1) return this.reply(f, { error: ErrorCode.BadParam })
+        // like the firmware: only the colour function learns, and only while it is the active one
+        if (p[0] !== 1 || this.active !== 1) return this.reply(f, { error: ErrorCode.BadParam })
         if (this.pendingLearn) return this.reply(f, { error: ErrorCode.Busy })
         const timer = setTimeout(() => {
           this.pendingLearn = null

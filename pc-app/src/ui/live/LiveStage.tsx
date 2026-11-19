@@ -3,6 +3,7 @@ import type { ResultsStore } from '../../device/resultsStore'
 import { LearnError, NotConnectedError, NotSupportedError, type FrameSource, type LearnedId } from '../../device/types'
 import { useT } from '../../i18n'
 import type { FunctionId } from '../layout/types'
+import { useMirror } from './mirror'
 import { FRAME_H, FRAME_W, boxToScreen, mirrorRegion, toFrame, toScreen, type Viewport } from './geometry'
 import { LEARN_ERROR_KEY, idColorVar, labelFor } from './labels'
 
@@ -36,23 +37,6 @@ const tabWidth = (text: string) => Math.ceil([...text].reduce((w, c) => w + (c.c
 const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v))
 const CENTRE: Region = { x: 152, y: 112, width: 16, height: 16 }
 
-const MIRROR_KEY = 'mxcam.mirror'
-/** Mirror view (ADR-0010) is a per-browser display preference, on by default. */
-function readMirror(): boolean {
-  try {
-    return localStorage.getItem(MIRROR_KEY) !== '0'
-  } catch {
-    return true
-  }
-}
-function storeMirror(on: boolean) {
-  try {
-    localStorage.setItem(MIRROR_KEY, on ? '1' : '0')
-  } catch {
-    // storage unavailable
-  }
-}
-
 export default function LiveStage({ ref, connected, fps, kbps, fn, canLearn, onLearn, results: store, learned, showNames }: Props) {
   const { t } = useT()
   const results = useSyncExternalStore(store.subscribe, store.paired)
@@ -63,11 +47,7 @@ export default function LiveStage({ ref, connected, fps, kbps, fn, canLearn, onL
   const [drag, setDrag] = useState<{ x0: number; y0: number; x1: number; y1: number } | null>(null)
   const [toast, setToast] = useState<{ text: string; error: boolean } | null>(null)
   // Results and LEARN regions are TRUE-image coordinates; only the screen is mirrored.
-  const [mirror, setMirrorState] = useState(readMirror)
-  const setMirror = (on: boolean) => {
-    setMirrorState(on)
-    storeMirror(on)
-  }
+  const [mirror, setMirror] = useMirror()
   const dragCleanup = useRef<(() => void) | null>(null)
   const toastTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
 

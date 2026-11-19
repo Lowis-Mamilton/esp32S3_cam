@@ -59,6 +59,7 @@ test('LEARN is answered late (deferred) and still resolves; the region is rounde
   const fw = new FakeFirmware()
   fw.learnDelayMs = 1500 // longer than the default 1 s request timeout
   const d = await connected(fw)
+  await d.setFunction(1) // LEARN needs the colour function (like the firmware)
   const id = await d.learnColor({ x: 300.4, y: -3, width: 40.6, height: 10.2 })
   expect(id).toBe(1)
   const p = sent(fw, Cmd.Learn)[0].payload
@@ -73,6 +74,7 @@ test('LEARN errors: FULL -> LearnError full, BAD_PARAM -> LearnError no-color, U
   fw.learnDelayMs = 0
   fw.colors = [1, 2, 3, 4, 5, 6, 7].map((id) => ({ id, rgb: [id, 0, 0] as [number, number, number] }))
   const d = await connected(fw)
+  await d.setFunction(1) // LEARN needs the colour function (like the firmware)
   await expect(d.learnColor({ x: 0, y: 0, width: 8, height: 8 })).rejects.toEqual(expect.objectContaining({ code: 'full' }))
   await expect(d.learnColor({ x: 0, y: 0, width: 8, height: 8 })).rejects.toBeInstanceOf(LearnError)
   fw.learnRgb = null
@@ -207,7 +209,7 @@ test('function ownership: a RESULTS push for another function switches, except w
   let clock = 0
   const fw = new FakeFirmware()
   const d = await connected(fw, () => clock)
-  const changes: FunctionId[] = []
+  const changes: (FunctionId | 0)[] = []
   d.onFunctionChange((fn) => changes.push(fn))
   const batches: number[] = []
   d.onResults((_, m) => batches.push(m?.frameId ?? -1))
@@ -224,17 +226,19 @@ test('function ownership: a RESULTS push for another function switches, except w
   fw.pushResults(2, 2, [])
   await waitFor(() => expect(changes).toEqual([2]))
   expect(d.snapshot().activeFunction).toBe(2)
-  // function 0 (none) never switches the view
+  // another host switches to function 0 (none): reported as 0 so the UI can say so, not ignored
+  fw.externalSetFunction(0)
   fw.pushResults(3, 0, [])
   await waitFor(() => expect(batches).toHaveLength(3))
-  expect(changes).toEqual([2])
+  expect(changes).toEqual([2, 0])
+  expect(d.snapshot().activeFunction).toBe(0)
 })
 
 test('no function switch before Studio has sent its own SET_FUNCTION after connecting', async () => {
   const fw = new FakeFirmware()
   fw.active = 2
   const d = await connected(fw, () => 99999)
-  const changes: FunctionId[] = []
+  const changes: (FunctionId | 0)[] = []
   d.onFunctionChange((fn) => changes.push(fn))
   const batches: number[] = []
   d.onResults((_, m) => batches.push(m?.frameId ?? -1))
@@ -335,6 +339,7 @@ test('a second LEARN while one is pending is BUSY -> LearnError busy; the first 
   const fw = new FakeFirmware()
   fw.learnDelayMs = 300
   const d = await connected(fw)
+  await d.setFunction(1) // LEARN needs the colour function (like the firmware)
   const first = d.learnColor({ x: 0, y: 0, width: 8, height: 8 })
   await expect(d.learnColor({ x: 0, y: 0, width: 8, height: 8 })).rejects.toEqual(expect.objectContaining({ code: 'busy' }))
   await expect(first).resolves.toBe(1)
@@ -355,6 +360,7 @@ test('a malformed LEARN reply is an error, not a made-up id', async () => {
   fw.learnDelayMs = 0
   fw.learnReply = new Uint8Array([1, 2])
   const d = await connected(fw)
+  await d.setFunction(1) // LEARN needs the colour function (like the firmware)
   await expect(d.learnColor({ x: 0, y: 0, width: 8, height: 8 })).rejects.toThrow(/length/)
 })
 

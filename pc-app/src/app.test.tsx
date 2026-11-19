@@ -377,6 +377,39 @@ test('when the R4 changes the function, Studio follows and says so; its own stal
   expect(fw.requests.filter((r) => r.cmd === Cmd.SetFunction && r.payload[0] === 2)).toHaveLength(0)
 })
 
+test('when another device switches the board to function 0, the page stays and a notice says so', async () => {
+  const fw = new FakeFirmware()
+  renderApp({ serial: fw.serial() })
+  expect(await screen.findByText('已連線')).toBeInTheDocument()
+  await waitFor(() => expect(fw.active).toBe(1))
+  await new Promise((r) => setTimeout(r, 1100))
+  fw.externalSetFunction(0)
+  fw.pushResults(2, 0, [])
+  expect(await screen.findByText('其他裝置把功能切換成「無功能」')).toBeInTheDocument()
+  expect(screen.getByRole('button', { name: '顏色' })).toHaveAttribute('aria-current', 'page')
+  await new Promise((r) => setTimeout(r, 50))
+  expect(fw.requests.filter((r) => r.cmd === Cmd.SetFunction)).toHaveLength(1) // no re-send loop
+})
+
+test('SET_FUNCTION failing is retried once after 500 ms, then reported', async () => {
+  const fw = new FakeFirmware()
+  fw.failSetFunction = 2
+  renderApp({ serial: fw.serial() })
+  expect(await screen.findByText('已連線')).toBeInTheDocument()
+  const alert = await screen.findByRole('alert', undefined, { timeout: 3000 })
+  expect(alert).toHaveTextContent('切換功能失敗')
+  expect(fw.requests.filter((r) => r.cmd === Cmd.SetFunction)).toHaveLength(2)
+})
+
+test('SET_FUNCTION failing once and succeeding on the retry shows nothing', async () => {
+  const fw = new FakeFirmware()
+  fw.failSetFunction = 1
+  renderApp({ serial: fw.serial() })
+  expect(await screen.findByText('已連線')).toBeInTheDocument()
+  await waitFor(() => expect(fw.active).toBe(1), { timeout: 3000 })
+  expect(screen.queryByRole('alert')).toBeNull()
+})
+
 test('real board: results pushes show up in the results tab', async () => {
   const fw = new FakeFirmware()
   fw.colors = [{ id: 1, rgb: [255, 0, 0] }]
