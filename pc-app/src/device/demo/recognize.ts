@@ -4,15 +4,8 @@ import { FRAME_H, FRAME_W, type SceneObject } from './scene'
 type RGB = [number, number, number]
 type Region = { x: number; y: number; width: number; height: number }
 
-/** Rejection reason from learnColor; `code` is an i18n key suffix. */
-export class DemoLearnError extends Error {
-  readonly code: 'no-color' | 'full'
-  constructor(code: 'no-color' | 'full') {
-    super(code)
-    this.name = 'DemoLearnError'
-    this.code = code
-  }
-}
+/** Kept for existing imports: the demo now rejects with the shared LearnError. */
+export { LearnError as DemoLearnError } from '../types'
 
 export function rgbToHsv([r, g, b]: RGB): [number, number, number] {
   const R = r / 255

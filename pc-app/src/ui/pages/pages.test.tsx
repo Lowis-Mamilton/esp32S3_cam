@@ -3,6 +3,8 @@ import { useSyncExternalStore } from 'react'
 import { afterEach, beforeEach, expect, test, vi } from 'vitest'
 import { DemoDevice } from '../../device/DemoDevice'
 import { RealDevice } from '../../device/RealDevice'
+import { Cmd } from '../../protocol/messages'
+import { FakeFirmware } from '../../testing/fakeFirmware'
 import type { Device, FunctionId } from '../../device/types'
 import { I18nProvider } from '../../i18n'
 import RightPanel from '../layout/RightPanel'
@@ -41,10 +43,13 @@ function FirmwareHarness({ device }: { device: Device }) {
 function PanelHarness({ device, fn }: { device: Device; fn: FunctionId }) {
   return <RightPanel device={device} snapshot={useSnap(device)} fn={fn} results={[]} />
 }
-/** A RealDevice that reports a live connection (the firmware has no system/config commands yet). */
-function connectedReal(supported: FunctionId[] = []) {
-  const r = new RealDevice(undefined)
-  vi.spyOn(r, 'snapshot').mockReturnValue({ ...r.snapshot(), status: 'connected', supported })
+/** A RealDevice connected to older firmware without the config commands (they answer UNKNOWN_CMD). */
+async function connectedReal(supported: FunctionId[] = []) {
+  const fw = new FakeFirmware()
+  fw.functionIds = supported
+  for (const c of [Cmd.GetConfig, Cmd.SetConfig, Cmd.GetLearned, Cmd.Save, Cmd.FactoryReset]) fw.unknown.add(c)
+  const r = new RealDevice(fw.serial())
+  await waitFor(() => expect(r.snapshot().status).toBe('connected'))
   return r
 }
 function mount(ui: (d: Device) => React.ReactElement, device: Device = new DemoDevice(() => 0)) {
@@ -136,7 +141,7 @@ test('I2C invalid on blur keeps error and draft; Escape reverts', () => {
 })
 
 test('real device: I2C commit shows 需要更新韌體 and disables the field', async () => {
-  mount((x) => <SettingsHarness device={x} />, connectedReal())
+  mount((x) => <SettingsHarness device={x} />, await connectedReal())
   type('30')
   fireEvent.keyDown(i2c(), { key: 'Enter' })
   expect(await screen.findByText('需要更新韌體')).toBeInTheDocument()
@@ -187,7 +192,7 @@ test('factory reset needs inline confirmation, focus goes to cancel', async () =
 })
 
 test('real device: change shows 需要更新韌體 and disables controls', async () => {
-  mount((x) => <SettingsHarness device={x} />, connectedReal())
+  mount((x) => <SettingsHarness device={x} />, await connectedReal())
   fireEvent.click(screen.getByRole('radio', { name: '9600' }))
   expect(await screen.findByText('需要更新韌體')).toBeInTheDocument()
   expect(screen.getByRole('radio', { name: '9600' })).toBeDisabled()
@@ -299,16 +304,16 @@ test('real device, disconnected: export and import are disabled with 請先連�
   expect(screen.queryByText('需要更新韌體')).toBeNull()
 })
 
-test('real device exportConfig throws NotSupportedError until the protocol has config', () => {
+test('real device exportConfig throws NotConnectedError while disconnected', () => {
   const r = new RealDevice(undefined)
   devices.push(r)
-  expect(() => r.exportConfig()).toThrow(expect.objectContaining({ name: 'NotSupportedError' }))
+  expect(() => r.exportConfig()).toThrow(expect.objectContaining({ name: 'NotConnectedError' }))
 })
 
 test('real device, connected: export shows 需要更新韌體 and never downloads made-up defaults', async () => {
   const create = vi.fn()
   Object.defineProperty(URL, 'createObjectURL', { value: create, configurable: true })
-  mount((x) => <PanelHarness device={x} fn={1} />, connectedReal([1]))
+  mount((x) => <PanelHarness device={x} fn={1} />, await connectedReal([1]))
   openParams()
   fireEvent.click(screen.getByRole('button', { name: '匯出' }))
   expect((await screen.findAllByText('需要更新韌體')).length).toBeGreaterThan(0)

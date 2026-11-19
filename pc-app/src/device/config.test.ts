@@ -20,7 +20,8 @@ test('accepts the defaults and boundary values', () => {
       { id: 0, name: 't0' },
       { id: 586, name: 't586' },
     ]
-    c.learned[3] = [{ id: 1, name: 'a'.repeat(32) }]
+    c.learned[3] = [{ id: 1, name: 'a'.repeat(48) }]
+    c.learned[2].push({ id: 5, name: '中'.repeat(16) }) // 48 bytes
     c.params.color.tolerance = 0
     c.params.face.threshold = 100
     c.system.i2cAddress = 0x77
@@ -67,7 +68,8 @@ const bad: [string, (c: Cfg) => void][] = [
         { id: 5, name: 'b' },
       ]),
   ],
-  ['name too long', (c) => (c.learned[1] = [{ id: 1, name: 'a'.repeat(33) }])],
+  ['name too long', (c) => (c.learned[1] = [{ id: 1, name: 'a'.repeat(49) }])],
+  ['name over 48 UTF-8 bytes (17 CJK chars)', (c) => (c.learned[2] = [{ id: 1, name: '中'.repeat(17) }])],
   ['rgb 256', (c) => (c.learned[1] = [{ id: 1, name: 'a', color: [256, 0, 0] }])],
   ['rgb negative', (c) => (c.learned[1] = [{ id: 1, name: 'a', color: [0, -1, 0] }])],
   ['rgb fractional', (c) => (c.learned[1] = [{ id: 1, name: 'a', color: [0, 0.5, 0] }])],

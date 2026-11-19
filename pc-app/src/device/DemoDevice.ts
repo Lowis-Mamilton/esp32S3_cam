@@ -1,17 +1,21 @@
 import { parseConfig } from './config'
-import { DemoLearnError, colorAt, matchLearned, recognize } from './demo/recognize'
+import { colorAt, matchLearned, recognize } from './demo/recognize'
 import { drawScene, sceneAt, type SceneObject } from './demo/scene'
 import {
   Emitter,
+  LearnError,
+  NAME_MAX_BYTES,
   defaultParams,
   defaultSystem,
   emptyLearned,
+  nameBytes,
   type Device,
   type DeviceInfo,
   type DeviceSnapshot,
   type FrameSource,
   type FunctionId,
   type FunctionParams,
+  type ImportOutcome,
   type Result,
   type SystemConfig,
 } from './types'
@@ -84,6 +88,7 @@ export class DemoDevice implements Device {
       system: this.system,
       dirty: this.dirty,
       lost: false,
+      configKnown: true,
     })
   }
 
@@ -99,6 +104,10 @@ export class DemoDevice implements Device {
   onStats(cb: (s: { fps: number; kbps: number }) => void) {
     return this.stats.on(cb)
   }
+  /** Nobody else controls the demo. */
+  onFunctionChange() {
+    return () => {}
+  }
 
   async connect() {}
   async disconnect() {}
@@ -110,7 +119,7 @@ export class DemoDevice implements Device {
 
   async learnColor(region: { x: number; y: number; width: number; height: number }): Promise<number> {
     const rgb = colorAt(this.lastObjs, region)
-    if (!rgb) throw new DemoLearnError('no-color')
+    if (!rgb) throw new LearnError('no-color')
     const list = this.learned[1]
     const same = matchLearned(rgb, list, this.params.color.tolerance)
     if (same) {
@@ -122,7 +131,7 @@ export class DemoDevice implements Device {
     }
     let id = 1
     while (list.some((e) => e.id === id)) id++
-    if (id > 7) throw new DemoLearnError('full')
+    if (id > 7) throw new LearnError('full')
     this.learned = { ...this.learned, 1: [...list, { id, name: '', color: rgb }].sort((a, b) => a.id - b.id) }
     this.touch()
     return id
@@ -136,7 +145,7 @@ export class DemoDevice implements Device {
     this.touch()
   }
   async setName(fn: FunctionId, id: number, name: string) {
-    if (name.length > 32) throw new Error('name too long')
+    if (nameBytes(name) > NAME_MAX_BYTES) throw new Error(`name longer than ${NAME_MAX_BYTES} bytes`)
     if (fn === 2 && !(Number.isInteger(id) && id >= 0 && id <= 586)) throw new Error('invalid tag id')
     const list = this.learned[fn]
     const cur = list.find((e) => e.id === id)
@@ -178,12 +187,13 @@ export class DemoDevice implements Device {
   exportConfig(): string {
     return JSON.stringify({ version: 1, learned: this.learned, params: this.params, system: this.system })
   }
-  async importConfig(json: string) {
+  async importConfig(json: string): Promise<ImportOutcome> {
     const c = parseConfig(json) // throws before any state is touched
     this.learned = c.learned
     this.params = c.params
     this.system = c.system
     this.touch()
+    return { colorsNeedRelearn: false }
   }
 
   dispose() {

@@ -1,7 +1,7 @@
 import { act, renderHook, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, expect, test, vi } from 'vitest'
 import { Decoder, encodeFrame } from '../protocol/codec'
-import { Cmd, responseOf } from '../protocol/messages'
+import { Cmd, ErrorCode, responseOf } from '../protocol/messages'
 import { DemoDevice } from './DemoDevice'
 import { RealDevice } from './RealDevice'
 import { sceneAt } from './demo/scene'
@@ -28,6 +28,8 @@ const idleSerial = {
   },
 } as unknown as Serial
 
+const M1_CMDS: number[] = [Cmd.Ping, Cmd.SetFunction, Cmd.GetFunction, Cmd.StreamStart, Cmd.StreamStop]
+
 function serialWithInfo(info: Uint8Array): Serial {
   let ctl!: ReadableStreamDefaultController<Uint8Array>
   const dec = new Decoder()
@@ -43,7 +45,10 @@ function serialWithInfo(info: Uint8Array): Serial {
     writable: new WritableStream<Uint8Array>({
       write: (chunk) => {
         for (const f of dec.push(chunk)) {
-          ctl.enqueue(encodeFrame(responseOf(f.cmd), f.seq, f.cmd === Cmd.GetInfo ? info : new Uint8Array(0)))
+          // M1 firmware: only the M1 commands; everything else is UNKNOWN_CMD
+          if (f.cmd === Cmd.GetInfo) ctl.enqueue(encodeFrame(responseOf(f.cmd), f.seq, info))
+          else if (M1_CMDS.includes(f.cmd)) ctl.enqueue(encodeFrame(responseOf(f.cmd), f.seq, new Uint8Array(0)))
+          else ctl.enqueue(encodeFrame(Cmd.Error, f.seq, new Uint8Array([f.cmd, ErrorCode.UnknownCmd])))
         }
       },
     }),
@@ -310,10 +315,13 @@ test('DemoDevice.setName: no-ops do not dirty; ids and names are validated', asy
   await expect(d.setName(2, 587, 'x')).rejects.toThrow()
   await expect(d.setName(2, -1, 'x')).rejects.toThrow()
   await expect(d.setName(2, 1.5, 'x')).rejects.toThrow()
-  await expect(d.setName(2, 5, 'x'.repeat(33))).rejects.toThrow()
+  await expect(d.setName(2, 5, 'x'.repeat(49))).rejects.toThrow()
+  await expect(d.setName(2, 5, '中'.repeat(17))).rejects.toThrow() // 51 UTF-8 bytes
   expect(d.snapshot().learned[2]).toHaveLength(0)
   await d.setName(2, 586, 'edge')
   expect(d.snapshot().learned[2]).toEqual([{ id: 586, name: 'edge' }])
+  await d.setName(2, 586, '中'.repeat(16)) // exactly 48 bytes
+  await d.setName(2, 586, 'edge')
   await d.save()
   await d.setName(2, 586, 'edge')
   expect(d.snapshot().dirty).toBe(false)

@@ -13,6 +13,14 @@ export interface Result {
   width: number
   height: number
   confidence?: number
+  /** AprilTag only: rotation in degrees and the four corners (not clipped to the frame). */
+  rotationDeg?: number
+  corners?: [number, number][]
+}
+/** Where a batch of results came from (real device only; the demo has no frame ids). */
+export interface ResultsMeta {
+  frameId: number
+  functionId: number
 }
 export interface LearnedId {
   id: number
@@ -41,19 +49,23 @@ export interface DeviceSnapshot {
   dirty: boolean
   /** Real mode: the last disconnect was not requested by the user. */
   lost: boolean
+  /** params/system/dirty are the device's own values (false: defaults, e.g. not connected or old firmware). */
+  configKnown: boolean
 }
 /** Real mode and not connected: nothing can be configured yet; the hint is "connect first". */
 export const needsConnection = (s: DeviceSnapshot): boolean => s.mode === 'real' && s.status !== 'connected'
 
 export type FrameSource =
-  | { kind: 'jpeg'; jpeg: Uint8Array }
+  | { kind: 'jpeg'; jpeg: Uint8Array; frameId?: number }
   | { kind: 'canvas'; draw(ctx: CanvasRenderingContext2D): void }
 
 export interface Device {
   snapshot(): DeviceSnapshot
   subscribe(cb: () => void): () => void // notified on any state change
   onFrame(cb: (frame: FrameSource) => void): () => void
-  onResults(cb: (results: Result[]) => void): () => void
+  onResults(cb: (results: Result[], meta?: ResultsMeta) => void): () => void
+  /** The device switched function on another host's request (e.g. the R4). */
+  onFunctionChange(cb: (fn: FunctionId) => void): () => void
   /** Extension: stream statistics for the live view. */
   onStats(cb: (s: { fps: number; kbps: number }) => void): () => void
   connect(): Promise<void>
@@ -68,8 +80,13 @@ export interface Device {
   save(): Promise<void>
   factoryReset(): Promise<void>
   exportConfig(): string
-  importConfig(json: string): Promise<void>
+  importConfig(json: string): Promise<ImportOutcome>
   dispose(): void
+}
+
+export interface ImportOutcome {
+  /** Learned colours in the file could not be applied (a real device can only learn from its camera). */
+  colorsNeedRelearn: boolean
 }
 
 export class NotSupportedError extends Error {
@@ -77,6 +94,48 @@ export class NotSupportedError extends Error {
     super(message)
     this.name = 'NotSupportedError'
   }
+}
+
+export class NotConnectedError extends Error {
+  constructor(message = 'not connected') {
+    super(message)
+    this.name = 'NotConnectedError'
+  }
+}
+
+/** learnColor rejection, shared by both backends; `code` selects the message. */
+export class LearnError extends Error {
+  readonly code: 'no-color' | 'full'
+  constructor(code: 'no-color' | 'full') {
+    super(code)
+    this.name = 'LearnError'
+    this.code = code
+  }
+}
+
+/** A device refusal with a known meaning other than learning. */
+export class DeviceOpError extends Error {
+  readonly code: 'names-full' | 'failed'
+  constructor(code: 'names-full' | 'failed', message: string) {
+    super(message)
+    this.name = 'DeviceOpError'
+    this.code = code
+  }
+}
+
+export const NAME_MAX_BYTES = 48
+/** Names are UTF-8 on the wire; the limit is in bytes, not characters. */
+export const nameBytes = (s: string): number => new TextEncoder().encode(s).length
+/** Cuts `s` to at most `max` UTF-8 bytes without splitting a character. */
+export function truncateBytes(s: string, max = NAME_MAX_BYTES): string {
+  let n = 0
+  let out = ''
+  for (const ch of s) {
+    n += nameBytes(ch)
+    if (n > max) break
+    out += ch
+  }
+  return out
 }
 
 export const defaultParams = (): FunctionParams => ({

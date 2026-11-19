@@ -1,0 +1,293 @@
+// Test helper: a fake Web Serial port that behaves like the M2 firmware (docs/protocol.md §3, §6, §7).
+import { Decoder, encodeFrame, type Frame } from '../protocol/codec'
+import { Cmd, ErrorCode, encodeConfig, parseConfig, responseOf, type DeviceConfig } from '../protocol/messages'
+
+export const DEFAULT_CONFIG: DeviceConfig = {
+  tolerance: 30,
+  minArea: 100,
+  colorMaxResults: 4,
+  colorShowNames: true,
+  tagShowNames: true,
+  faceThreshold: 60,
+  faceMaxResults: 4,
+  uartBaud: 115200,
+  i2cAddress: 0x5a,
+  ledBrightness: 50,
+  dirty: false,
+}
+
+export interface FakeRecord {
+  id: number
+  x: number
+  y: number
+  width: number
+  height: number
+  confidence?: number
+  tag?: { rotationDeg: number; corners: [number, number][] }
+}
+
+export function encodeResults(frameId: number, functionId: number, records: FakeRecord[]): Uint8Array {
+  const size = 6 + records.reduce((n, r) => n + 12 + (r.tag ? 18 : 0), 0)
+  const out = new Uint8Array(size)
+  const v = new DataView(out.buffer)
+  v.setUint32(0, frameId, true)
+  out[4] = functionId
+  out[5] = records.length
+  let o = 6
+  for (const r of records) {
+    v.setUint16(o, r.id, true)
+    v.setInt16(o + 2, r.x, true)
+    v.setInt16(o + 4, r.y, true)
+    v.setUint16(o + 6, r.width, true)
+    v.setUint16(o + 8, r.height, true)
+    out[o + 10] = r.confidence ?? 255
+    out[o + 11] = r.tag ? 18 : 0
+    o += 12
+    if (r.tag) {
+      v.setInt16(o, Math.round(r.tag.rotationDeg * 100), true)
+      r.tag.corners.forEach(([x, y], k) => {
+        v.setInt16(o + 2 + 4 * k, x, true)
+        v.setInt16(o + 4 + 4 * k, y, true)
+      })
+      o += 18
+    }
+  }
+  return out
+}
+
+function infoPayload(functionIds: number[]): Uint8Array {
+  const p = new Uint8Array(23 + functionIds.length)
+  p[0] = 1
+  p.set([0, 2, 0], 1)
+  p.set(new TextEncoder().encode('784715a'), 4)
+  p.set([1, 2, 3, 4, 5, 6], 11)
+  new DataView(p.buffer).setUint16(17, 320, true)
+  new DataView(p.buffer).setUint16(19, 240, true)
+  p[21] = 8
+  p[22] = functionIds.length
+  p.set(functionIds, 23)
+  return p
+}
+
+type Reply = Uint8Array | { error: number } | null
+
+/** Simulated M2 firmware. Mutate the public fields to set up a scenario. */
+export class FakeFirmware {
+  functionIds = [1, 2]
+  active = 0
+  config: DeviceConfig = { ...DEFAULT_CONFIG }
+  colors: { id: number; rgb: [number, number, number] }[] = []
+  /** key `${fn}:${id}` */
+  names = new Map<string, string>()
+  /** Colour sampled by the next LEARN; null = region has no colour. */
+  learnRgb: [number, number, number] | null = [230, 40, 36]
+  /** LEARN answers after this delay (the firmware samples the next frame). */
+  learnDelayMs = 100
+  saveDelayMs = 0
+  /** Commands answered with UNKNOWN_CMD (simulates older firmware). */
+  unknown = new Set<number>()
+  /** Per-command error override: cmd -> error code. */
+  failWith = new Map<number, number>()
+  requests: Frame[] = []
+  readonly port: {
+    getInfo(): SerialPortInfo
+    setSignals(): Promise<void>
+    open(): Promise<void>
+    close(): Promise<void>
+    readable: ReadableStream<Uint8Array>
+    writable: WritableStream<Uint8Array>
+  }
+  private ctl!: ReadableStreamDefaultController<Uint8Array>
+  private pushSeq = 0
+
+  constructor() {
+    const dec = new Decoder()
+    this.port = {
+      getInfo: () => ({ usbVendorId: 0x303a, usbProductId: 0x1001 }),
+      setSignals: async () => {},
+      open: async () => {},
+      close: async () => {},
+      readable: new ReadableStream<Uint8Array>({ start: (c) => void (this.ctl = c) }),
+      writable: new WritableStream<Uint8Array>({
+        write: (chunk) => {
+          for (const f of dec.push(chunk)) {
+            this.requests.push(f)
+            this.answer(f)
+          }
+        },
+      }),
+    }
+  }
+
+  /** A Serial whose granted port is this firmware, so RealDevice auto-connects to it. */
+  serial(): Serial {
+    return {
+      addEventListener: () => {},
+      removeEventListener: () => {},
+      getPorts: async () => [this.port],
+      requestPort: async () => this.port,
+    } as unknown as Serial
+  }
+
+  cmds(): number[] {
+    return this.requests.map((r) => r.cmd).filter((c) => c !== Cmd.Ping)
+  }
+
+  pushResults(frameId: number, functionId: number, records: FakeRecord[]) {
+    this.send(Cmd.PushResults, this.pushSeq++ & 0xff, encodeResults(frameId, functionId, records))
+  }
+
+  pushFrame(frameId: number) {
+    const p = new Uint8Array(12 + 4)
+    const v = new DataView(p.buffer)
+    v.setUint32(0, frameId, true)
+    v.setUint16(8, 320, true)
+    v.setUint16(10, 240, true)
+    p.set([0xff, 0xd8, 0xff, 0xd9], 12)
+    this.send(Cmd.PushFrame, this.pushSeq++ & 0xff, p)
+  }
+
+  /** The R4 (over UART/I2C) changes the function. */
+  externalSetFunction(fn: number) {
+    this.active = fn
+  }
+
+  close() {
+    this.ctl.close()
+  }
+
+  private send(cmd: number, seq: number, payload: Uint8Array) {
+    this.ctl.enqueue(encodeFrame(cmd, seq, payload))
+  }
+
+  private reply(f: Frame, r: Reply) {
+    if (r === null) return
+    if (r instanceof Uint8Array) this.send(responseOf(f.cmd), f.seq, r)
+    else this.send(Cmd.Error, f.seq, new Uint8Array([f.cmd, r.error]))
+  }
+
+  private learnedPayload(fn: number): Uint8Array {
+    const items: { id: number; rgb: number[]; name: Uint8Array }[] = []
+    const enc = new TextEncoder()
+    if (fn === 1) {
+      for (const c of this.colors) items.push({ id: c.id, rgb: c.rgb, name: enc.encode(this.names.get(`1:${c.id}`) ?? '') })
+    } else {
+      for (const [k, n] of this.names) {
+        const [f, id] = k.split(':').map(Number)
+        if (f === fn) items.push({ id, rgb: [0, 0, 0], name: enc.encode(n) })
+      }
+      items.sort((a, b) => a.id - b.id)
+    }
+    const out = new Uint8Array(1 + items.reduce((n, i) => n + 6 + i.name.length, 0))
+    const v = new DataView(out.buffer)
+    out[0] = items.length
+    let o = 1
+    for (const i of items) {
+      v.setUint16(o, i.id, true)
+      out.set(i.rgb, o + 2)
+      out[o + 5] = i.name.length
+      out.set(i.name, o + 6)
+      o += 6 + i.name.length
+    }
+    return out
+  }
+
+  private answer(f: Frame) {
+    if (this.unknown.has(f.cmd)) return this.reply(f, { error: ErrorCode.UnknownCmd })
+    const forced = this.failWith.get(f.cmd)
+    if (forced !== undefined) return this.reply(f, { error: forced })
+    const p = f.payload
+    const v = new DataView(p.buffer, p.byteOffset, p.byteLength)
+    switch (f.cmd) {
+      case Cmd.GetInfo:
+        return this.reply(f, infoPayload(this.functionIds))
+      case Cmd.Ping:
+      case Cmd.StreamStart:
+      case Cmd.StreamStop:
+        return this.reply(f, new Uint8Array(0))
+      case Cmd.SetFunction:
+        if (p[0] !== 0 && !this.functionIds.includes(p[0])) return this.reply(f, { error: ErrorCode.BadParam })
+        this.active = p[0]
+        return this.reply(f, new Uint8Array([p[0]]))
+      case Cmd.GetFunction:
+        return this.reply(f, new Uint8Array([this.active]))
+      case Cmd.GetConfig:
+        return this.reply(f, this.configPayload())
+      case Cmd.SetConfig: {
+        const c = parseConfig(p)
+        // clamp like the firmware
+        c.tolerance = Math.min(100, c.tolerance)
+        c.colorMaxResults = Math.min(8, Math.max(1, c.colorMaxResults))
+        c.ledBrightness = Math.min(100, c.ledBrightness)
+        if (c.i2cAddress < 0x08 || c.i2cAddress > 0x77) c.i2cAddress = 0x5a
+        const changed = JSON.stringify({ ...c, dirty: false }) !== JSON.stringify({ ...this.config, dirty: false })
+        this.config = { ...c, dirty: this.config.dirty || changed }
+        return this.reply(f, this.configPayload())
+      }
+      case Cmd.GetLearned:
+        if (p[0] !== 1 && p[0] !== 2) return this.reply(f, { error: ErrorCode.BadParam })
+        return this.reply(f, this.learnedPayload(p[0]))
+      case Cmd.Learn: {
+        if (p[0] !== 1) return this.reply(f, { error: ErrorCode.BadParam })
+        setTimeout(() => {
+          const rgb = this.learnRgb
+          if (!rgb) return this.reply(f, { error: ErrorCode.BadParam })
+          const same = this.colors.find((c) => c.rgb.join() === rgb.join())
+          if (same) return this.reply(f, new Uint8Array([same.id]))
+          let id = 1
+          while (this.colors.some((c) => c.id === id)) id++
+          if (id > 7) return this.reply(f, { error: ErrorCode.Full })
+          this.colors.push({ id, rgb })
+          this.colors.sort((a, b) => a.id - b.id)
+          this.config.dirty = true
+          this.reply(f, new Uint8Array([id]))
+        }, this.learnDelayMs)
+        return
+      }
+      case Cmd.Forget: {
+        const fn = p[0]
+        const id = v.getUint16(1, true)
+        if (fn !== 1 && fn !== 2) return this.reply(f, { error: ErrorCode.BadParam })
+        if (fn === 1) this.colors = id === 0xffff ? [] : this.colors.filter((c) => c.id !== id)
+        for (const k of [...this.names.keys()]) if (k.startsWith(`${fn}:`) && (id === 0xffff || k === `${fn}:${id}`)) this.names.delete(k)
+        this.config.dirty = true
+        return this.reply(f, new Uint8Array(0))
+      }
+      case Cmd.SetName: {
+        const fn = p[0]
+        const id = v.getUint16(1, true)
+        const name = new TextDecoder().decode(p.subarray(4, 4 + p[3]))
+        if (fn === 1 && !this.colors.some((c) => c.id === id)) return this.reply(f, { error: ErrorCode.BadParam })
+        if (name === '') this.names.delete(`${fn}:${id}`)
+        else {
+          if (!this.names.has(`${fn}:${id}`) && this.names.size >= 32) return this.reply(f, { error: ErrorCode.Full })
+          this.names.set(`${fn}:${id}`, name)
+        }
+        this.config.dirty = true
+        return this.reply(f, new Uint8Array(0))
+      }
+      case Cmd.Save:
+        setTimeout(() => {
+          this.config.dirty = false
+          this.reply(f, new Uint8Array(0))
+        }, this.saveDelayMs)
+        return
+      case Cmd.FactoryReset:
+        setTimeout(() => {
+          this.config = { ...DEFAULT_CONFIG }
+          this.colors = []
+          this.names.clear()
+          this.reply(f, new Uint8Array(0))
+        }, this.saveDelayMs)
+        return
+      default:
+        return this.reply(f, { error: ErrorCode.UnknownCmd })
+    }
+  }
+
+  private configPayload(): Uint8Array {
+    const out = encodeConfig(this.config)
+    out[15] = this.config.dirty ? 1 : 0
+    return out
+  }
+}

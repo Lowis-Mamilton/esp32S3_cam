@@ -24,6 +24,7 @@ function idleSnapshot(demo: boolean, serial: Serial | undefined): DeviceSnapshot
     system: defaultSystem(),
     dirty: false,
     lost: false,
+    configKnown: demo,
   }
 }
 

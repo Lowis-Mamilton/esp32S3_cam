@@ -25,8 +25,8 @@ export default function SettingsPage({ device, snapshot }: Props) {
   const guard = useGuard(device)
   const { info, system } = snapshot
   const needConnect = needsConnection(snapshot)
-  // Real mode: the firmware has no system config yet, so the stored defaults are not the device's values.
-  const unknown = snapshot.mode === 'real'
+  // Not read from the device (disconnected or older firmware): the defaults are not the device's values.
+  const unknown = !snapshot.configKnown
   const disabled = !device || needConnect || guard.needFirmware
   const set = (patch: Partial<typeof system>) => (device ? guard.run(() => device.setSystem(patch)) : undefined)
 

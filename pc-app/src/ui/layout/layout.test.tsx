@@ -16,6 +16,7 @@ const idleSnapshot: DeviceSnapshot = {
   system: defaultSystem(),
   dirty: false,
   lost: false,
+  configKnown: true,
 }
 
 beforeEach(() => {

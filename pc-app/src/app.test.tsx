@@ -1,6 +1,6 @@
 import { fireEvent, render, screen, within } from '@testing-library/react'
 import { Decoder, encodeFrame } from './protocol/codec'
-import { Cmd, responseOf } from './protocol/messages'
+import { Cmd, ErrorCode, responseOf } from './protocol/messages'
 import { beforeEach, expect, test } from 'vitest'
 import type { ComponentProps } from 'react'
 import App from './App'
@@ -71,7 +71,9 @@ test('shows 已斷線 after the read loop ends unexpectedly', async () => {
     writable: new WritableStream<Uint8Array>({
       write: (chunk) => {
         for (const f of dec.push(chunk)) {
-          ctl.enqueue(encodeFrame(responseOf(f.cmd), f.seq, f.cmd === Cmd.GetInfo ? new Uint8Array(23) : new Uint8Array(0)))
+          // M1 firmware: M2 commands (GET_CONFIG ...) are UNKNOWN_CMD
+          if (f.cmd === Cmd.GetConfig) ctl.enqueue(encodeFrame(Cmd.Error, f.seq, new Uint8Array([f.cmd, ErrorCode.UnknownCmd])))
+          else ctl.enqueue(encodeFrame(responseOf(f.cmd), f.seq, f.cmd === Cmd.GetInfo ? new Uint8Array(23) : new Uint8Array(0)))
         }
       },
     }),

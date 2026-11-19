@@ -1,4 +1,4 @@
-import { emptyLearned, type FunctionId, type FunctionParams, type LearnedId, type SystemConfig } from './types'
+import { NAME_MAX_BYTES, emptyLearned, nameBytes, type FunctionId, type FunctionParams, type LearnedId, type SystemConfig } from './types'
 
 /** Versioned device configuration, as exported/imported by Studio. */
 export interface Config {
@@ -8,7 +8,6 @@ export interface Config {
 }
 
 const FNS: FunctionId[] = [1, 2, 3]
-const MAX_NAME_LEN = 32
 const MAX_TAG_ID = 586 // tag36h11 has 587 codes
 
 const isObj = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v)
@@ -29,7 +28,7 @@ function parseLearned(fn: FunctionId, list: unknown): LearnedId[] {
   if (!Array.isArray(list)) return bad(`learned.${fn}`)
   const seen = new Set<number>()
   return list.map((e: unknown): LearnedId => {
-    if (!isObj(e) || typeof e.name !== 'string' || e.name.length > MAX_NAME_LEN) return bad(`learned.${fn} entry`)
+    if (!isObj(e) || typeof e.name !== 'string' || nameBytes(e.name) > NAME_MAX_BYTES) return bad(`learned.${fn} entry`)
     // color: 1-7, tag: 0-586, face: 1-7 (same slots as colour)
     const ok = fn === 2 ? isInt(e.id, 0, MAX_TAG_ID) : isInt(e.id, 1, 7)
     if (!ok) return bad(`learned.${fn} id`)
