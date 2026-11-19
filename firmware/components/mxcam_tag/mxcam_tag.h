@@ -22,8 +22,9 @@ extern "C" {
  *   extra       18 bytes, little-endian i16: rotation_cdeg, then x0,y0..x3,y3
  *               = the tag's top-left, top-right, bottom-right, bottom-left
  *               corners (clockwise on screen; rounded, unclipped)
- * "Top" follows OpenCV/ArUco (DICT_APRILTAG_36h11), whose marker image is the
- * AprilRobotics image (apriltag-imgs PNG) turned 180 degrees.
+ * "Top" follows the official AprilRobotics tag image (apriltag-imgs PNG). The
+ * marker OpenCV/ArUco generates for DICT_APRILTAG_36h11 is that image turned
+ * 180 degrees, so OpenCV's corners/angle for the same tag differ by 180.
  * rotation_cdeg = atan2(TR.y - TL.y, TR.x - TL.x) in image coordinates (y down),
  * in centidegrees -18000..18000: an upright tag reads 0 and a tag turned
  * clockwise on screen reads positive.

@@ -161,7 +161,7 @@ M2 定稿於 2026-11-19（決策見 ADR-0007～0010）。
 
 AprilTag 的 `extra`（18 bytes）：`rotation_cdeg (i16，-18000～18000，百分之一度)`，接著四個角 `x0,y0,x1,y1,x2,y2,x3,y3 (i16 ×8)`。顏色和人臉的 `extra_len` 是 0。
 
-- 四個角的順序是 tag 自己的**左上、右上、右下、左下**（在畫面上順時針，和 OpenCV／ArUco 相同）。tag 的「上」依 OpenCV `DICT_APRILTAG_36h11` 的定義；注意 OpenCV 產生的 tag 圖和 AprilRobotics 官方圖（apriltag-imgs）差 180°，官方圖正著擺會讀到 ±180°。
+- 四個角的順序是 tag 自己的**左上、右上、右下、左下**（在畫面上順時針）。tag 的「上」以官方 AprilRobotics tag36h11 圖片（apriltag-imgs）為準；OpenCV／ArUco 的 `DICT_APRILTAG_36h11` 產生的圖案方向相差 180°，所以 OpenCV 對同一個 tag 算出的角順序與角度會差 180°。
 - `rotation_cdeg = atan2(右上.y − 左上.y, 右上.x − 左上.x)`，影像座標（y 向下）：tag 正放是 0，在畫面上順時針轉為正、逆時針為負。
 
 AprilTag 的 `x, y` 是由單應矩陣（homography）算出的 tag 中心，可能和外接框（`width, height`）的中心略有差異；四個角不裁切，可能落在畫面外，外接框則已裁到畫面內。

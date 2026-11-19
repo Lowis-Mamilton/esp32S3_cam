@@ -59,22 +59,22 @@ static void draw_cells(uint8_t cells[10][10], double cx, double cy, double cell_
     }
 }
 
-/* "Upright" follows the OpenCV/ArUco convention (DICT_APRILTAG_36h11), which
- * the MXCam rotation/corner output uses: the marker image OpenCV generates is
- * the AprilRobotics image (apriltag_to_image / apriltag-imgs PNG) turned 180
- * degrees (checked with OpenCV 5.1 for IDs 3 and 12). So draw_tag() renders
- * the upstream grid rotated by 180; draw_tag_upstream() renders it as is. */
+/* "Upright" is the official AprilRobotics image (apriltag-imgs PNG, same as
+ * upstream apriltag_to_image), which the MXCam rotation/corner output uses.
+ * draw_tag() renders that grid as is. draw_tag_opencv() renders the marker
+ * OpenCV/ArUco generates for DICT_APRILTAG_36h11, which is the official image
+ * turned 180 degrees (checked with OpenCV 5.1 for IDs 3 and 12). */
 static void draw_tag(int id, double cx, double cy, double cell_px, double angle_deg) {
+  uint8_t cells[10][10];
+  tag_cells(id, cells);
+  draw_cells(cells, cx, cy, cell_px, angle_deg);
+}
+
+static void draw_tag_opencv(int id, double cx, double cy, double cell_px, double angle_deg) {
   uint8_t up[10][10], cells[10][10];
   tag_cells(id, up);
   for (int y = 0; y < 10; y++)
     for (int x = 0; x < 10; x++) cells[y][x] = up[9 - y][9 - x];
-  draw_cells(cells, cx, cy, cell_px, angle_deg);
-}
-
-static void draw_tag_upstream(int id, double cx, double cy, double cell_px, double angle_deg) {
-  uint8_t cells[10][10];
-  tag_cells(id, cells);
   draw_cells(cells, cx, cy, cell_px, angle_deg);
 }
 
@@ -102,7 +102,7 @@ static uint8_t run(mxp_result_t *out, uint8_t cap) {
   return mxt_detect(frame, out, cap, &last_us);
 }
 
-/* Corners must come as the tag's TL, TR, BR, BL (OpenCV order): the black
+/* Corners must come as the official tag's TL, TR, BR, BL (clockwise): the black
  * square's corners at (-4,-4), (4,-4), (4,4), (-4,4) cells, rotated with the tag. */
 static void check_corners(const mxp_result_t *r, double cx, double cy, double cell, double angle_deg, int tol) {
   static const int su[4] = { -1, 1, 1, -1 }, sv[4] = { -1, -1, 1, 1 };
@@ -291,12 +291,12 @@ static void test_clipped_bbox(void) {
   CHECK(out[0].h > 0);
 }
 
-/* The AprilRobotics image drawn as is (its own "upright") is upside down in the
- * OpenCV convention: rotation reads +-180 and TL is its bottom-right corner. */
-static void test_upstream_orientation(void) {
+/* The OpenCV/ArUco-generated marker drawn upright is the official image upside
+ * down: rotation reads +-180 and the official TL is its bottom-right corner. */
+static void test_opencv_orientation(void) {
   mxp_result_t out[MXP_MAX_RESULTS];
   background();
-  draw_tag_upstream(12, 160, 120, 6, 0);
+  draw_tag_opencv(12, 160, 120, 6, 0);
   uint8_t n = run(out, MXP_MAX_RESULTS);
   CHECK(n == 1);
   if (n == 1) check_record(&out[0], 12, 160, 120, 180);
@@ -382,7 +382,7 @@ int main(void) {
   test_lifecycle();
   test_decimate_setter();
   test_clipped_bbox();
-  test_upstream_orientation();
+  test_opencv_orientation();
   test_half_res();
   test_luma_exhaustive();
   mxt_deinit();
