@@ -56,3 +56,30 @@ int mxo_draw_text(mxo_canvas_t *c, int x, int y, const char *ascii, uint16_t fg,
     }
     return width;
 }
+
+int mxo_draw_text_mirrored(mxo_canvas_t *c, int x, int y, const char *ascii, uint16_t fg, uint16_t bg)
+{
+    if (!ascii) return 0;
+    int width = 0;
+    for (const unsigned char *s = (const unsigned char *)ascii; *s; s++, width += 8) {
+        if (!canvas_ok(c) || y >= c->height || y <= -8) continue;
+        const unsigned char *glyph = (*s >= 0x20 && *s <= 0x7E) ? mxo_font8x8[*s - 0x20] : NULL;
+        for (int row = 0; row < 8; row++) {
+            int py = y + row;
+            if (py < 0 || py >= c->height) continue;
+            unsigned bits = glyph ? glyph[row] : 0u;
+            for (int col = 0; col < 8; col++) {
+                /* panel column x + width + col is frame column width-1-(...) */
+                int px = c->width - 1 - (x + width + col);
+                if (px < 0 || px >= c->width) continue;
+                c->pixels[(size_t)py * (size_t)c->width + (size_t)px] = ((bits >> col) & 1u) ? fg : bg;
+            }
+        }
+    }
+    return width;
+}
+
+int mxo_mirror_x(const mxo_canvas_t *c, int x, int w)
+{
+    return c->width - x - w;
+}

@@ -70,13 +70,15 @@ esp_err_t mxcam_display_init(void)
     ESP_ERROR_CHECK(esp_lcd_panel_reset(s_panel));
     ESP_ERROR_CHECK(esp_lcd_panel_init(s_panel));
     /*
-     * Landscape orientation. To flip: change the mirror() flags below
-     * (mirror(true,false), mirror(false,true) or mirror(true,true)); swap_xy
-     * stays true for landscape. Colours are not handled here: byte order is
+     * Landscape (swap_xy). mirror(true, false) shows the frame mirrored
+     * left-right: the camera delivers the TRUE image (sensor hmirror, used for
+     * recognition) and the TFT shows the mirror view the user faces
+     * (ADR-0010). Overlay text is therefore drawn mirrored into the frame
+     * (mxo_draw_text_mirrored). Colours are not handled here: byte order is
      * preserved by sending the camera data unswapped.
      */
     ESP_ERROR_CHECK(esp_lcd_panel_swap_xy(s_panel, true));
-    ESP_ERROR_CHECK(esp_lcd_panel_mirror(s_panel, false, false));
+    ESP_ERROR_CHECK(esp_lcd_panel_mirror(s_panel, true, false));
     ESP_ERROR_CHECK(esp_lcd_panel_disp_on_off(s_panel, true)); /* backlight is hard-wired on */
     ESP_LOGI(TAG, "ILI9341 ready (landscape %dx%d, strips of %d lines)",
              MXCAM_LCD_W, MXCAM_LCD_H, STRIP_LINES);

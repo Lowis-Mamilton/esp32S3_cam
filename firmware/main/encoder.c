@@ -29,6 +29,11 @@ static const char *TAG = "encoder";
 static uint8_t *s_stage;   /* 16-byte aligned RGB565 copy of the frame (PSRAM) */
 static uint8_t *s_payload; /* FRAME header + JPEG */
 static jpeg_enc_handle_t s_enc;
+#ifdef MXCAM_JPEG_SELFTEST
+/* Colour self-test (debug builds only): frames with frame_id % 4 == 1 are
+ * encoded with the LE input format so both interpretations can be compared. */
+static jpeg_enc_handle_t s_enc_le, s_enc_be;
+#endif
 static uint8_t s_enc_quality; /* quality the encoder handle is set to */
 static TaskHandle_t s_task;
 static atomic_bool s_busy;
@@ -61,6 +66,11 @@ static void encoder_task(void *arg)
         ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
 
         int64_t t0 = esp_timer_get_time();
+#ifdef MXCAM_JPEG_SELFTEST
+        s_enc = (s_frame_id % 4 == 1) ? s_enc_le : s_enc_be;
+        jpeg_enc_set_quality(s_enc, s_quality);
+        s_enc_quality = s_quality;
+#endif
         uint8_t q = s_quality;
         bool reenc = false;
         int jlen = encode(q);
@@ -121,6 +131,12 @@ esp_err_t encoder_start(void)
         return ESP_FAIL;
     }
     s_enc_quality = cfg.quality;
+#ifdef MXCAM_JPEG_SELFTEST
+    s_enc_be = s_enc;
+    cfg.src_type = JPEG_PIXEL_FORMAT_RGB565_LE;
+    if (jpeg_enc_open(&cfg, &s_enc_le) != JPEG_ERR_OK) return ESP_FAIL;
+    ESP_LOGW(TAG, "JPEG colour self-test build: frame_id %% 4 == 1 uses RGB565_LE");
+#endif
     atomic_init(&s_busy, false);
     if (xTaskCreatePinnedToCore(encoder_task, "encoder", ENC_TASK_STACK, NULL, ENC_TASK_PRIO, &s_task, 0) != pdPASS)
         return ESP_ERR_NO_MEM;

@@ -49,8 +49,9 @@ static void show_fatal(const char *line1, const char *line2)
                                     MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     if (!px) return;
     mxo_canvas_t c = { px, MXCAM_LCD_W, MXCAM_LCD_H };
-    mxo_draw_text(&c, 8, 100, line1, MXO_WHITE, MXO_RED);
-    if (line2) mxo_draw_text(&c, 8, 116, line2, MXO_WHITE, MXO_BLACK);
+    /* The panel mirrors left-right (ADR-0010): draw text mirrored. */
+    mxo_draw_text_mirrored(&c, 8, 100, line1, MXO_WHITE, MXO_RED);
+    if (line2) mxo_draw_text_mirrored(&c, 8, 116, line2, MXO_WHITE, MXO_BLACK);
     mxcam_display_draw(px);
     /* mxcam_display_draw returns once the last strip is queued; keep px. */
 }

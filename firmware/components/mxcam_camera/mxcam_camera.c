@@ -39,8 +39,19 @@ esp_err_t mxcam_camera_init(void)
     esp_err_t err = esp_camera_init(&cfg);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "esp_camera_init failed: 0x%x", (unsigned)err);
+        return err;
     }
-    return err;
+    /* Recognition needs the TRUE (non-mirrored) image: a mirrored AprilTag
+     * does not decode (ADR-0010). The sensor's default output is mirrored on
+     * this board, so turn the sensor's horizontal mirror on; the TFT mirrors
+     * the picture back for the user (mxcam_display). */
+    sensor_t *s = esp_camera_sensor_get();
+    if (s && s->set_hmirror) {
+        int before = s->status.hmirror, vflip = s->status.vflip;
+        s->set_hmirror(s, 1);
+        ESP_LOGI(TAG, "sensor hmirror %d -> 1 (vflip %d)", before, vflip);
+    }
+    return ESP_OK;
 }
 
 camera_fb_t *mxcam_camera_grab(void)

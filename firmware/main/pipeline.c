@@ -123,6 +123,26 @@ static void bench_frame_end(uint32_t proc_us)
 }
 #endif
 
+#ifdef MXCAM_JPEG_SELFTEST
+/* Colour self-test (debug builds only, -DMXCAM_JPEG_SELFTEST): FRAME pushes
+ * with frame_id % 4 == 0 or 1 carry a synthetic pattern instead of the camera
+ * image (4 vertical bars: red F800, green 07E0, blue 001F, white FFFF, stored
+ * big-endian like the camera); the encoder encodes % 4 == 1 as RGB565_LE.
+ * Decode the JPEGs on the PC to see which input format keeps the colours. */
+static const uint16_t *selftest_frame(void)
+{
+    static uint16_t *buf;
+    if (!buf) {
+        buf = heap_caps_malloc((size_t)MXCAM_LCD_W * MXCAM_LCD_H * 2, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        if (!buf) return NULL;
+        static const uint16_t bars[4] = { MXO_RGB565(0xF800), MXO_RGB565(0x07E0), MXO_RGB565(0x001F), MXO_RGB565(0xFFFF) };
+        for (int y = 0; y < MXCAM_LCD_H; y++)
+            for (int x = 0; x < MXCAM_LCD_W; x++) buf[y * MXCAM_LCD_W + x] = bars[x / (MXCAM_LCD_W / 4)];
+    }
+    return buf;
+}
+#endif
+
 static mxs_state_t *s_state;
 static const char *s_boot_error;
 
@@ -160,15 +180,19 @@ static void draw_results(mxo_canvas_t *c, const mxp_results_t *res)
         } else {
             continue;
         }
+        /* The box is drawn in frame (true image) coordinates; the panel
+         * mirrors it together with the image. The label is placed in panel
+         * coordinates (above the box's left edge as seen on the panel) and
+         * drawn mirrored so it reads correctly (ADR-0010). */
         int x0 = r->x - r->w / 2, y0 = r->y - r->h / 2;
         mxo_draw_rect(c, x0, y0, r->w, r->h, BOX_THICKNESS, col);
         int tw = (int)strlen(label) * 8;
-        int lx = x0;
+        int lx = mxo_mirror_x(c, x0, r->w); /* box left edge on the panel */
         if (lx + tw > c->width) lx = c->width - tw;
         if (lx < 0) lx = 0;
         int ly = y0 - 9;
         if (ly < 0) ly = y0 + BOX_THICKNESS + 1;
-        mxo_draw_text(c, lx, ly, label, MXO_BLACK, col);
+        mxo_draw_text_mirrored(c, lx, ly, label, MXO_BLACK, col);
     }
 }
 
@@ -234,8 +258,12 @@ static void pipeline_task(void *arg)
              * and the encoder is idle; otherwise the frame is simply skipped. */
             if (ctx.want_frames) {
                 if (!was_wanting) next_due_ms = ctx.now_ms;
+                const uint16_t *enc_src = frame;
+#ifdef MXCAM_JPEG_SELFTEST
+                if (frame_id % 4 <= 1 && selftest_frame()) enc_src = selftest_frame();
+#endif
                 if ((int32_t)(ctx.now_ms - next_due_ms) >= 0 &&
-                    encoder_try_submit(frame, frame_id, ctx.now_ms, ctx.quality)) {
+                    encoder_try_submit(enc_src, frame_id, ctx.now_ms, ctx.quality)) {
                     uint32_t interval = 1000u / ctx.fps;
                     next_due_ms += interval;
                     if ((int32_t)(ctx.now_ms - next_due_ms) > (int32_t)interval) next_due_ms = ctx.now_ms;
@@ -318,11 +346,14 @@ static void pipeline_task(void *arg)
 
             char text[24];
             snprintf(text, sizeof(text), "%s  %d FPS", ctx.fn < 3 ? k_fn_names[ctx.fn] : "?", fps);
-            mxo_draw_text(&canvas, 2, 2, text, MXO_WHITE, MXO_BLACK);
-            if (s_boot_error) mxo_draw_text(&canvas, 2, canvas.height - 10, s_boot_error, MXO_WHITE, MXO_RED);
+            /* Panel coordinates, mirrored into the frame (the TFT shows the
+             * mirror view, ADR-0010): text top-left, icon top-right. */
+            mxo_draw_text_mirrored(&canvas, 2, 2, text, MXO_WHITE, MXO_BLACK);
+            if (s_boot_error)
+                mxo_draw_text_mirrored(&canvas, 2, canvas.height - 10, s_boot_error, MXO_WHITE, MXO_RED);
 
             /* Connection icon: filled square = host talked to us within 3 s, hollow = not connected. */
-            int ix = canvas.width - ICON_SIZE - ICON_MARGIN;
+            int ix = mxo_mirror_x(&canvas, canvas.width - ICON_SIZE - ICON_MARGIN, ICON_SIZE);
             mxo_fill_rect(&canvas, ix - 2, ICON_MARGIN - 2, ICON_SIZE + 4, ICON_SIZE + 4, MXO_BLACK);
             if (ctx.connected)
                 mxo_fill_rect(&canvas, ix, ICON_MARGIN, ICON_SIZE, ICON_SIZE, MXO_WHITE);

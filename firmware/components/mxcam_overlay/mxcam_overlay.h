@@ -33,6 +33,17 @@ void mxo_draw_rect(mxo_canvas_t *c, int x, int y, int w, int h, int thickness, u
 /* 8x8 font, printable ASCII only (others blank). Returns text width in pixels (8 per char). */
 int  mxo_draw_text(mxo_canvas_t *c, int x, int y, const char *ascii, uint16_t fg, uint16_t bg);
 
+/*
+ * Mirrored panel (ADR-0010): the TFT shows the frame mirrored left-right, so
+ * text that must read correctly on the panel is drawn mirrored into the
+ * frame. (x, y) is the text's top-left corner AS SEEN ON THE PANEL; the result
+ * is exactly the left-right mirror of mxo_draw_text(c, x, y, ...). Same
+ * clipping and return value (8 px per char).
+ */
+int  mxo_draw_text_mirrored(mxo_canvas_t *c, int x, int y, const char *ascii, uint16_t fg, uint16_t bg);
+/* Frame x of a span of width w that appears at panel x (and vice versa). */
+int  mxo_mirror_x(const mxo_canvas_t *c, int x, int w);
+
 #ifdef __cplusplus
 }
 #endif

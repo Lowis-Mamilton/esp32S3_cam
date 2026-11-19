@@ -136,6 +136,54 @@ static void test_colors(void)
     CHECK(((const unsigned char *)&v)[0] == 0x07 && ((const unsigned char *)&v)[1] == 0xE0);
 }
 
+/* The panel shows the frame mirrored left-right (ADR-0010): text drawn with
+ * mxo_draw_text_mirrored at panel position x must equal the left-right mirror
+ * of normal text at x, so it reads correctly on the panel. */
+static void check_mirror_of_normal(int x, int y, const char *s)
+{
+    guarded_t a, b;
+    guarded_init(&a, MXO_RED);
+    guarded_init(&b, MXO_RED);
+    mxo_canvas_t ca = { a.buf + GUARD, W, H }, cb = { b.buf + GUARD, W, H };
+    int wa = mxo_draw_text(&ca, x, y, s, MXO_WHITE, MXO_BLACK);
+    int wb = mxo_draw_text_mirrored(&cb, x, y, s, MXO_WHITE, MXO_BLACK);
+    CHECK(wa == wb);
+    int same = 1;
+    for (int yy = 0; yy < H; yy++)
+        for (int xx = 0; xx < W; xx++)
+            if (cb.pixels[yy * W + xx] != ca.pixels[yy * W + (W - 1 - xx)]) same = 0;
+    CHECK(same);
+    CHECK(guards_ok(&a) && guards_ok(&b));
+}
+
+static void test_text_mirrored(void)
+{
+    check_mirror_of_normal(0, 0, "AB");  /* fills the 16-px canvas */
+    check_mirror_of_normal(4, 3, "A");   /* offset */
+    check_mirror_of_normal(12, 0, "Fx"); /* clipped on the panel's right edge */
+    check_mirror_of_normal(-5, -2, "Q"); /* clipped left/top */
+    /* An asymmetric glyph really is reversed: 'F' has its stem on the left. */
+    guarded_t g;
+    guarded_init(&g, MXO_BLACK);
+    mxo_canvas_t c = { g.buf + GUARD, W, H };
+    mxo_draw_text_mirrored(&c, 0, 0, "F", MXO_WHITE, MXO_BLACK);
+    int right = 0, left = 0;
+    for (int y = 0; y < 8; y++) {
+        if (c.pixels[y * W + W - 1] == MXO_WHITE || c.pixels[y * W + W - 2] == MXO_WHITE) right++;
+        if (c.pixels[y * W + W - 8] == MXO_WHITE) left++;
+    }
+    CHECK(right >= 5 && left <= 2); /* stem at the frame's right = panel's left */
+}
+
+static void test_mirror_x(void)
+{
+    mxo_canvas_t c = { NULL, 320, 240 };
+    CHECK(mxo_mirror_x(&c, 0, 10) == 310);
+    CHECK(mxo_mirror_x(&c, 310, 10) == 0);
+    CHECK(mxo_mirror_x(&c, 100, 0) == 220);
+    CHECK(mxo_mirror_x(&c, mxo_mirror_x(&c, 37, 12), 12) == 37); /* involution */
+}
+
 int main(void)
 {
     test_rect_outline();
@@ -144,6 +192,8 @@ int main(void)
     test_degenerate();
     test_text();
     test_colors();
+    test_text_mirrored();
+    test_mirror_x();
     if (failures) { printf("%d failure(s)\n", failures); return 1; }
     printf("overlay: all tests passed\n");
     return 0;
