@@ -64,6 +64,7 @@
   - **手勢辨識（功能 8，ADR-0019，M8a）**：Espressif 手部偵測＋手勢分類，**9 種固定手勢**：1–5（比幾根手指）、讚、OK、打電話、倒讚（ID 1–9）。**不需要學習**，但可以取名（跟 AprilTag 一樣）。`id 0` = 有手但認不出（回報這隻手，R4 只看特定 ID 就會略過）。最多同時 2 隻手（`max_hands`，預設 1；一隻手約 5.5 fps、兩隻手約 4 fps）。信心度 = 手勢分數 ×100。參數（手的偵測門檻、手勢門檻、最多幾隻手）與完整規則見 `docs/protocol.md` §10（Gesture config v1）。
   - 延後：條碼（沒有適合授權、可用於 IDF 5 的函式庫）、貓狗偵測、ImageNet 分類。放棄：COCO 物件偵測（約 1 s／張）、姿態、OCR 等 ESP32-S3 沒有可用模型的功能。
   - 手勢（兩隻手）與人臉辨識約 3 fps，NN 功能的效能目標放寬為 ≥ 3 fps。
+  - 手部關鍵點（21 點，類似 MediaPipe）：2026-11-19 原型評估後**不做**——MediaPipe hand_landmark_lite 在 ESP32-S3 上每隻手約 1 s、PSRAM 不夠和人臉／手勢模型共存（`docs/research/hand-landmarks-proto-b.md`）。手勢維持 ADR-0019 的分類器。
   - 架構前置（M6 開頭）：GET_INFO 功能上限調到 32、各功能自己的參數（Config v1 之外）、LEARN 可指定 ID；手勢（M8a）先放 app rodata、開機載入（ADR-0019）；加入第三個 NN 模型（人體或人臉辨識）時才改成模型分割區＋按需載入。
     - **M6 已完成協定部分**（ADR-0016、`docs/protocol.md` §9）：GET_INFO 功能清單上限 32；`GET_FUNC_CONFIG (0x44)`／`SET_FUNC_CONFIG (0x45)`，每個功能一個固定版面＋自己的 `layout_version`（功能 1–3 的參數留在 Config v1）；不新增能力位元，GET_INFO 的功能清單就是能力；LEARN 可多帶 `id (u16)`（11 bytes，M6 韌體一律回 `BAD_PARAM`）。模型分割區仍待 M8。
 
