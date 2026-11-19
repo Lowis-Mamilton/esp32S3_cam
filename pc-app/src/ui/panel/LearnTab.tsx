@@ -1,7 +1,7 @@
 import { Trash2 } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import { NAME_MAX_BYTES, nameBytes, truncateBytes, type Device, type LearnedId } from '../../device/types'
-import { useT } from '../../i18n'
+import { useT, type MessageKey } from '../../i18n'
 import type { FunctionId } from '../layout/types'
 import type { Guard } from './guard'
 
@@ -186,8 +186,43 @@ function TagLearn({ device, learned, disabled, guard }: Omit<Props, 'fn'>) {
   )
 }
 
+const GESTURE_IDS = [1, 2, 3, 4, 5, 6, 7, 8, 9] as const
+
+/** Gestures are fixed classes: nothing to learn, but each can be given a name (like AprilTag IDs). */
+function GestureNames({ device, learned, disabled, guard }: Omit<Props, 'fn'>) {
+  const { t } = useT()
+  return (
+    <>
+      <p className="muted">{t('gestureNoLearn')}</p>
+      <h3 className="rp-h">{t('gestureNamesHeading')}</h3>
+      <ul className="rp-list">
+        {GESTURE_IDS.map((id) => {
+          const name = learned.find((l) => l.id === id)?.name ?? ''
+          const label = t(`gesture${id}` as MessageKey)
+          return (
+            <li key={id}>
+              <span className="rp-id">{label}</span>
+              <NameInput value={name} label={t('nameOf', { label })} disabled={disabled} onCommit={(v) => device && void guard.run(() => device.setName(8, id, v))} />
+              <button
+                type="button"
+                className="rp-icon"
+                aria-label={t('deleteOf', { label })}
+                disabled={disabled || name === ''}
+                onClick={() => device && void guard.run(() => device.forget(8, id))}
+              >
+                <Trash2 size={15} aria-hidden="true" />
+              </button>
+            </li>
+          )
+        })}
+      </ul>
+    </>
+  )
+}
+
 export default function LearnTab({ fn, ...rest }: Props) {
   const { t } = useT()
   if (fn === 3) return <p className="muted">{t('faceNoLearn')}</p>
+  if (fn === 8) return <GestureNames {...rest} />
   return fn === 1 ? <ColorLearn {...rest} /> : <TagLearn {...rest} />
 }

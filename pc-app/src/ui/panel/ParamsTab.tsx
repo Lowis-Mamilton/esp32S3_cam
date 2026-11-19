@@ -213,6 +213,27 @@ function FnParams({ device, fn, params, disabled, guard }: Props) {
       </div>
     )
   }
+  if (fn === 8) {
+    const g = params.gesture
+    const gesture = (patch: Partial<FunctionParams['gesture']>) => set((p) => ({ gesture: { ...p.gesture, ...patch } }))
+    return (
+      <div className="rp-params">
+        <Slider key="8-hand" label={t('paramHandThreshold')} value={g.handThreshold} min={10} max={95} disabled={disabled} onCommit={(v) => gesture({ handThreshold: v })} />
+        <Slider key="8-gesture" label={t('paramGestureThreshold')} value={g.gestureThreshold} min={0} max={100} disabled={disabled} onCommit={(v) => gesture({ gestureThreshold: v })} />
+        <div className="rp-field" role="group" aria-label={t('paramMaxHands')}>
+          <span>{t('paramMaxHands')}</span>
+          <div className="rp-actions">
+            {([1, 2] as const).map((n) => (
+              <button key={n} type="button" className="btn" aria-pressed={g.maxHands === n} disabled={disabled} onClick={() => void gesture({ maxHands: n })}>
+                {n}
+              </button>
+            ))}
+          </div>
+          <p className="rp-hint">{t('maxHandsHint')}</p>
+        </div>
+      </div>
+    )
+  }
   const f = params.face
   const face = (patch: Partial<FunctionParams['face']>) => set((p) => ({ face: { ...p.face, ...patch } }))
   return (

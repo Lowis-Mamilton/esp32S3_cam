@@ -19,7 +19,7 @@ function stubRect(w: number, h: number) {
 
 interface Over {
   connected?: boolean
-  fn?: 1 | 2 | 3
+  fn?: 1 | 2 | 3 | 8
   canLearn?: boolean
   onLearn?: (r: { x: number; y: number; width: number; height: number }) => Promise<number>
   results?: Result[] | ResultsStore
@@ -27,6 +27,8 @@ interface Over {
   showNames?: boolean
   fps?: number
   kbps?: number | null
+  previewPaused?: boolean
+  onPausePreview?: (paused: boolean) => void
 }
 function storeOf(results: Result[]) {
   const s = new ResultsStore()
@@ -48,6 +50,8 @@ function setup(o: Over = {}) {
         results={o.results instanceof ResultsStore ? o.results : storeOf(o.results ?? [])}
         learned={o.learned ?? []}
         showNames={o.showNames ?? true}
+        previewPaused={o.previewPaused}
+        onPausePreview={o.onPausePreview}
       />
     </I18nProvider>,
   )
@@ -301,4 +305,56 @@ test('mirror view: dragging learns the TRUE-image region (x = 320 - x - w)', asy
 test('the mirror toggle is there even when learning is unavailable', () => {
   setup({ canLearn: false })
   expect(screen.getByRole('checkbox', { name: '鏡像顯示' })).toBeInTheDocument()
+})
+
+test('gesture function: boxes get labels and dragging does not learn', async () => {
+  stubRect(640, 480)
+  const onLearn = vi.fn(async () => 1)
+  const { container } = setup({ fn: 8, canLearn: false, onLearn, results: [{ id: 6, kind: 'gesture', confidence: 92, x: 100, y: 100, width: 40, height: 40 }] })
+  expect(screen.getByText('讚 92%')).toBeInTheDocument()
+  const stage = container.querySelector('.stage')!
+  fireEvent.mouseDown(stage, { clientX: 20, clientY: 20 })
+  await act(async () => {
+    fireEvent.mouseUp(window, { clientX: 100, clientY: 80 })
+  })
+  expect(onLearn).not.toHaveBeenCalled()
+})
+
+test('the pause toggle reports the new state', () => {
+  const onPausePreview = vi.fn()
+  setup({ onPausePreview })
+  const box = screen.getByRole('checkbox', { name: '暫停預覽' })
+  expect(box).not.toBeChecked()
+  fireEvent.click(box)
+  expect(onPausePreview).toHaveBeenLastCalledWith(true)
+})
+
+test('paused: placeholder note, boxes still drawn (mirrored), results rate instead of fps', () => {
+  vi.useFakeTimers()
+  try {
+    localStorage.removeItem('mxcam.mirror') // mirror on
+    stubRect(640, 480)
+    const store = storeOf([{ id: 6, kind: 'gesture', confidence: 92, x: 100, y: 100, width: 40, height: 40 }])
+    const { container } = setup({ fn: 8, canLearn: false, previewPaused: true, results: store, fps: 9.9 })
+    expect(screen.getByText('預覽已暫停（辨識照常進行）')).toBeInTheDocument()
+    expect(screen.getByText('讚 92%')).toBeInTheDocument()
+    const boxEl = container.querySelector('.ls-box') as HTMLElement
+    expect(boxEl.style.left).toBe('400px') // mirrored: true box 80..120 -> screen 200..240 frame px, x2
+    expect(screen.getByRole('checkbox', { name: '暫停預覽' })).toBeChecked()
+    expect(container.querySelector('.stage-stats')!.textContent).toContain('結果')
+    act(() => {
+      for (let i = 0; i < 4; i++) store.push([])
+      vi.advanceTimersByTime(1000)
+    })
+    expect(container.querySelector('.stage-stats')!.textContent).toMatch(/結果 4\.0\/s/)
+    expect(container.querySelector('.stage-stats')!.textContent).not.toContain('fps')
+  } finally {
+    vi.useRealTimers()
+  }
+})
+
+test('not paused: no placeholder and the stats show fps', () => {
+  const { container } = setup({ fps: 9.9 })
+  expect(screen.queryByText('預覽已暫停（辨識照常進行）')).toBeNull()
+  expect(container.querySelector('.stage-stats')!.textContent).toContain('9.9 fps')
 })

@@ -31,6 +31,9 @@ interface Props {
   /** Learned IDs of the displayed function. */
   learned: LearnedId[]
   showNames: boolean
+  /** Frames are not sent; results keep coming (the device layer owns the state). */
+  previewPaused?: boolean
+  onPausePreview?: (paused: boolean) => void
 }
 
 const MIN_DRAG = 4 // frame px
@@ -40,7 +43,7 @@ const tabWidth = (text: string) => Math.ceil([...text].reduce((w, c) => w + (c.c
 const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v))
 const CENTRE: Region = { x: 152, y: 112, width: 16, height: 16 }
 
-export default function LiveStage({ ref, connected, fps, kbps, fn, canLearn, onLearn, results: store, learned, showNames }: Props) {
+export default function LiveStage({ ref, connected, fps, kbps, fn, canLearn, onLearn, results: store, learned, showNames, previewPaused = false, onPausePreview }: Props) {
   const { t } = useT()
   const results = useSyncExternalStore(store.subscribe, store.paired)
   const stageRef = useRef<HTMLDivElement>(null)
@@ -51,11 +54,17 @@ export default function LiveStage({ ref, connected, fps, kbps, fn, canLearn, onL
   const [toast, setToast] = useState<{ text: string; error: boolean } | null>(null)
   // Results and LEARN regions are TRUE-image coordinates; only the screen is mirrored.
   const [mirror, setMirror] = useMirror()
+  const pausedRef = useRef(previewPaused)
+  useEffect(() => {
+    pausedRef.current = previewPaused
+  }, [previewPaused])
+  const [resultsRate, setResultsRate] = useState(0)
   const dragCleanup = useRef<(() => void) | null>(null)
   const toastTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
 
   useImperativeHandle(ref, () => ({
     draw(f) {
+      if (pausedRef.current) return // a frame that was already in flight when the preview was paused
       if (f.kind === 'canvas') {
         const canvas = canvasRef.current
         const ctx = canvas?.getContext('2d')
@@ -96,6 +105,32 @@ export default function LiveStage({ ref, connected, fps, kbps, fn, canLearn, onL
         })
     },
   }))
+
+  // Paused: no frame is on screen, so boxes follow the newest results; the stats show the results rate.
+  useEffect(() => {
+    if (!previewPaused) return
+    try {
+      const canvas = canvasRef.current
+      canvas?.getContext('2d')?.clearRect(0, 0, canvas.width, canvas.height)
+    } catch {
+      // ignore
+    }
+    store.setDisplayed(undefined)
+    let count = 0
+    let since = Date.now()
+    const off = store.subscribe(() => count++)
+    const timer = setInterval(() => {
+      const now = Date.now()
+      setResultsRate((count * 1000) / Math.max(1, now - since))
+      count = 0
+      since = now
+    }, 1000)
+    return () => {
+      off()
+      clearInterval(timer)
+      setResultsRate(0)
+    }
+  }, [previewPaused, store])
 
   useEffect(() => {
     if (connected) return
@@ -196,7 +231,7 @@ export default function LiveStage({ ref, connected, fps, kbps, fn, canLearn, onL
     dragCleanup.current = cleanup
   }
 
-  const kind = fn === 1 ? 'color' : fn === 2 ? 'tag' : 'face'
+  const kind = fn === 1 ? 'color' : fn === 2 ? 'tag' : fn === 8 ? 'gesture' : 'face'
   const shown = results.filter((r) => r.kind === kind)
   const centre = toScreen(vp, FRAME_W / 2, FRAME_H / 2, mirror)
   let dragBox: { left: number; top: number; width: number; height: number } | null = null
@@ -212,10 +247,11 @@ export default function LiveStage({ ref, connected, fps, kbps, fn, canLearn, onL
       {/* A hat block on top of the picture: what the board is running right now. */}
       <div className="ls-hat">
         <CategoryDisc cat={FN_CATEGORY[fn]} Icon={FN_ICON[fn]} size={15} />
-        <span>{t(fn === 1 ? 'stageColor' : fn === 2 ? 'stageTag' : 'stageFace')}</span>
+        <span>{t(fn === 1 ? 'stageColor' : fn === 2 ? 'stageTag' : fn === 8 ? 'stageGesture' : 'stageFace')}</span>
       </div>
       <div ref={stageRef} className={`stage${canLearn ? ' learnable' : ''}`} onMouseDown={onMouseDown}>
         <canvas ref={canvasRef} width={FRAME_W} height={FRAME_H} className={mirror ? 'mirrored' : undefined} />
+        {previewPaused && connected && <div className="stage-paused">{t('previewPausedNote')}</div>}
         <div className="ls-overlay" aria-hidden="true">
           <div className="ls-boxes">
             {shown.map((r, i) => {
@@ -243,12 +279,20 @@ export default function LiveStage({ ref, connected, fps, kbps, fn, canLearn, onL
               )
             })}
           </div>
-          {connected && <div className="ls-crosshair" style={{ left: centre.px, top: centre.py }} />}
+          {connected && !previewPaused && <div className="ls-crosshair" style={{ left: centre.px, top: centre.py }} />}
           {dragBox && <div className="ls-drag" style={dragBox} />}
         </div>
         <div className="stage-stats">
-          {fps.toFixed(1)} {t('fps')}
-          {kbps !== null && (
+          {previewPaused ? (
+            <>
+              {t('resultsRate')} {resultsRate.toFixed(1)}/s
+            </>
+          ) : (
+            <>
+              {fps.toFixed(1)} {t('fps')}
+            </>
+          )}
+          {!previewPaused && kbps !== null && (
             <>
               {' / '}
               {kbps.toFixed(1)} {t('kbps')}
@@ -274,6 +318,10 @@ export default function LiveStage({ ref, connected, fps, kbps, fn, canLearn, onL
             )}
           </>
         )}
+        <label className="ls-mirror ls-pause">
+          <input type="checkbox" checked={previewPaused} onChange={(e) => onPausePreview?.(e.target.checked)} />
+          {t('pausePreview')}
+        </label>
         <label className="ls-mirror">
           <input type="checkbox" checked={mirror} onChange={(e) => setMirror(e.target.checked)} />
           {t('mirrorView')}

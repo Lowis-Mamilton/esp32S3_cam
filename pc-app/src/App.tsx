@@ -13,7 +13,7 @@ import FirmwarePage from './ui/pages/FirmwarePage'
 import SettingsPage from './ui/pages/SettingsPage'
 import LiveStage, { type LiveStageHandle } from './ui/live/LiveStage'
 
-const FN_KEY: Record<FunctionId, MessageKey> = { 1: 'fnColor', 2: 'fnTag', 3: 'fnFace', 8: 'fnFace' /* TODO Task 6 */ }
+const FN_KEY: Record<FunctionId, MessageKey> = { 1: 'fnColor', 2: 'fnTag', 3: 'fnFace', 8: 'fnGesture' }
 const NOTICE_MS = 4000
 const SET_FUNCTION_RETRY_MS = 500
 
@@ -122,6 +122,14 @@ export default function App({ serial }: Props) {
     })
   }
   const onLearn = useCallback((region: Parameters<Device['learnColor']>[0]) => device!.learnColor(region), [device])
+  const onPausePreview = useCallback(
+    (paused: boolean) => {
+      device?.setPreviewPaused(paused).catch((e: unknown) => {
+        if (device) setErrorOf({ device, error: describeError(e) })
+      })
+    },
+    [device],
+  )
   const onDisconnect = () => {
     userClosed.current = true
     void device?.disconnect()
@@ -167,7 +175,9 @@ export default function App({ serial }: Props) {
               onLearn={onLearn}
               results={results}
               learned={snapshot.learned[view.id]}
-              showNames={view.id === 3 ? false : snapshot.params[view.id === 1 ? 'color' : 'tag'].showNames}
+              showNames={view.id === 3 ? false : view.id === 8 ? true : snapshot.params[view.id === 1 ? 'color' : 'tag'].showNames}
+              previewPaused={snapshot.previewPaused}
+              onPausePreview={onPausePreview}
             />
           ) : view.kind === 'settings' ? (
             <SettingsPage device={device} snapshot={snapshot} />

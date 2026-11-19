@@ -14,6 +14,7 @@ export function labelFor(r: Result, learned: LearnedId[], showNames: boolean, t:
   const name = showNames ? (learned.find((l) => l.id === r.id)?.name ?? '') : ''
   const join = (head: string) => (name ? `${head} ${name}` : head)
   if (r.kind === 'face') return `${t('catFace')} ${Math.round(r.confidence ?? 0)}%`
+  if (r.kind === 'gesture') return `${name || t(`gesture${r.id}` as MessageKey)} ${Math.round(r.confidence ?? 0)}%`
   if (r.kind === 'tag') return join(`Tag ${r.id}`)
   if (r.id === 0) return t('catColor')
   return join(`ID${r.id}`)
@@ -22,6 +23,7 @@ export function labelFor(r: Result, learned: LearnedId[], showNames: boolean, t:
 export function idColorVar(r: Result): string {
   // Tags cycle ids 1-7; --id-8 is reserved for faces.
   if (r.kind === 'face') return 'var(--id-8)'
+  if (r.kind === 'gesture') return r.id === 0 ? 'var(--unlearned)' : `var(--id-${((r.id - 1) % 8) + 1})`
   if (r.kind === 'tag') return `var(--id-${(r.id % 7) + 1})`
   if (r.id === 0) return 'var(--unlearned)'
   return `var(--id-${((r.id - 1) % 8) + 1})`

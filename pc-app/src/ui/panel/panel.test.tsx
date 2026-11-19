@@ -484,3 +484,45 @@ test('face code tab uses MXCAM_ALGO_FACE and reads the confidence', () => {
   expect(snippetFor(3, 'en')).toContain('r.confidence')
   expect(snippetFor(1, 'en')).not.toContain('r.confidence')
 })
+
+const gestureResult: Result = { id: 7, kind: 'gesture', confidence: 88, x: 100, y: 100, width: 40, height: 40 }
+
+test('gesture results tab has a gesture column and confidence', () => {
+  setup(8, [gestureResult])
+  expect(screen.getByRole('columnheader', { name: '手勢' })).toBeInTheDocument()
+  expect(screen.getByRole('cell', { name: 'OK' })).toBeInTheDocument()
+  expect(screen.getByText('88%')).toBeInTheDocument()
+})
+
+test('gesture learn tab: no learning, nine rows, naming sends setName(8, id, name)', async () => {
+  const { device } = setup(8)
+  const spy = vi.spyOn(device, 'setName')
+  tab('學習')
+  expect(screen.getByText(/手勢辨識不需要學習/)).toBeInTheDocument()
+  expect(screen.getAllByRole('textbox')).toHaveLength(9)
+  const input = screen.getByRole('textbox', { name: 'OK 名稱' })
+  fireEvent.change(input, { target: { value: '前進' } })
+  fireEvent.blur(input)
+  await waitFor(() => expect(spy).toHaveBeenCalledWith(8, 7, '前進'))
+  fireEvent.click(await screen.findByRole('button', { name: '刪除 OK' }))
+  await waitFor(() => expect(device.snapshot().learned[8]).toHaveLength(0))
+})
+
+test('gesture params: max hands 2 sends the whole gesture config', async () => {
+  const { device } = setup(8)
+  const spy = vi.spyOn(device, 'setParams')
+  tab('參數')
+  expect(screen.getByRole('slider', { name: '偵測到手的門檻' })).toBeInTheDocument()
+  expect(screen.getByRole('slider', { name: '手勢門檻' })).toBeInTheDocument()
+  fireEvent.click(screen.getByRole('button', { name: '2' }))
+  await waitFor(() => expect(spy).toHaveBeenCalled())
+  expect(spy.mock.calls[0][0].gesture).toEqual({ ...device.snapshot().params.gesture, maxHands: 2 })
+  expect(device.snapshot().params.gesture.maxHands).toBe(2)
+})
+
+test('gesture code tab uses MXCAM_ALGO_GESTURE', () => {
+  setup(8)
+  tab('程式')
+  expect(document.body.textContent).toContain('MXCAM_ALGO_GESTURE')
+  expect(snippetFor(8, 'en')).toContain('MXCAM_GESTURE_LIKE')
+})

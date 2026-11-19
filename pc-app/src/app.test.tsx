@@ -444,3 +444,15 @@ test('real board: face stays greyed with 需要更新韌體 when GET_INFO lacks 
   fireEvent.click(face)
   expect(fw.requests.some((r) => r.cmd === Cmd.SetFunction && r.payload[0] === 3)).toBe(false)
 })
+
+test('demo: the pause-preview toggle pauses and resumes the preview (placeholder shown while paused)', async () => {
+  localStorage.setItem('mxcam.demo', '1')
+  renderApp({ serial: idleSerial })
+  const box = await screen.findByRole('checkbox', { name: '暫停預覽' })
+  expect(box).not.toBeChecked()
+  fireEvent.click(box)
+  expect(await screen.findByText('預覽已暫停（辨識照常進行）')).toBeInTheDocument()
+  expect(screen.getByRole('checkbox', { name: '暫停預覽' })).toBeChecked()
+  fireEvent.click(screen.getByRole('checkbox', { name: '暫停預覽' }))
+  await waitFor(() => expect(screen.queryByText('預覽已暫停（辨識照常進行）')).toBeNull())
+})

@@ -12,6 +12,8 @@ const TEXT = {
     colorId: '// r.id 是學習的顏色 ID',
     tagId: '// r.id 是 tag 編號',
     faceId: '// 人臉的 r.id 沒有意義，信心度是 r.confidence（0–100）',
+    gestureId: '// r.id 是手勢：1–5 比幾根手指、6 讚、7 OK、8 打電話、9 倒讚、0 有手但認不出；r.confidence 是 0–100',
+    gestureLike: '// 比讚的時候',
     box: '// 位置與大小：r.x, r.y, r.width, r.height',
   },
   en: {
@@ -22,6 +24,8 @@ const TEXT = {
     colorId: '// r.id is the learned colour ID',
     tagId: '// r.id is the tag number',
     faceId: '// r.id carries no meaning for faces; r.confidence is 0-100',
+    gestureId: '// r.id is the gesture: 1-5 fingers up, 6 like, 7 OK, 8 call, 9 dislike, 0 a hand it cannot name; r.confidence is 0-100',
+    gestureLike: '// When the hand gives a thumbs up',
     box: '// Position and size: r.x, r.y, r.width, r.height',
   },
 } as const
@@ -29,7 +33,7 @@ const TEXT = {
 /** Arduino sketch using the MXCam library API of SPEC 6.3. Comments follow the UI language. */
 export function snippetFor(fn: FunctionId, lang: Lang): string {
   const c = TEXT[lang]
-  const idNote = fn === 1 ? c.colorId : fn === 2 ? c.tagId : c.faceId
+  const idNote = fn === 1 ? c.colorId : fn === 2 ? c.tagId : fn === 8 ? c.gestureId : c.faceId
   return `#include <MXCam.h>
 
 MXCam cam;
@@ -55,7 +59,10 @@ void loop() {
       Serial.print(" ");
       Serial.print(r.width);
       Serial.print(" ");
-      Serial.println(r.height);
+      Serial.println(r.height);${fn === 8 ? `
+      if (r.id == MXCAM_GESTURE_LIKE) {  ${c.gestureLike}
+        Serial.println("like!");
+      }` : ''}
     }
   }
   delay(50);

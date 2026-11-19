@@ -1,7 +1,7 @@
 import { useSyncExternalStore } from "react";
 import type { ResultsStore } from "../../device/resultsStore";
 import type { LearnedId, Result } from "../../device/types";
-import { useT } from "../../i18n";
+import { useT, type MessageKey } from "../../i18n";
 import type { FunctionId } from "../layout/types";
 import { idColorVar } from "../live/labels";
 import { useMirror } from "../live/mirror";
@@ -27,10 +27,13 @@ export default function ResultsTab({ fn, results: store, learned }: Props) {
   const rows = results.filter((r) => r.kind === KIND[fn]);
   if (rows.length === 0) return <p className="muted">{t("resultsEmpty")}</p>;
   const face = fn === 3;
+  const gesture = fn === 8;
   const idText = (r: Result) =>
     r.kind === "face"
       ? t("catFace")
-      : r.kind === "tag"
+      : r.kind === "gesture"
+        ? String(r.id)
+        : r.kind === "tag"
         ? `Tag ${r.id}`
         : r.id
           ? `ID${r.id}`
@@ -41,12 +44,14 @@ export default function ResultsTab({ fn, results: store, learned }: Props) {
         <thead>
           <tr>
             <th scope="col">{t("colId")}</th>
+            {gesture && <th scope="col">{t("colGesture")}</th>}
             <th scope="col">{t("colName")}</th>
             <th scope="col">x</th>
             <th scope="col">y</th>
             <th scope="col">{t("colWidth")}</th>
             <th scope="col">{t("colHeight")}</th>
             {face && <th scope="col">{t("colConfidence")}</th>}
+            {gesture && <th scope="col">{t("colConfidence")}</th>}
           </tr>
         </thead>
         <tbody>
@@ -60,6 +65,7 @@ export default function ResultsTab({ fn, results: store, learned }: Props) {
                 />
                 {idText(r)}
               </td>
+              {gesture && <td>{t(`gesture${r.id}` as MessageKey)}</td>}
               <td className="rp-name">
                 {learned.find((l) => l.id === r.id)?.name ?? ""}
               </td>
@@ -67,7 +73,7 @@ export default function ResultsTab({ fn, results: store, learned }: Props) {
               <td>{Math.round(r.y)}</td>
               <td>{Math.round(r.width)}</td>
               <td>{Math.round(r.height)}</td>
-              {face && <td>{Math.round(r.confidence ?? 0)}%</td>}
+              {(face || gesture) && <td>{Math.round(r.confidence ?? 0)}%</td>}
             </tr>
           ))}
         </tbody>

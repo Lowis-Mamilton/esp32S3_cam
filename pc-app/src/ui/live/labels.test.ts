@@ -45,3 +45,17 @@ test('idColorVar is stable per id and unlearned is distinct', () => {
   expect(idColorVar({ id: 0, kind: 'color', ...box })).toBe('var(--unlearned)')
   expect(idColorVar({ id: 0, kind: 'face', ...box })).toBe('var(--id-8)')
 })
+
+test('gesture: language name or user name, plus confidence', () => {
+  const g = (id: number, confidence: number): Result => ({ id, kind: 'gesture', confidence, ...box })
+  expect(labelFor(g(6, 92), [], true, tz)).toBe('讚 92%')
+  expect(labelFor(g(6, 92), [{ id: 6, name: '前進' }], true, tz)).toBe('前進 92%')
+  expect(labelFor(g(0, 81), [], true, tz)).toBe('手 81%')
+  expect(labelFor(g(7, 70), [], true, te)).toBe('OK 70%')
+})
+
+test('gesture colours: id 0 unlearned, ids cycle 8 colours', () => {
+  expect(idColorVar({ id: 0, kind: 'gesture', ...box })).toBe('var(--unlearned)')
+  expect(idColorVar({ id: 9, kind: 'gesture', ...box })).toBe('var(--id-1)')
+  expect(idColorVar({ id: 3, kind: 'gesture', ...box })).toBe('var(--id-3)')
+})

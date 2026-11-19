@@ -123,3 +123,26 @@ test('html lang follows the UI language', () => {
   )
   expect(document.documentElement.lang).toBe('zh-TW')
 })
+
+test('sidebar has a gesture item with the Hand icon and its own category colour', () => {
+  const { container } = render(
+    <I18nProvider>
+      <Sidebar view={{ kind: 'function', id: 1 }} supported={[1, 2, 3, 8]} onSelect={() => {}} />
+    </I18nProvider>,
+  )
+  const b = screen.getByRole('button', { name: '手勢' })
+  expect(b).not.toHaveAttribute('aria-disabled')
+  expect(b.querySelector('svg')!.getAttribute('class')).toContain('lucide-hand')
+  expect((b.querySelector('.nav-disc') as HTMLElement).style.background).toBe('var(--cat-gesture)')
+  expect(container.querySelectorAll('.nav-item')).toHaveLength(6)
+})
+
+test('gesture item is disabled with the firmware hint when the board does not list it', () => {
+  render(
+    <I18nProvider>
+      <Sidebar view={{ kind: 'function', id: 1 }} supported={[1, 2, 3]} onSelect={() => {}} />
+    </I18nProvider>,
+  )
+  expect(screen.getByRole('button', { name: '手勢' })).toHaveAttribute('aria-disabled', 'true')
+  expect(screen.getByRole('button', { name: '手勢' })).toHaveAccessibleDescription('需要更新韌體')
+})
