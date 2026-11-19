@@ -76,7 +76,10 @@ function readText(file: File): Promise<string> {
   })
 }
 
-type ImportState = { kind: 'ok' } | { kind: 'bad'; detail: string } | null
+const MAX_CONFIG_BYTES = 1024 * 1024
+const REVOKE_DELAY_MS = 1000
+
+type ImportState = { kind: 'ok' } | { kind: 'bad'; key?: MessageKey; raw?: string } | null
 
 /** Export / import of the whole device config (all functions + system). */
 function ConfigIO({ device, disabled, guard }: { device: Device | null; disabled: boolean; guard: Guard }) {
@@ -92,19 +95,27 @@ function ConfigIO({ device, disabled, guard }: { device: Device | null; disabled
     document.body.appendChild(a)
     a.click()
     a.remove()
-    URL.revokeObjectURL(url)
+    // Revoking at once can cancel the download in some browsers.
+    setTimeout(() => URL.revokeObjectURL(url), REVOKE_DELAY_MS)
   }
   const importFile = async (file: File) => {
     if (!device) return
     setState(null)
     guard.clear()
+    if (file.size > MAX_CONFIG_BYTES) {
+      setState({ kind: 'bad', key: 'cfgTooLarge' })
+      return
+    }
     try {
       await device.importConfig(await readText(file))
       setState({ kind: 'ok' })
     } catch (e) {
       // A firmware that cannot take the config is not a bad file.
       if (isNotSupported(e)) void guard.run(() => Promise.reject(e))
-      else setState({ kind: 'bad', detail: e instanceof Error ? e.message : String(e) })
+      else {
+        const msg = e instanceof Error ? e.message : String(e)
+        setState(/not JSON/.test(msg) ? { kind: 'bad', key: 'cfgNotJson' } : { kind: 'bad', raw: msg })
+      }
     }
   }
   return (
@@ -137,7 +148,7 @@ function ConfigIO({ device, disabled, guard }: { device: Device | null; disabled
       )}
       {state?.kind === 'bad' && (
         <p role="alert" className="rp-error">
-          {t('cfgBad')} <small>{state.detail}</small>
+          {t('cfgBad')} <small>{state.key ? t(state.key) : state.raw}</small>
         </p>
       )}
     </div>

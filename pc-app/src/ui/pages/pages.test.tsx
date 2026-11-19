@@ -66,24 +66,76 @@ test('UART baud radio sends setSystem immediately', async () => {
   expect(screen.getByRole('radio', { name: '9600' })).toBeChecked()
 })
 
-test('I2C address shows 0x prefix and a valid value is sent', async () => {
-  const d = mount((x) => <SettingsHarness device={x} />)
-  const spy = vi.spyOn(d, 'setSystem')
-  const input = screen.getByRole('textbox', { name: 'I2C 位址' })
-  expect(input).toHaveValue('5A')
-  expect(screen.getByText('0x')).toBeInTheDocument()
-  fireEvent.change(input, { target: { value: '30' } })
-  await waitFor(() => expect(spy).toHaveBeenCalledWith({ i2cAddress: 0x30 }))
-  expect(screen.queryByRole('alert')).toBeNull()
-})
+const i2c = () => screen.getByRole('textbox', { name: 'I2C 位址' })
+const RANGE = 'I2C 位址必須在 0x08 到 0x77 之間'
+const type = (v: string) => fireEvent.change(i2c(), { target: { value: v } })
 
-test.each(['FF', '07', '78', 'zz', ''])('I2C address %j is rejected inline and not sent', (v) => {
+test('I2C address shows 0x prefix; typing sends nothing until Enter', async () => {
   const d = mount((x) => <SettingsHarness device={x} />)
   const spy = vi.spyOn(d, 'setSystem')
-  fireEvent.change(screen.getByRole('textbox', { name: 'I2C 位址' }), { target: { value: v } })
-  expect(screen.getByText('I2C 位址必須在 0x08 到 0x77 之間')).toBeInTheDocument()
+  expect(i2c()).toHaveValue('5A')
+  expect(screen.getByText('0x')).toBeInTheDocument()
+  type('A')
+  type('A1')
+  expect(spy).not.toHaveBeenCalled()
+  expect(screen.queryByText(RANGE)).toBeNull()
+  fireEvent.keyDown(i2c(), { key: 'Enter' })
+  expect(screen.getByText(RANGE)).toBeInTheDocument()
   expect(spy).not.toHaveBeenCalled()
   expect(d.snapshot().system.i2cAddress).toBe(0x5a)
+})
+
+test('I2C Enter sends the value and clears the draft', async () => {
+  const d = mount((x) => <SettingsHarness device={x} />)
+  const spy = vi.spyOn(d, 'setSystem')
+  type('30')
+  fireEvent.keyDown(i2c(), { key: 'Enter' })
+  await waitFor(() => expect(spy).toHaveBeenCalledWith({ i2cAddress: 0x30 }))
+  expect(screen.queryByText(RANGE)).toBeNull()
+  // device-side change (factory reset) shows because the draft was cleared
+  await act(async () => {
+    await d.factoryReset()
+  })
+  expect(i2c()).toHaveValue('5A')
+})
+
+test('I2C "0x3C" + blur sends 0x3C', async () => {
+  const d = mount((x) => <SettingsHarness device={x} />)
+  const spy = vi.spyOn(d, 'setSystem')
+  type('0x3C')
+  fireEvent.blur(i2c())
+  await waitFor(() => expect(spy).toHaveBeenCalledWith({ i2cAddress: 0x3c }))
+})
+
+test.each(['FF', '07', '78', 'zz', ''])('I2C %j is rejected on Enter and not sent', (v) => {
+  const d = mount((x) => <SettingsHarness device={x} />)
+  const spy = vi.spyOn(d, 'setSystem')
+  type(v)
+  fireEvent.keyDown(i2c(), { key: 'Enter' })
+  expect(screen.getByText(RANGE)).toBeInTheDocument()
+  expect(spy).not.toHaveBeenCalled()
+})
+
+test('I2C invalid on blur keeps error and draft; Escape reverts', () => {
+  const d = mount((x) => <SettingsHarness device={x} />)
+  const spy = vi.spyOn(d, 'setSystem')
+  type('FF')
+  fireEvent.blur(i2c())
+  expect(screen.getByText(RANGE)).toBeInTheDocument()
+  expect(i2c()).toHaveValue('FF')
+  fireEvent.keyDown(i2c(), { key: 'Escape' })
+  expect(i2c()).toHaveValue('5A')
+  expect(screen.queryByText(RANGE)).toBeNull()
+  expect(spy).not.toHaveBeenCalled()
+})
+
+test('real device: I2C commit shows 需要更新韌體 and disables the field', async () => {
+  mount((x) => <SettingsHarness device={x} />, new RealDevice(undefined))
+  type('30')
+  fireEvent.keyDown(i2c(), { key: 'Enter' })
+  expect(await screen.findByText('需要更新韌體')).toBeInTheDocument()
+  expect(i2c()).toBeDisabled()
+  expect(i2c()).toHaveValue('5A')
 })
 
 test('LED slider debounces and flushes on unmount', async () => {
@@ -121,6 +173,7 @@ test('factory reset needs inline confirmation, focus goes to cancel', async () =
   expect(screen.getByRole('button', { name: '取消' })).toHaveFocus()
   fireEvent.click(screen.getByRole('button', { name: '取消' }))
   expect(spy).not.toHaveBeenCalled()
+  expect(screen.getByRole('button', { name: '恢復原廠設定' })).toHaveFocus()
   fireEvent.click(screen.getByRole('button', { name: '恢復原廠設定' }))
   fireEvent.click(screen.getByRole('button', { name: '確定恢復' }))
   await waitFor(() => expect(spy).toHaveBeenCalledTimes(1))
@@ -185,9 +238,13 @@ test('export downloads mxcam-config.json via a temporary link and revokes the UR
     download = this.download
   })
   openParams()
+  vi.useFakeTimers()
   fireEvent.click(screen.getByRole('button', { name: '匯出' }))
   expect(download).toBe('mxcam-config.json')
+  expect(URL.revokeObjectURL).not.toHaveBeenCalled() // revoked after the browser has started the download
+  vi.advanceTimersByTime(1500)
   expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:cfg')
+  vi.useRealTimers()
   expect(document.querySelector('a[download]')).toBeNull()
   expect(await readBlob(blobs[0])).toBe(d.exportConfig())
 })
@@ -234,4 +291,34 @@ test('real device: export works, import says 需要更新韌體', async () => {
   upload(real.exportConfig())
   expect((await screen.findAllByText('需要更新韌體')).length).toBeGreaterThan(0)
   expect(screen.queryByText(/設定檔格式不正確/)).toBeNull()
+})
+
+test('importing the same file twice works both times', async () => {
+  const d = mount((x) => <PanelHarness device={x} fn={1} />)
+  const spy = vi.spyOn(d, 'importConfig')
+  openParams()
+  const text = d.exportConfig()
+  upload(text)
+  await waitFor(() => expect(spy).toHaveBeenCalledTimes(1))
+  expect(fileInput().value).toBe('')
+  upload(text)
+  await waitFor(() => expect(spy).toHaveBeenCalledTimes(2))
+})
+
+test('syntax error gets a short localized detail, not the parser message', async () => {
+  mount((x) => <PanelHarness device={x} fn={1} />)
+  openParams()
+  upload('{not json')
+  expect(await screen.findByText('不是有效的 JSON')).toBeInTheDocument()
+  expect(screen.queryByText(/invalid config/)).toBeNull()
+})
+
+test('oversized import file is rejected without reading it', async () => {
+  const d = mount((x) => <PanelHarness device={x} fn={1} />)
+  const spy = vi.spyOn(d, 'importConfig')
+  openParams()
+  upload('x'.repeat(1024 * 1024 + 1))
+  expect(await screen.findByText(/設定檔格式不正確/)).toBeInTheDocument()
+  expect(screen.getByText('檔案太大（上限 1 MB）')).toBeInTheDocument()
+  expect(spy).not.toHaveBeenCalled()
 })

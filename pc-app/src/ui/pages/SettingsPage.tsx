@@ -26,22 +26,43 @@ export default function SettingsPage({ device, snapshot }: Props) {
   const disabled = !device || guard.needFirmware
   const set = (patch: Partial<typeof system>) => (device ? guard.run(() => device.setSystem(patch)) : undefined)
 
+  // The address is only sent on Enter or blur: a half-typed value must never reach the bus.
   const [draft, setDraft] = useState<string | null>(null)
+  const [rangeError, setRangeError] = useState(false)
   const shown = guard.needFirmware ? null : draft
   const hex = shown ?? system.i2cAddress.toString(16).toUpperCase()
-  const hexBad = shown !== null && parseHex(shown) === null
-  const onHex = (raw: string) => {
-    const text = raw.trim().replace(/^0x/i, '')
-    setDraft(text.toUpperCase())
-    const n = parseHex(text)
-    if (n !== null && n !== system.i2cAddress) void set({ i2cAddress: n })
+  const commitHex = () => {
+    if (shown === null) return
+    const n = parseHex(shown.trim().replace(/^0x/i, ''))
+    if (n === null) {
+      setRangeError(true)
+      return
+    }
+    setDraft(null)
+    setRangeError(false)
+    if (n !== system.i2cAddress) void set({ i2cAddress: n })
   }
+  const revertHex = () => {
+    setDraft(null)
+    setRangeError(false)
+  }
+  const hexBad = rangeError && shown !== null
 
   const [confirming, setConfirming] = useState(false)
   const cancelRef = useRef<HTMLButtonElement>(null)
+  const resetRef = useRef<HTMLButtonElement>(null)
+  const returnFocus = useRef(false)
   useEffect(() => {
     if (confirming) cancelRef.current?.focus()
+    else if (returnFocus.current) {
+      returnFocus.current = false
+      resetRef.current?.focus()
+    }
   }, [confirming])
+  const closeConfirm = () => {
+    returnFocus.current = true
+    setConfirming(false)
+  }
 
   return (
     <section className="pg">
@@ -91,7 +112,7 @@ export default function SettingsPage({ device, snapshot }: Props) {
         <div className="pg-row">
           <label htmlFor="pg-i2c">{t('i2cAddress')}</label>
           <div className="pg-hex">
-            <span aria-hidden="false">0x</span>
+            <span>0x</span>
             <input
               id="pg-i2c"
               type="text"
@@ -102,8 +123,15 @@ export default function SettingsPage({ device, snapshot }: Props) {
               disabled={disabled}
               aria-invalid={hexBad}
               aria-describedby={hexBad ? 'pg-i2c-err' : undefined}
-              onChange={(e) => onHex(e.target.value)}
-              onBlur={() => !hexBad && setDraft(null)}
+              onChange={(e) => {
+                setDraft(e.target.value.toUpperCase())
+                setRangeError(false)
+              }}
+              onBlur={commitHex}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && !e.nativeEvent.isComposing && e.keyCode !== 229) commitHex()
+                else if (e.key === 'Escape') revertHex()
+              }}
             />
           </div>
         </div>
@@ -124,14 +152,14 @@ export default function SettingsPage({ device, snapshot }: Props) {
         {confirming ? (
           <div className="rp-confirm" role="group" aria-label={t('factoryReset')}>
             <p>{t('factoryResetText')}</p>
-            <button ref={cancelRef} type="button" className="btn" onClick={() => setConfirming(false)}>
+            <button ref={cancelRef} type="button" className="btn" onClick={closeConfirm}>
               {t('cancel')}
             </button>
             <button
               type="button"
               className="btn rp-danger"
               onClick={() => {
-                setConfirming(false)
+                closeConfirm()
                 if (device) void guard.run(() => device.factoryReset())
               }}
             >
@@ -141,7 +169,7 @@ export default function SettingsPage({ device, snapshot }: Props) {
         ) : (
           <>
             <p className="muted pg-note">{t('factoryResetHint')}</p>
-            <button type="button" className="btn" disabled={disabled} onClick={() => setConfirming(true)}>
+            <button ref={resetRef} type="button" className="btn" disabled={disabled} onClick={() => setConfirming(true)}>
               {t('factoryReset')}
             </button>
           </>
