@@ -62,16 +62,19 @@ typedef struct {
 static EXT_RAM_BSS_ATTR work_t s_w;
 
 #ifdef MXK_TEST_HOOKS
-static uint32_t s_macs;
+static uint32_t s_macs, s_bps;
 #define COUNT_MACS(n) (s_macs += (uint32_t)(n))
+#define COUNT_BP() (s_bps++)
 void mxk_test_canary_arm(void) { s_w.c0 = s_w.c1 = s_w.c2 = s_w.c3 = s_w.c4 = s_w.c5 = s_w.c6 = CANARY; }
 bool mxk_test_canary_ok(void) {
   return s_w.c0 == CANARY && s_w.c1 == CANARY && s_w.c2 == CANARY && s_w.c3 == CANARY && s_w.c4 == CANARY &&
          s_w.c5 == CANARY && s_w.c6 == CANARY;
 }
 uint32_t mxk_test_macs(void) { return s_macs; }
+uint32_t mxk_test_backprojects(void) { return s_bps; }
 #else
 #define COUNT_MACS(n) ((void)0)
+#define COUNT_BP() ((void)0)
 #endif
 
 static int clampi(int v, int lo, int hi) { return v < lo ? lo : (v > hi ? hi : v); }
@@ -364,8 +367,9 @@ static match_t search(const mxk_model_t *m, const mxp_track_config_t *cfg, const
     if (i > 0 && scales[i] == c) ok[i] = false; /* clamped onto the base scale */
   }
   /* Budget fallbacks, in the plan's order: (1) one extra scale per frame,
-   * alternating 0.9 / 1.1; (2) coarse step 3; then (only reachable with the
-   * half budget of a lost + reacquire frame) the base scale alone. */
+   * alternating 0.9 / 1.1; (2) coarse step 3; then the base scale alone
+   * (only for templates above MXK_TMPL_LEARN_MAX or the half budget of a
+   * back-projection frame). */
   int step = 2;
   bool use[3] = {ok[0], nsc > 1 && ok[1], nsc > 1 && ok[2]};
   uint32_t cost = 0;
@@ -395,6 +399,7 @@ static match_t search(const mxk_model_t *m, const mxp_track_config_t *cfg, const
 static bool backproject(const uint16_t *frame, const mxk_model_t *m, int bw, int bh, int *cx, int *cy) {
   const int st = HW + 1;
   uint32_t *ii = s_w.ii;
+  COUNT_BP();
   memset(ii, 0, (size_t)st * sizeof ii[0]);
   for (int y = 0; y < HH; y++) {
     uint32_t row = 0;
@@ -440,12 +445,12 @@ bool mxk_learn(const uint16_t *frame, uint16_t x, uint16_t y, uint16_t w, uint16
   int hx0 = x0 / 2, hy0 = y0 / 2, hx1 = (x1 + 1) / 2, hy1 = (y1 + 1) / 2;
   int hw = (bw + 1) / 2, hh = (bh + 1) / 2, lng = hw > hh ? hw : hh;
   int tw = hw, th = hh;
-  if (lng > MXK_TMPL_MAX) {
-    tw = (hw * MXK_TMPL_MAX + lng / 2) / lng;
-    th = (hh * MXK_TMPL_MAX + lng / 2) / lng;
+  if (lng > MXK_TMPL_LEARN_MAX) {
+    tw = (hw * MXK_TMPL_LEARN_MAX + lng / 2) / lng;
+    th = (hh * MXK_TMPL_LEARN_MAX + lng / 2) / lng;
   }
-  tw = clampi(tw, MXK_TMPL_MIN, MXK_TMPL_MAX);
-  th = clampi(th, MXK_TMPL_MIN, MXK_TMPL_MAX);
+  tw = clampi(tw, MXK_TMPL_MIN, MXK_TMPL_LEARN_MAX);
+  th = clampi(th, MXK_TMPL_MIN, MXK_TMPL_LEARN_MAX);
   uint8_t *tmpl = s_w.patch; /* scratch: keeps 1 KB off the caller's stack */
   memset(tmpl, 0, TN);
   resample((float)x0 * 0.5f, (float)y0 * 0.5f, (float)bw * 0.5f / (float)tw, (float)bh * 0.5f / (float)th, tw, th,
@@ -513,13 +518,15 @@ void mxk_reset(mxk_state_t *st, const mxk_model_t *m) {
 static void go_lost(mxk_state_t *st, const mxk_model_t *m) {
   if (!st->lost) memcpy(st->live, m->tmpl, sizeof st->live);
   st->lost = 1;
-  if (st->lost_frames < 0xFFFF) st->lost_frames++;
+  /* saturates, but keeps alternating parity (back-projection frames) */
+  st->lost_frames = st->lost_frames < 0xFFFF ? (uint16_t)(st->lost_frames + 1) : 0xFFFE;
 }
 
 uint8_t mxk_track(const uint16_t *frame, const mxk_model_t *m, const mxp_track_config_t *cfg, mxk_state_t *st,
                   mxp_result_t *out) {
 #ifdef MXK_TEST_HOOKS
   s_macs = 0;
+  s_bps = 0;
 #endif
   if (!mxk_model_valid(m)) return 0;
   int thr = clampi(cfg->threshold, 10, 95), adapt = clampi(cfg->adapt, 0, 50);
@@ -527,21 +534,26 @@ uint8_t mxk_track(const uint16_t *frame, const mxk_model_t *m, const mxp_track_c
 
   st->tick ^= 1;
 
-  /* Always the last position first (also while lost: a target that comes back
-   * where it was lost is found even if a bigger same-colour decoy wins the
-   * back-projection). */
-  /* a lost + reacquire frame may run two searches: each gets half the budget */
-  const bool reacq = st->lost && cfg->reacquire;
-  const uint32_t budget = reacq ? MXK_MAC_BUDGET / 2 : MXK_MAC_BUDGET;
-  match_t b = search(m, cfg, st, st->live, st->cx, st->cy, budget);
-  if (b.score * 100.0f < (float)thr && reacq) {
+  /* Tracked (or lost without reacquire): the last position, full budget.
+   * Lost with reacquire: frames alternate between the back-projection
+   * candidate (odd lost_frames, so the first frame after the loss; half the
+   * budget, the back-projection itself costs about the other half on the
+   * board) and the last position (even, full budget: a target that comes
+   * back where it was lost is found even if a bigger same-colour decoy wins
+   * the back-projection). Every frame then costs about the same (Task 5
+   * measurements, ADR-0018). */
+  int scx = st->cx, scy = st->cy;
+  uint32_t budget = MXK_MAC_BUDGET;
+  if (st->lost && cfg->reacquire && (st->lost_frames & 1u)) {
     int cx, cy, lng = st->w > st->h ? st->w : st->h;
-    /* a peak within one long side was already inside the first window */
+    budget = MXK_MAC_BUDGET / 2;
+    /* a peak within one long side is inside the last-position window anyway */
     if (backproject(frame, m, st->w, st->h, &cx, &cy) && (abs(cx - st->cx) > lng || abs(cy - st->cy) > lng)) {
-      match_t b2 = search(m, cfg, st, st->live, cx, cy, budget);
-      if (b2.score > b.score) b = b2;
+      scx = cx;
+      scy = cy;
     }
   }
+  match_t b = search(m, cfg, st, st->live, scx, scy, budget);
   int conf = b.score > 0.0f ? (int)lroundf(b.score * 100.0f) : 0;
   if (conf > 100) conf = 100;
   if (conf < thr) {

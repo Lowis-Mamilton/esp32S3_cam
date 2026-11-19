@@ -137,6 +137,8 @@ void app_main(void)
 #endif
     ESP_LOGI(TAG, "gesture config: hand_threshold %u, gesture_threshold %u, max_hands %u",
              s_data.gesture_cfg.hand_threshold, s_data.gesture_cfg.gesture_threshold, s_data.gesture_cfg.max_hands);
+    ESP_LOGI(TAG, "line: mode %u, colour %s; object tracking: %s", s_data.line_cfg.mode,
+             s_data.line_has_color ? "learned" : "none", s_data.has_object ? "learned" : "none");
 
     mxp_info_t info;
     build_info(&info);
@@ -148,6 +150,10 @@ void app_main(void)
         caps[n_caps++] = MXP_FUNC_COLOR;
         if (tag_ok) caps[n_caps++] = MXP_FUNC_APRILTAG;
         if (face_ok) caps[n_caps++] = MXP_FUNC_FACE;
+        /* Line and object tracking: pure C on static buffers, nothing to
+         * initialise (ADR-0018). */
+        caps[n_caps++] = MXP_FUNC_LINE;
+        caps[n_caps++] = MXP_FUNC_TRACK;
         if (gesture_ok) caps[n_caps++] = MXP_FUNC_GESTURE;
     }
     mxs_set_capabilities(&s_state, caps, n_caps);

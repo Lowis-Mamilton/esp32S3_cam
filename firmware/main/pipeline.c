@@ -21,6 +21,7 @@
 #include "mxcam_store.h"
 #include "mxcam_tag.h"
 #include "status_led.h"
+#include "tracking.h"
 
 static const char *TAG = "pipeline";
 
@@ -60,6 +61,8 @@ static const char *fn_name(uint8_t fn)
     case MXP_FUNC_COLOR: return "COLOR";
     case MXP_FUNC_APRILTAG: return "TAG";
     case MXP_FUNC_FACE: return "FACE";
+    case MXP_FUNC_LINE: return "LINE";
+    case MXP_FUNC_TRACK: return "TRACK";
     case MXP_FUNC_GESTURE: return "GESTURE";
     default: return "?";
     }
@@ -352,6 +355,7 @@ static void pipeline_task(void *arg)
     unsigned gest_runs = 0, gest_skip = 0, gest_dets = 0, gest_lost = 0;
     static mxh_track_t gest_trk;
     uint8_t last_count = 0, last_fn = 0;
+    uint8_t prev_fn = 0xFF; /* function of the previous frame (line / object tracker reset) */
     uint32_t frame_id = 1; /* 0 means "no frame processed yet" in GET_RESULTS */
     /* Streaming schedule: next_due_ms advances by one interval per submitted
      * frame (not "now + interval") so the average rate matches max_fps even
@@ -409,9 +413,12 @@ static void pipeline_task(void *arg)
             ctx.cfg = s_state->data->cfg;
             ctx.gesture = s_state->data->gesture_cfg;
             copy_colors(&ctx);
+            tracking_sync(s_state); /* line / object config and learned data, on change */
             learn = mxs_take_pending_learn(s_state, &lseq, &lreq);
             mxcam_link_state_unlock();
             streaming_now = ctx.streaming;
+            if (ctx.fn != prev_fn) tracking_on_function(ctx.fn);
+            prev_fn = ctx.fn;
 
             /* JPEG work happens on the encoder task (core 0). Here we only
              * copy the clean frame (before the overlay) when a push is due
@@ -436,7 +443,9 @@ static void pipeline_task(void *arg)
              * learn is completed; the response is queued in the state's
              * outbox and sent by the link (core 0), so this core never
              * blocks on USB. A learn cancelled meanwhile changes nothing. */
-            if (learn) {
+            if (learn && (lreq.function_id == MXP_FUNC_LINE || lreq.function_id == MXP_FUNC_TRACK)) {
+                if (tracking_learn(s_state, lseq, &lreq, frame)) mxcam_link_kick_deferred();
+            } else if (learn) {
                 uint8_t rgb[3];
                 bool ok = mxc_sample(frame, lreq.x, lreq.y, lreq.w, lreq.h, rgb);
                 mxcam_link_state_lock();
@@ -497,6 +506,8 @@ static void pipeline_task(void *arg)
                     gest_dets += gs.detected;
                     gest_lost += gs.lost;
                 }
+            } else if (ctx.fn == MXP_FUNC_LINE || ctx.fn == MXP_FUNC_TRACK) {
+                res.count = tracking_run(ctx.fn, frame, res.r);
             }
             if (ctx.fn != MXP_FUNC_FACE) {
                 face_phase = 0;
@@ -568,9 +579,11 @@ static void pipeline_task(void *arg)
 
             mxo_canvas_t canvas = { (uint16_t *)fb->buf, (int)fb->width, (int)fb->height };
             draw_results(&canvas, &res);
+            bool tracking_fn = ctx.fn == MXP_FUNC_LINE || ctx.fn == MXP_FUNC_TRACK;
+            if (tracking_fn) tracking_draw(&canvas, ctx.fn, &res);
 
             char text[24];
-            snprintf(text, sizeof(text), "%s  %d FPS", fn_name(ctx.fn), fps);
+            snprintf(text, sizeof(text), "%s  %d FPS", tracking_fn ? tracking_status(ctx.fn) : fn_name(ctx.fn), fps);
             /* Panel coordinates, mirrored into the frame (the TFT shows the
              * mirror view, ADR-0010): text top-left, icon top-right. */
             mxo_draw_text_mirrored(&canvas, 2, 2, text, MXO_WHITE, MXO_BLACK);

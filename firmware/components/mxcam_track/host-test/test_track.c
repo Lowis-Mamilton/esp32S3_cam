@@ -9,6 +9,7 @@
 void mxk_test_canary_arm(void);
 bool mxk_test_canary_ok(void);
 uint32_t mxk_test_macs(void); /* NCC multiply-accumulates in the last mxk_track call */
+uint32_t mxk_test_backprojects(void); /* back-projections in the last mxk_track call */
 
 static int fails;
 #define CHECK(c)                                          \
@@ -102,6 +103,7 @@ static void test_learn_ok(void) {
   CHECK(mxk_learn(frame, 100, 80, 40, 40, &m));
   CHECK(m.tw >= MXK_TMPL_MIN && m.tw <= MXK_TMPL_MAX);
   CHECK(m.th >= MXK_TMPL_MIN && m.th <= MXK_TMPL_MAX);
+  NEAR(m.tw, 20, 0); /* 40 px box = 20 half-px: not capped */
   NEAR(m.box_w, 40, 0);
   NEAR(m.box_h, 40, 0);
   NEAR(m.cx, 120, 0);
@@ -325,6 +327,46 @@ static void test_reacquire_prefers_last_position(void) {
   }
 }
 
+/* Task 5 (board timing): while lost with reacquire, frames alternate between
+ * the last position (full budget, no back-projection) and the
+ * back-projection candidate (half budget), so a lost frame costs no more than
+ * a tracked one. The first lost frame after the loss already back-projects. */
+static void test_lost_frames_alternate(void) {
+  mxk_model_t m;
+  mxk_state_t st;
+  mxp_track_config_t cfg = def_cfg();
+  mxp_result_t r;
+  CHECK(learn_std(&m, &st));
+  fill(BG);
+  CHECK(mxk_track(frame, &m, &cfg, &st, &r) == 0); /* target gone: lost */
+  CHECK(st.lost);
+  NEAR(mxk_test_backprojects(), 0, 0);
+  int bps = 0;
+  for (int i = 0; i < 6; i++) {
+    fill(BG);
+    CHECK(mxk_track(frame, &m, &cfg, &st, &r) == 0);
+    uint32_t b = mxk_test_backprojects();
+    NEAR(b, (uint32_t)(i % 2 == 0), 0); /* back-project, last position, back-project, ... */
+    if (b) CHECK(mxk_test_macs() <= MXK_MAC_BUDGET / 2);
+    else CHECK(mxk_test_macs() <= MXK_MAC_BUDGET);
+    bps += (int)b;
+  }
+  NEAR(bps, 3, 0);
+  st.lost_frames = 0xFFFF; /* saturated count keeps alternating */
+  for (int i = 0; i < 4; i++) {
+    fill(BG);
+    CHECK(mxk_track(frame, &m, &cfg, &st, &r) == 0);
+    NEAR(mxk_test_backprojects(), (uint32_t)(i % 2 == 0), 0);
+    CHECK(st.lost_frames >= 0xFFFE);
+  }
+  cfg.reacquire = 0; /* never back-projects */
+  for (int i = 0; i < 3; i++) {
+    fill(BG);
+    CHECK(mxk_track(frame, &m, &cfg, &st, &r) == 0);
+    NEAR(mxk_test_backprojects(), 0, 0);
+  }
+}
+
 /* Fix round 2a: a slightly changed target (a dark spot) is still tracked and
  * the live template adapts towards it; the learned template does not change. */
 static void test_adapt_updates_live(void) {
@@ -401,6 +443,9 @@ static void test_model_valid(void) {
   CHECK(mxk_learn(frame, 100, 80, 40, 40, &m));
   CHECK(mxk_model_valid(&m));
   bad = m;
+  bad.tw = bad.th = MXK_TMPL_MAX; /* learned by older firmware (no 24 cap): still valid */
+  CHECK(mxk_model_valid(&bad));
+  bad = m;
   bad.tw = 40;
   CHECK(!mxk_model_valid(&bad));
   bad = m;
@@ -432,7 +477,8 @@ static void test_mac_budget_large_box(void) {
   fill(BG);
   blocks(120, 80, 72, 8, 7u);
   CHECK(mxk_learn(frame, 120, 80, 72, 72, &m));
-  NEAR(m.tw, 32, 0);
+  NEAR(m.tw, MXK_TMPL_LEARN_MAX, 0); /* fallback (3): learned templates are capped at 24 */
+  NEAR(m.th, MXK_TMPL_LEARN_MAX, 0);
   mxk_reset(&st, &m);
   uint32_t max_macs = 0;
   for (int k = 0; k < 8; k++) {
@@ -479,11 +525,12 @@ static void test_mac_budget_large_box(void) {
     macs40 = mxk_test_macs();
   }
   double small = (double)(clock() - t0) * 1000.0 / CLOCKS_PER_SEC / 100.0;
-  /* lost + reacquire: back-projection, then NCC at the candidate, every frame */
+  /* lost + reacquire, back-projection frame: back-projection, then NCC at the candidate */
   scene(40, 160);
   t0 = clock();
   for (int i = 0; i < 100; i++) {
     st.lost = 1;
+    st.lost_frames = 1;
     CHECK(mxk_track(frame, &m, &cfg, &st, &r) == 1);
   }
   double lost = (double)(clock() - t0) * 1000.0 / CLOCKS_PER_SEC / 100.0;
@@ -493,6 +540,7 @@ static void test_mac_budget_large_box(void) {
 
 int main(void) {
   test_learn_ok();
+  test_lost_frames_alternate();
   test_learn_too_small();
   test_learn_flat();
   test_learn_region_clipped();
