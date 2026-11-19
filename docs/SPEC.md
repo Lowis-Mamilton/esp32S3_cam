@@ -160,7 +160,7 @@ USB、UART、I2C 三種傳輸用同一套封包。
 
 - ESP-IDF v5.x（見 ADR-0002）
 - 鏡頭用 `esp32-camera` 元件，人臉偵測用 `espressif/human_face_detect`（esp-dl），螢幕用 `esp_lcd`（ILI9341）
-- 設定與學習資料存在 NVS（單一 blob）；blob v2（M8a）：多一份各功能參數的紀錄清單（func config，目前只有手勢），可讀 v1；不認得的紀錄略過
+- 設定與學習資料存在 NVS（單一 blob）；blob v2（M8a）：多一份各功能參數的紀錄清單（func config：線條、物體追蹤、手勢），可讀 v1；不認得的紀錄略過。blob v3（M6）：再多一份學習資料的紀錄清單（學到的線色、物體範本），最大約 3 KB（2,993 B），可讀 v1、v2；分割表不改，之後的新分割區只從 `storage` 切（ADR-0017）
 - USB 連線先用 USB-Serial-JTAG（網頁燒錄最省事），在 M1 實測頻寬；不夠再改用 TinyUSB CDC
 - 鏡頭輸出 **RGB565**（辨識和螢幕直接用）；傳給網頁時才用軟體壓 JPEG，預覽上限每秒 10 張，M1 實測約 6 張（目標 ≥ 5，見 `docs/measurements/m1.md`），把 CPU 留給辨識
 - 效能設定：CPU 240 MHz、PSRAM 80 MHz、flash QIO 80 MHz（M1 起固定，作為量測基準）；資料快取 32 KB、**64 B 快取線**（M8a 加速起，所有功能都變快、內部 RAM 不變，ADR-0019 補充）
@@ -265,9 +265,9 @@ docs/          規格、協定、ADR
   - Arduino `MXCamResult` 要加 `confidence`、`width`、`height` 欄位，與 Studio 的程式範例一致
   - heap guard 跳過偵測時要回報為「跳過」，不可快取或推送成「0 張臉」（也不計入 face_ms）
   - Studio 的「需要更新韌體」分不出舊韌體與人臉初始化失敗（改用韌體版本判斷）
-  - store 的 `name_key_ok` 接受人臉的 key：要拒絕，或讓 FORGET 3 清掉人臉名字
+  - [x] store 的 `name_key_ok` 接受人臉的 key：要拒絕，或讓 FORGET 3 清掉人臉名字——M6 Task 4 改成拒絕（線條 4 也不能取名、物體 5 只有 id 1）
   - `FACE_EVERY` > 1 的路徑未測試（不會用到就刪掉，要用就補測試）
-- [ ] M6 Task 4 交接（M8a Task 3 已改了 store／service，M6 暫停中）：
+- [ ] M6 Task 4 交接（M8a Task 3 已改了 store／service，M6 暫停中）——1–6 已在 M6 Task 4 完成（blob v3、`case 4／5`、11 bytes 的 LEARN 回 `BAD_PARAM`），7 留給 M6 Task 7：
   1. 先 rebase 到 M8a 的 `mxcam_store`／`mxcam_service`（blob v2、`gesture_cfg`、GET/SET_FUNC_CONFIG 的 `fcfg_get`／`fcfg_set`）
   2. 線條／物體追蹤的參數加進 v2 的 func config 紀錄清單（`read_fcfg_list` 加 `case 4／5`、serialize 多寫兩筆，**不升 blob 版本**）；學到的線色與物體範本另外升 **v3**（v3 要能讀 v1、v2），`test_store.c` 的 `k_v1_fixture` 沿用、不可改
   3. service 的 func config 在 `fcfg_get`／`fcfg_set` 加 `case 4／5`，規則照 `docs/protocol.md` §9：**要看能力清單**（GET_INFO 沒列出 → `BAD_PARAM`）；M6 計畫 Task 4 寫的「只接受 4、5（不看能力清單）」作廢
@@ -275,6 +275,9 @@ docs/          規格、協定、ADR
   5. M6 計畫 Task 4 Step 1「先抓 v1 樣本」已完成（`k_v1_fixture`）
   6. 目前韌體把 11 bytes 的 LEARN 當成一般 LEARN（沒有回 `BAD_PARAM`）；M8a 沒改，留給 M6 Task 4
   7. Studio 的 LiveStage（`kind`、`stage*`）和 App（`showNames`）用串接三元運算子分辨功能，新增功能 ID 會**無聲地落到人臉分支**；M6 Task 7 要改成 `Record<FunctionId, …>`（M8a 複審 M12）
+- [ ] 名字表維持全部功能合計 32 筆（M6：線條不能取名、物體只有 id 1）；M7（QR 內容 → ID）或 M9 有 `mxdata` 分割區（ADR-0017）時再加大，`MXS_RESPONSE_MAX` 綁在名字表大小上，要一起改
+- [ ] M4：service 改寫（傳輸別、各傳輸自己的 outbox）要以 M6 之後的 `mxcam_service` 為基礎（`0x44`／`0x45` func config、功能 4／5 的 LEARN／FORGET／SET_NAME／GET_LEARNED、`mxs_finish_learn_object`）
+- [ ] M4：Arduino API 加線條與物體追蹤：`MXCAM_ALGO_LINE`（4）、`MXCAM_ALGO_TRACK`（5）；`MXCamResult` 在線條功能多 `angle`（度，int）、`offset`（px）、`flags`（`MXCAM_LINE_BRANCH`、`MXCAM_LINE_CROSS`），由共用 C 的 `mxp_unpack_line_extra` 解出（M6 計畫設計決定 17）
 - [x] M2 開工前（M1 總審查建議）——已在 M2 處理：
   - `mxcam_link` 改成非阻塞的推送佇列（`mxcam_link_push`），推送序號集中在 link；RESULTS 不可以讓 TFT 卡住
   - 需要 pipeline 資料才能回答的指令（例如 LEARN）：先決定用 BUSY＋輪詢，還是延後回應

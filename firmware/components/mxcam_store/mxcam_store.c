@@ -16,14 +16,16 @@ void mxst_defaults(mxs_data_t *d) {
   d->cfg.led = 50;
   d->cfg.dirty = 0;
   mxp_gesture_config_defaults(&d->gesture_cfg);
+  mxp_line_config_defaults(&d->line_cfg);
+  mxp_track_config_defaults(&d->track_cfg);
 }
 
 static bool name_key_ok(uint8_t fn, uint16_t id) {
   if (fn == MXST_FN_COLOR) return id >= 1 && id <= MXST_MAX_COLORS;
   if (fn == MXST_FN_TAG) return id <= MXST_TAG_ID_MAX;
-  if (fn == MXST_FN_FACE) return true;
+  if (fn == MXST_FN_TRACK) return id == 1; /* one object */
   if (fn == MXST_FN_GESTURE) return id >= 1 && id <= MXST_GESTURE_ID_MAX;
-  return false;
+  return false; /* face (3) and line (4) have no names */
 }
 
 static bool color_id_ok(uint8_t id) { return id >= 1 && id <= MXST_MAX_COLORS; }
@@ -121,6 +123,58 @@ int mxst_learn_color(mxs_data_t *d, const uint8_t rgb[3], uint8_t tolerance) {
   return id;
 }
 
+bool mxst_set_line_color(mxs_data_t *d, const uint8_t *rgb) {
+  if (!rgb) {
+    d->line_has_color = 0;
+    memset(d->line_rgb, 0, sizeof(d->line_rgb));
+    if (d->line_cfg.mode == MXP_LINE_MODE_LEARNED) d->line_cfg.mode = MXP_LINE_MODE_DARK;
+    return true;
+  }
+  if (!mxc_same_color(rgb, rgb, 100)) return false; /* grey: would never match */
+  d->line_has_color = 1;
+  memcpy(d->line_rgb, rgb, 3);
+  d->line_cfg.mode = MXP_LINE_MODE_LEARNED;
+  return true;
+}
+
+bool mxst_set_object(mxs_data_t *d, const mxk_model_t *m) {
+  if (m && !mxk_model_valid(m)) return false;
+  mxst_forget_names(d, MXST_FN_TRACK, 1);
+  memset(&d->object, 0, sizeof(d->object));
+  d->has_object = m ? 1 : 0;
+  if (!m) return true;
+  d->object.tw = m->tw;
+  d->object.th = m->th;
+  d->object.box_w = m->box_w;
+  d->object.box_h = m->box_h;
+  d->object.cx = m->cx;
+  d->object.cy = m->cy;
+  memcpy(d->object.rgb, m->rgb, 3);
+  memcpy(d->object.hist, m->hist, sizeof(m->hist));
+  memcpy(d->object.tmpl, m->tmpl, (size_t)m->tw * m->th);
+  return true;
+}
+
+/* A func config is valid when the clamping codec leaves it unchanged (the
+ * ranges live in one place: mxcam_proto.c, protocol.md 9). */
+static bool line_cfg_valid(const mxp_line_config_t *c) {
+  uint8_t a[MXP_FUNC_CONFIG_SIZE], b[MXP_FUNC_CONFIG_SIZE];
+  mxp_line_config_t u;
+  mxp_pack_line_config(c, a);
+  if (!mxp_unpack_line_config(a, sizeof(a), &u)) return false;
+  mxp_pack_line_config(&u, b);
+  return memcmp(a, b, sizeof(a)) == 0;
+}
+
+static bool track_cfg_valid(const mxp_track_config_t *c) {
+  uint8_t a[MXP_FUNC_CONFIG_SIZE], b[MXP_FUNC_CONFIG_SIZE];
+  mxp_track_config_t u;
+  mxp_pack_track_config(c, a);
+  if (!mxp_unpack_track_config(a, sizeof(a), &u)) return false;
+  mxp_pack_track_config(&u, b);
+  return memcmp(a, b, sizeof(a)) == 0;
+}
+
 /* Gesture config v1 ranges (protocol.md 10); deserialize gets them from the
  * clamping mxp_unpack_gesture_config. */
 static bool gesture_cfg_valid(const mxp_gesture_config_t *g) {
@@ -133,6 +187,9 @@ static bool gesture_cfg_valid(const mxp_gesture_config_t *g) {
 static bool data_valid(const mxs_data_t *d) {
   if (d->n_colors > MXST_MAX_COLORS || d->n_names > MXST_MAX_NAMES) return false;
   if (!gesture_cfg_valid(&d->gesture_cfg)) return false;
+  if (!line_cfg_valid(&d->line_cfg) || !track_cfg_valid(&d->track_cfg)) return false;
+  if (d->line_has_color > 1 || d->has_object > 1) return false;
+  if (d->has_object && !mxk_model_valid(&d->object)) return false;
   for (int i = 0; i < d->n_colors; i++) {
     if (!color_id_ok(d->colors[i].id)) return false;
     for (int j = 0; j < i; j++)
@@ -150,14 +207,27 @@ static bool data_valid(const mxs_data_t *d) {
 
 static const uint8_t MAGIC[4] = {'M', 'X', 'S', 'T'};
 #define MXST_VERSION_V1 1
-#define MXST_VERSION 2 /* written by serialize */
-#define MXST_N_FCFG 1  /* records serialize writes (gesture) */
+#define MXST_VERSION_V2 2
+#define MXST_VERSION 3     /* written by serialize */
+#define MXST_N_FCFG 3      /* func config records serialize writes (line, track, gesture) */
+#define MXST_LRN_VERSION 1 /* layout version of the learned records */
+
+static void put_u16(uint8_t *p, uint16_t v) {
+  p[0] = (uint8_t)(v & 0xFF);
+  p[1] = (uint8_t)(v >> 8);
+}
+
+static uint16_t get_u16(const uint8_t *p) { return (uint16_t)(p[0] | (p[1] << 8)); }
+
+static size_t obj_rec_len(const mxk_model_t *m) { return MXST_OBJ_REC_FIXED + (size_t)m->tw * m->th; }
 
 size_t mxst_serialize(const mxs_data_t *d, uint8_t *out, size_t cap) {
   if (!data_valid(d)) return 0;
   size_t need = 4 + 1 + MXP_CONFIG_SIZE + 1 + (size_t)d->n_colors * 4 + 1 + 1 +
-                MXST_N_FCFG * MXP_FUNC_CONFIG_SIZE + 2;
+                MXST_N_FCFG * MXP_FUNC_CONFIG_SIZE + 1 + 2;
   for (int i = 0; i < d->n_names; i++) need += 4u + d->names[i].len;
+  if (d->line_has_color) need += 4 + MXST_LINE_REC_LEN;
+  if (d->has_object) need += 4 + obj_rec_len(&d->object);
   if (need > cap) return 0;
   size_t o = 0;
   memcpy(out, MAGIC, 4);
@@ -184,7 +254,37 @@ size_t mxst_serialize(const mxs_data_t *d, uint8_t *out, size_t cap) {
     o += n->len;
   }
   out[o++] = MXST_N_FCFG;
+  o += mxp_pack_line_config(&d->line_cfg, out + o);
+  o += mxp_pack_track_config(&d->track_cfg, out + o);
   o += mxp_pack_gesture_config(&d->gesture_cfg, out + o);
+  out[o++] = (uint8_t)(d->line_has_color + d->has_object);
+  if (d->line_has_color) {
+    out[o++] = MXST_FN_LINE;
+    out[o++] = MXST_LRN_VERSION;
+    put_u16(out + o, MXST_LINE_REC_LEN);
+    o += 2;
+    memcpy(out + o, d->line_rgb, 3);
+    o += 3;
+  }
+  if (d->has_object) {
+    const mxk_model_t *m = &d->object;
+    out[o++] = MXST_FN_TRACK;
+    out[o++] = MXST_LRN_VERSION;
+    put_u16(out + o, (uint16_t)obj_rec_len(m));
+    o += 2;
+    out[o++] = m->tw;
+    out[o++] = m->th;
+    put_u16(out + o, m->box_w);
+    put_u16(out + o + 2, m->box_h);
+    put_u16(out + o + 4, (uint16_t)m->cx);
+    put_u16(out + o + 6, (uint16_t)m->cy);
+    o += 8;
+    memcpy(out + o, m->rgb, 3);
+    o += 3;
+    for (int i = 0; i < MXK_HIST_BINS; i++, o += 2) put_u16(out + o, m->hist[i]);
+    memcpy(out + o, m->tmpl, (size_t)m->tw * m->th);
+    o += (size_t)m->tw * m->th;
+  }
   uint16_t crc = mxp_crc16(out, o);
   out[o++] = (uint8_t)(crc & 0xFF);
   out[o++] = (uint8_t)(crc >> 8);
@@ -198,15 +298,81 @@ static bool read_fcfg_list(const uint8_t *p, size_t *o, size_t end, mxs_data_t *
   if (*o + 1 > end) return false;
   uint8_t n = p[(*o)++];
   if (n > MXST_MAX_FCFG || *o + (size_t)n * MXP_FUNC_CONFIG_SIZE > end) return false;
-  bool seen_gesture = false;
+  bool seen_line = false, seen_track = false, seen_gesture = false;
   for (int i = 0; i < n; i++, *o += MXP_FUNC_CONFIG_SIZE) {
     const uint8_t *r = p + *o;
+    /* unpack false = another layout version: keep the default */
     switch (r[0]) {
+    case MXP_FUNC_LINE:
+      if (seen_line) return false;
+      seen_line = true;
+      mxp_unpack_line_config(r, MXP_FUNC_CONFIG_SIZE, &t->line_cfg);
+      break;
+    case MXP_FUNC_TRACK:
+      if (seen_track) return false;
+      seen_track = true;
+      mxp_unpack_track_config(r, MXP_FUNC_CONFIG_SIZE, &t->track_cfg);
+      break;
     case MXP_FUNC_GESTURE:
       if (seen_gesture) return false;
       seen_gesture = true;
-      /* false = another layout version: keep the default */
       mxp_unpack_gesture_config(r, MXP_FUNC_CONFIG_SIZE, &t->gesture_cfg);
+      break;
+    default:
+      break; /* not known to this firmware */
+    }
+  }
+  return true;
+}
+
+/* Object record body (layout version 1, len bytes) -> t->object. */
+static bool read_object(const uint8_t *b, size_t len, mxs_data_t *t) {
+  if (len < MXST_OBJ_REC_FIXED) return false;
+  mxk_model_t *m = &t->object;
+  m->tw = b[0];
+  m->th = b[1];
+  m->box_w = get_u16(b + 2);
+  m->box_h = get_u16(b + 4);
+  m->cx = (int16_t)get_u16(b + 6);
+  m->cy = (int16_t)get_u16(b + 8);
+  memcpy(m->rgb, b + 10, 3);
+  for (int i = 0; i < MXK_HIST_BINS; i++) m->hist[i] = get_u16(b + 13 + 2 * i);
+  if (!mxk_model_valid(m) || len != obj_rec_len(m)) return false;
+  memcpy(m->tmpl, b + MXST_OBJ_REC_FIXED, (size_t)m->tw * m->th);
+  t->has_object = 1;
+  return true;
+}
+
+/* v3 learned record list at p[*o]. Unknown functions / layout versions are
+ * skipped; a known function twice, too many records, a wrong length or an
+ * invalid model -> false. Add a function here (and to serialize) without
+ * bumping the blob version. */
+static bool read_lrn_list(const uint8_t *p, size_t *o, size_t end, mxs_data_t *t) {
+  if (*o + 1 > end) return false;
+  uint8_t n = p[(*o)++];
+  if (n > MXST_MAX_LRN) return false;
+  bool seen_line = false, seen_track = false;
+  for (int i = 0; i < n; i++) {
+    if (*o + 4 > end) return false;
+    const uint8_t fn = p[*o], ver = p[*o + 1];
+    const size_t len = get_u16(p + *o + 2);
+    const uint8_t *b = p + *o + 4;
+    if (*o + 4 + len > end) return false;
+    *o += 4 + len;
+    switch (fn) {
+    case MXP_FUNC_LINE:
+      if (seen_line) return false;
+      seen_line = true;
+      if (ver != MXST_LRN_VERSION) break; /* unreadable: nothing learned */
+      if (len != MXST_LINE_REC_LEN) return false;
+      t->line_has_color = 1;
+      memcpy(t->line_rgb, b, 3);
+      break;
+    case MXP_FUNC_TRACK:
+      if (seen_track) return false;
+      seen_track = true;
+      if (ver != MXST_LRN_VERSION) break;
+      if (!read_object(b, len, t)) return false;
       break;
     default:
       break; /* not known to this firmware */
@@ -217,7 +383,7 @@ static bool read_fcfg_list(const uint8_t *p, size_t *o, size_t end, mxs_data_t *
 
 bool mxst_deserialize(const uint8_t *p, size_t len, mxs_data_t *out) {
   if (!p || len < 4 + 1 + MXP_CONFIG_SIZE + 1 + 1 + 2) return false;
-  if (memcmp(p, MAGIC, 4) != 0 || (p[4] != MXST_VERSION_V1 && p[4] != MXST_VERSION)) return false;
+  if (memcmp(p, MAGIC, 4) != 0 || p[4] < MXST_VERSION_V1 || p[4] > MXST_VERSION) return false;
   uint16_t want = (uint16_t)(p[len - 2] | (p[len - 1] << 8));
   if (mxp_crc16(p, len - 2) != want) return false;
   size_t end = len - 2, o = 5;
@@ -259,7 +425,8 @@ bool mxst_deserialize(const uint8_t *p, size_t len, mxs_data_t *out) {
     o += nl;
     t.n_names = (uint8_t)(i + 1);
   }
-  if (p[4] >= 2 && !read_fcfg_list(p, &o, end, &t)) return false;
+  if (p[4] >= MXST_VERSION_V2 && !read_fcfg_list(p, &o, end, &t)) return false;
+  if (p[4] >= MXST_VERSION && !read_lrn_list(p, &o, end, &t)) return false;
   if (o != end) return false;
   *out = t;
   return true;

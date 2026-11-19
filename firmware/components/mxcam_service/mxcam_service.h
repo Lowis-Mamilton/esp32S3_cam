@@ -10,6 +10,7 @@
 
 #include "mxcam_proto.h"
 #include "mxcam_store.h"
+#include "mxcam_track.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -24,8 +25,9 @@ extern "C" {
 
 /* mxs_handle returns this instead of a size when the response is deferred:
  * nothing is sent now.
- * - LEARN (function 1): the pipeline claims it (mxs_take_pending_learn) and
- *   completes it on the next frame (mxs_finish_learn, which calls mxs_complete_learn);
+ * - LEARN (functions 1, 4, 5): the pipeline claims it (mxs_take_pending_learn)
+ *   and completes it on the next frame (mxs_finish_learn for 1 / 4,
+ *   mxs_finish_learn_object for 5; both call mxs_complete_learn);
  *   a SET_FUNCTION change or host timeout cancels it (BAD_PARAM). Either way
  *   the response packet is queued in the state's deferred outbox and the link
  *   sends it (mxs_peek_deferred / mxs_ack_deferred) — never the pipeline.
@@ -98,12 +100,20 @@ void mxs_init(mxs_state_t *s, const mxp_info_t *info, mxs_data_t *data);
 /* Handle one request, write the response packet to out and return its size
  * (0 if out_cap is too small; MXS_RESPONSE_MAX always suffices).
  * Function IDs: SET_FUNCTION accepts 0 (none) and the capabilities set with
- * mxs_set_capabilities (1 colour, 2 AprilTag, 3 face detection, 8 gesture).
+ * mxs_set_capabilities (1 colour, 2 AprilTag, 3 face detection, 4 line, 5
+ * object tracking, 8 gesture).
  * GET/SET_FUNC_CONFIG (protocol.md 9) serve the functions that have a func
- * config and are in that list (today: 8 gesture -> data->gesture_cfg), any
- * time, whatever the current function; SET marks dirty only when a value
- * changes. Gesture (8) is named like AprilTag (SET_NAME / GET_LEARNED /
- * FORGET for ids 1-9, protocol.md 10) and LEARN 8 is BAD_PARAM.
+ * config and are in that list (4 line -> data->line_cfg, 5 track ->
+ * data->track_cfg, 8 gesture -> data->gesture_cfg), any time, whatever the
+ * current function; SET marks dirty only when a value changes.
+ * LEARN: 9 bytes only (the 11-byte form with an id is BAD_PARAM in M6), for
+ * colour (1), line (4) or object (5), equal to the current function;
+ * deferred (see MXS_DEFERRED). Line (4): one learned colour, id 1, no names;
+ * FORGET 4 (id 1 / 0xFFFF) clears it and sets mode 2 back to 0. Object (5):
+ * one object, id 1, nameable once learned; LEARN replaces it and drops its
+ * name; FORGET 5 (id 1 / 0xFFFF) clears both. GET_LEARNED 4 / 5 answer 0 or
+ * 1 item (protocol.md 9). Gesture (8) is named like AprilTag (SET_NAME /
+ * GET_LEARNED / FORGET for ids 1-9, protocol.md 10) and LEARN 8 is BAD_PARAM.
  * Every request is treated as coming over USB, so STREAM_START/STOP are
  * always allowed (the NOT_SUPPORTED path for UART/I2C arrives with the
  * transport flag in M4). */
@@ -137,11 +147,18 @@ void mxs_set_capabilities(mxs_state_t *s, const uint8_t *ids, uint8_t n);
 bool mxs_take_results_invalidated(mxs_state_t *s);
 
 /* Pipeline-side LEARN completion: if `seq` is still the claimed learn, learns
- * `rgb` (NULL = the region had no usable colour) into data via
- * mxst_learn_color with the current tolerance (dirty only if the colours
- * changed) and queues the response like mxs_complete_learn. false and no
- * change when the learn was cancelled meanwhile. */
+ * `rgb` (NULL = the region had no usable colour) and queues the response like
+ * mxs_complete_learn. Colour (1): mxst_learn_color with the current tolerance
+ * (dirty only if the colours changed). Line (4): mxst_set_line_color -> id 1
+ * and mode 2 (dirty only if the colour or mode changed); NULL or grey ->
+ * BAD_PARAM. An object (5) learn -> BAD_PARAM (use mxs_finish_learn_object).
+ * false and no change when the learn was cancelled meanwhile. */
 bool mxs_finish_learn(mxs_state_t *s, uint8_t seq, const uint8_t *rgb);
+/* Same for an object (5) learn: m (from mxk_learn; NULL = region too small or
+ * without texture) replaces the object via mxst_set_object (its name is
+ * dropped; dirty) -> id 1. NULL, an invalid model or a learn of another
+ * function -> BAD_PARAM. The caller re-arms its tracker (mxk_reset) itself. */
+bool mxs_finish_learn_object(mxs_state_t *s, uint8_t seq, const mxk_model_t *m);
 
 /* Save worker: claims the pending SAVE / FACTORY_RESET (once). For SAVE,
  * *snapshot receives a copy of the data to write (may be NULL for a reset). */

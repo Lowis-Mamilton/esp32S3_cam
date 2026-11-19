@@ -38,13 +38,17 @@ static bool color_learned(const mxs_data_t *d, uint16_t id)
 
 /* FORGET: function_id u8, id u16 (0xFFFF = all). Absent ids succeed; face
  * detection (3) learns and names nothing, so it always succeeds; AprilTag (2)
- * and gesture (8) only have names. */
+ * and gesture (8) only have names; line (4) id 1 / 0xFFFF clears the line
+ * colour (mode 2 -> 0), object (5) id 1 / 0xFFFF clears the object and its
+ * name (protocol.md 9). */
 static size_t handle_forget(mxs_state_t *s, const mxp_frame_t *req, uint8_t *out, size_t out_cap)
 {
   if (req->len != 3) return reply_err(req, MXP_ERR_BAD_LENGTH, out, out_cap);
   uint8_t fn = req->payload[0];
   uint16_t id = get_u16(req->payload + 1);
   uint8_t nc = s->data->n_colors, nn = s->data->n_names; /* forgetting only ever removes */
+  const uint8_t line_has = s->data->line_has_color, line_mode = s->data->line_cfg.mode;
+  const uint8_t has_obj = s->data->has_object;
   if (fn == MXP_FUNC_COLOR) {
     if (id == 0xFFFF) mxst_forget_color(s->data, 0xFF);
     else if (id >= 1 && id <= MXST_MAX_COLORS) mxst_forget_color(s->data, (uint8_t)id);
@@ -52,12 +56,18 @@ static size_t handle_forget(mxs_state_t *s, const mxp_frame_t *req, uint8_t *out
     mxst_forget_names(s->data, MXST_FN_TAG, id); /* tags are not learned: only names */
   } else if (fn == MXP_FUNC_GESTURE) {
     mxst_forget_names(s->data, MXST_FN_GESTURE, id); /* fixed gestures: only names */
+  } else if (fn == MXP_FUNC_LINE) {
+    if (id == 1 || id == 0xFFFF) mxst_set_line_color(s->data, NULL);
+  } else if (fn == MXP_FUNC_TRACK) {
+    if (id == 1 || id == 0xFFFF) mxst_set_object(s->data, NULL);
   } else if (fn == MXP_FUNC_FACE) {
     /* nothing to forget */
   } else {
     return reply_err(req, MXP_ERR_BAD_PARAM, out, out_cap);
   }
-  if (s->data->n_colors != nc || s->data->n_names != nn) mark_dirty(s);
+  if (s->data->n_colors != nc || s->data->n_names != nn || s->data->line_has_color != line_has ||
+      s->data->line_cfg.mode != line_mode || s->data->has_object != has_obj)
+    mark_dirty(s);
   return reply(req, NULL, 0, out, out_cap);
 }
 
@@ -76,7 +86,10 @@ static size_t handle_set_name(mxs_state_t *s, const mxp_frame_t *req, uint8_t *o
     if (sn.id > MXST_TAG_ID_MAX) return reply_err(req, MXP_ERR_BAD_PARAM, out, out_cap);
   } else if (sn.function_id == MXP_FUNC_GESTURE) {
     if (sn.id < 1 || sn.id > MXST_GESTURE_ID_MAX) return reply_err(req, MXP_ERR_BAD_PARAM, out, out_cap);
-  } else {
+  } else if (sn.function_id == MXP_FUNC_TRACK) {
+    /* one object, id 1, and only once it is learned */
+    if (sn.id != 1 || !s->data->has_object) return reply_err(req, MXP_ERR_BAD_PARAM, out, out_cap);
+  } else { /* face (3), line (4) and the rest have no names */
     return reply_err(req, MXP_ERR_BAD_PARAM, out, out_cap);
   }
   uint8_t old_len = 0;
@@ -90,8 +103,9 @@ static size_t handle_set_name(mxs_state_t *s, const mxp_frame_t *req, uint8_t *o
   return reply(req, NULL, 0, out, out_cap);
 }
 
-/* GET_LEARNED: colours (by id, with rgb and name) or named tags / gestures
- * (by id, rgb 0). */
+/* GET_LEARNED: colours (by id, with rgb and name), named tags / gestures (by
+ * id, rgb 0), the line colour (0 or 1 item, id 1, no name) or the object (0
+ * or 1 item, id 1, its mean colour and name). */
 static size_t handle_get_learned(mxs_state_t *s, const mxp_frame_t *req, uint8_t *out, size_t out_cap)
 {
   if (req->len != 1) return reply_err(req, MXP_ERR_BAD_LENGTH, out, out_cap);
@@ -106,6 +120,23 @@ static size_t handle_get_learned(mxs_state_t *s, const mxp_frame_t *req, uint8_t
       it->id = d->colors[i].id;
       memcpy(it->rgb, d->colors[i].rgb, 3);
       const char *nm = mxst_get_name(d, MXST_FN_COLOR, it->id, &it->name_len);
+      if (nm) memcpy(it->name, nm, it->name_len);
+      else it->name_len = 0;
+    }
+  } else if (fn == MXP_FUNC_LINE) {
+    if (d->line_has_color) {
+      mxp_learned_t *it = &items[n++];
+      memset(it, 0, sizeof(*it));
+      it->id = 1;
+      memcpy(it->rgb, d->line_rgb, 3);
+    }
+  } else if (fn == MXP_FUNC_TRACK) {
+    if (d->has_object) {
+      mxp_learned_t *it = &items[n++];
+      memset(it, 0, sizeof(*it));
+      it->id = 1;
+      memcpy(it->rgb, d->object.rgb, 3);
+      const char *nm = mxst_get_name(d, MXST_FN_TRACK, 1, &it->name_len);
       if (nm) memcpy(it->name, nm, it->name_len);
       else it->name_len = 0;
     }
@@ -189,14 +220,20 @@ static size_t handle_set_config(mxs_state_t *s, const mxp_frame_t *req, uint8_t 
  * config or not in GET_INFO's list -> BAD_PARAM; SET length != the layout's
  * (MXP_FUNC_CONFIG_SIZE) -> BAD_LENGTH; wrong layout_version -> BAD_PARAM.
  * A function's config is readable and writable whatever the current function
- * is. To add a function (M6: line 4, track 5) add a case to fcfg_get and
- * fcfg_set (and to the store's record list). */
+ * is. To add a function add a case to fcfg_get and fcfg_set (and to the
+ * store's record list). */
 static bool function_available(const mxs_state_t *s, uint8_t fn);
 
 /* Packs fn's current config; false = fn has no func config. */
 static bool fcfg_get(const mxs_data_t *d, uint8_t fn, uint8_t out[MXP_FUNC_CONFIG_SIZE])
 {
   switch (fn) {
+  case MXP_FUNC_LINE:
+    mxp_pack_line_config(&d->line_cfg, out);
+    return true;
+  case MXP_FUNC_TRACK:
+    mxp_pack_track_config(&d->track_cfg, out);
+    return true;
   case MXP_FUNC_GESTURE:
     mxp_pack_gesture_config(&d->gesture_cfg, out);
     return true;
@@ -210,6 +247,10 @@ static bool fcfg_get(const mxs_data_t *d, uint8_t fn, uint8_t out[MXP_FUNC_CONFI
 static bool fcfg_set(mxs_data_t *d, const uint8_t p[MXP_FUNC_CONFIG_SIZE])
 {
   switch (p[0]) {
+  case MXP_FUNC_LINE:
+    return mxp_unpack_line_config(p, MXP_FUNC_CONFIG_SIZE, &d->line_cfg);
+  case MXP_FUNC_TRACK:
+    return mxp_unpack_track_config(p, MXP_FUNC_CONFIG_SIZE, &d->track_cfg);
   case MXP_FUNC_GESTURE:
     return mxp_unpack_gesture_config(p, MXP_FUNC_CONFIG_SIZE, &d->gesture_cfg);
   default:
@@ -358,7 +399,12 @@ size_t mxs_handle(mxs_state_t *s, const mxp_frame_t *req, uint32_t now_ms, uint8
     mxp_learn_req_t lr;
     if (!mxp_unpack_learn(req->payload, req->len, &lr))
       return reply_err(req, MXP_ERR_BAD_LENGTH, out, out_cap);
-    if (lr.function_id != MXP_FUNC_COLOR || s->function_id != MXP_FUNC_COLOR)
+    /* 11 bytes ("learn into this id") is reserved for M9 (protocol.md 9);
+     * only colour (1), line (4) and object (5) learn, and only as the
+     * current function. */
+    if (lr.has_id || lr.function_id != s->function_id ||
+        (lr.function_id != MXP_FUNC_COLOR && lr.function_id != MXP_FUNC_LINE &&
+         lr.function_id != MXP_FUNC_TRACK))
       return reply_err(req, MXP_ERR_BAD_PARAM, out, out_cap);
     if (s->pending_learn.active) return reply_err(req, MXP_ERR_BUSY, out, out_cap);
     s->pending_learn.active = true;
@@ -428,9 +474,30 @@ bool mxs_complete_learn(mxs_state_t *s, uint8_t seq, int result)
   return true;
 }
 
+static bool learn_claimed(const mxs_state_t *s, uint8_t seq)
+{
+  return s->pending_learn.active && s->pending_learn.claimed && s->pending_learn.seq == seq;
+}
+
+/* LEARN 4: the line colour (id 1); grey / NULL -> BAD_PARAM. */
+static int finish_learn_line(mxs_state_t *s, const uint8_t *rgb)
+{
+  mxs_data_t *d = s->data;
+  const uint8_t had = d->line_has_color, mode = d->line_cfg.mode;
+  uint8_t old[3];
+  memcpy(old, d->line_rgb, 3);
+  if (!rgb || !mxst_set_line_color(d, rgb)) return MXS_LEARN_NO_COLOR;
+  if (!had || mode != d->line_cfg.mode || memcmp(old, d->line_rgb, 3) != 0) mark_dirty(s);
+  return 1;
+}
+
 bool mxs_finish_learn(mxs_state_t *s, uint8_t seq, const uint8_t *rgb)
 {
-  if (!s->pending_learn.active || !s->pending_learn.claimed || s->pending_learn.seq != seq) return false;
+  if (!learn_claimed(s, seq)) return false;
+  if (s->pending_learn.req.function_id == MXP_FUNC_LINE)
+    return mxs_complete_learn(s, seq, finish_learn_line(s, rgb));
+  if (s->pending_learn.req.function_id != MXP_FUNC_COLOR) /* object: mxs_finish_learn_object */
+    return mxs_complete_learn(s, seq, MXS_LEARN_NO_COLOR);
   int result = MXS_LEARN_NO_COLOR;
   if (rgb) {
     mxc_learned_t before[MXST_MAX_COLORS];
@@ -441,6 +508,15 @@ bool mxs_finish_learn(mxs_state_t *s, uint8_t seq, const uint8_t *rgb)
     if (s->data->n_colors != n_before || memcmp(before, s->data->colors, sizeof(before)) != 0) mark_dirty(s);
   }
   return mxs_complete_learn(s, seq, result);
+}
+
+bool mxs_finish_learn_object(mxs_state_t *s, uint8_t seq, const mxk_model_t *m)
+{
+  if (!learn_claimed(s, seq)) return false;
+  if (s->pending_learn.req.function_id != MXP_FUNC_TRACK || !m || !mxst_set_object(s->data, m))
+    return mxs_complete_learn(s, seq, MXS_LEARN_NO_COLOR);
+  mark_dirty(s); /* a new object (and its name, if any, dropped) */
+  return mxs_complete_learn(s, seq, 1);
 }
 
 bool mxs_take_pending_store(mxs_state_t *s, uint8_t *cmd, uint8_t *seq, mxs_data_t *snapshot)

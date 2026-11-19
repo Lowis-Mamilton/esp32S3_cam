@@ -77,8 +77,9 @@ static void test_roundtrip(void) {
     CHECK(mxst_set_name(&a, i == 0 ? MXST_FN_COLOR : MXST_FN_TAG, i == 0 ? 1 : i, nm, MXP_NAME_MAX));
   }
   size_t nmax = mxst_serialize(&a, blob, sizeof(blob));
-  /* the v1 maximum (1719) + n_fcfg + the one record written (gesture) */
-  CHECK(nmax == 1719 + 1 + MXP_FUNC_CONFIG_SIZE && nmax <= (size_t)MXST_BLOB_MAX);
+  /* the v1 maximum (1719) + n_fcfg + the three records written (line, track,
+   * gesture) + n_lrn (nothing learned) */
+  CHECK(nmax == 1719 + 1 + 3 * MXP_FUNC_CONFIG_SIZE + 1 && nmax <= (size_t)MXST_BLOB_MAX);
   /* too-small cap */
   CHECK(mxst_serialize(&a, blob, n - 1) == 0);
   /* empty data round trips too */
@@ -130,11 +131,13 @@ static void test_corruption(void) {
 
   MUT("bad magic", t[0] = 'X', 1);
   MUT("version 0", t[4] = 0, 1);
-  MUT("version 3", t[4] = 3, 1);
+  MUT("version 4", t[4] = 4, 1);
   MUT("v1 with a record list", t[4] = 1, 1);
+  MUT("v2 with a learned list", t[4] = 2, 1);
   MUT("n_fcfg > 16", t[o_fc] = 17, 1);
-  MUT("n_fcfg too many for data", t[o_fc] = 2, 1);
-  MUT("n_fcfg too few (trailing)", t[o_fc] = 0, 1);
+  MUT("n_fcfg too many for data", t[o_fc] = 4, 1);
+  MUT("n_fcfg too few", t[o_fc] = 2, 1);
+  MUT("n_lrn too many for data", t[n - 3] = 1, 1);
   MUT("bad crc", t[n - 1] ^= 0x55, 0);
   MUT("bit flip", t[10] ^= 1, 0);
   MUT("n_colors > 7", t[o_nc] = 8, 1);
@@ -188,12 +191,12 @@ static void test_names(void) {
   s = mxst_get_name(&d, MXST_FN_TAG, 5, &l);
   CHECK(s && l == 7 && strcmp(s, "window!") == 0);
   /* same id, different function is a different key */
-  CHECK(mxst_set_name(&d, MXST_FN_FACE, 5, "bob", 3));
+  CHECK(mxst_set_name(&d, MXST_FN_GESTURE, 5, "bob", 3));
   CHECK(d.n_names == 2);
   /* remove */
   CHECK(mxst_set_name(&d, MXST_FN_TAG, 5, NULL, 0));
   CHECK(d.n_names == 1 && mxst_get_name(&d, MXST_FN_TAG, 5, NULL) == NULL);
-  CHECK(mxst_get_name(&d, MXST_FN_FACE, 5, NULL) != NULL);
+  CHECK(mxst_get_name(&d, MXST_FN_GESTURE, 5, NULL) != NULL);
   CHECK(mxst_set_name(&d, MXST_FN_TAG, 9, NULL, 0)); /* removing absent is fine */
   /* invalid */
   CHECK(!mxst_set_name(&d, 4, 1, "x", 1));
@@ -274,8 +277,9 @@ static void test_deserialize_rejects_bad_utf8(void) {
   CHECK(mxst_set_name(&a, MXST_FN_TAG, 5, "ab", 2));
   size_t n = mxst_serialize(&a, blob, sizeof(blob));
   CHECK(n > 0);
-  /* the name bytes are just before the func config list (n_fcfg + 1 record) and the CRC */
-  const size_t tail = 1 + MXP_FUNC_CONFIG_SIZE + 2;
+  /* the name bytes are just before the func config list (n_fcfg + 3 records),
+   * the empty learned list (n_lrn) and the CRC */
+  const size_t tail = 1 + 3 * MXP_FUNC_CONFIG_SIZE + 1 + 2;
   CHECK(blob[n - tail - 2] == 'a' && blob[n - tail - 1] == 'b');
   blob[n - tail - 2] = 0xC3;
   blob[n - tail - 1] = 0x28; /* C3 28: bad continuation */
@@ -378,7 +382,7 @@ static void test_deserialize_v1_fixture(void) {
   CHECK(d.gesture_cfg.gesture_threshold == 60 && d.gesture_cfg.max_hands == 1);
 }
 
-static void test_roundtrip_v2_gesture(void) {
+static void test_roundtrip_gesture(void) {
   mxs_data_t a, b;
   mxst_defaults(&a);
   a.gesture_cfg.hand_threshold = 50;
@@ -386,12 +390,18 @@ static void test_roundtrip_v2_gesture(void) {
   a.gesture_cfg.max_hands = 2;
   CHECK(mxst_set_name(&a, MXST_FN_GESTURE, 7, "\xE5\x89\x8D\xE9\x80\xB2", 6)); /* 前進 */
   size_t n = mxst_serialize(&a, blob, sizeof(blob));
-  CHECK(n > 2 + MXP_FUNC_CONFIG_SIZE + 1 && blob[4] == 2);
-  /* tail: n_fcfg 1, then the SET_FUNC_CONFIG packet of the gesture config */
+  CHECK(n > 2 + 1 + 3 * MXP_FUNC_CONFIG_SIZE + 1 && blob[4] == 3);
+  /* tail: n_fcfg 3, the SET_FUNC_CONFIG packets of line, track and gesture,
+   * then n_lrn 0 (nothing learned) and the CRC */
   uint8_t rec[MXP_FUNC_CONFIG_SIZE];
+  const size_t o_fc = n - 2 - 1 - 3 * MXP_FUNC_CONFIG_SIZE - 1;
+  CHECK(blob[o_fc] == 3 && blob[n - 3] == 0);
+  mxp_pack_line_config(&a.line_cfg, rec);
+  CHECK(memcmp(blob + o_fc + 1, rec, sizeof(rec)) == 0);
+  mxp_pack_track_config(&a.track_cfg, rec);
+  CHECK(memcmp(blob + o_fc + 1 + MXP_FUNC_CONFIG_SIZE, rec, sizeof(rec)) == 0);
   mxp_pack_gesture_config(&a.gesture_cfg, rec);
-  CHECK(blob[n - 2 - MXP_FUNC_CONFIG_SIZE - 1] == 1);
-  CHECK(memcmp(blob + n - 2 - MXP_FUNC_CONFIG_SIZE, rec, sizeof(rec)) == 0);
+  CHECK(memcmp(blob + o_fc + 1 + 2 * MXP_FUNC_CONFIG_SIZE, rec, sizeof(rec)) == 0);
   mxst_defaults(&b);
   CHECK(mxst_deserialize(blob, n, &b));
   CHECK(gesture_is(&b.gesture_cfg, 50, 70, 2));
@@ -419,7 +429,7 @@ static size_t build_v2(const uint8_t (*recs)[MXP_FUNC_CONFIG_SIZE], uint8_t n_li
 
 static void test_v2_skips_unknown_record(void) {
   static const uint8_t recs[3][MXP_FUNC_CONFIG_SIZE] = {
-      {4, 1, 0, 0, 60, 8, 4, 80, 30, 0}, /* line (not known to this firmware yet) */
+      {4, 1, 1, 0, 60, 8, 4, 80, 30, 0}, /* line, mode 1 */
       {30, 1, 1, 2, 3, 4, 5, 6, 7, 8},   /* unknown function */
       {8, 1, 50, 70, 2, 0, 0, 0, 0, 0},  /* gesture v1 */
   };
@@ -429,6 +439,7 @@ static void test_v2_skips_unknown_record(void) {
   memset(&d, 0xAB, sizeof(d));
   CHECK(mxst_deserialize(t, n, &d));
   CHECK(gesture_is(&d.gesture_cfg, 50, 70, 2));
+  CHECK(d.line_cfg.mode == 1 && d.line_cfg.roi_pct == 60);
   CHECK(d.cfg.tolerance == 45 && d.n_colors == 2 && d.n_names == 1);
   /* reserved bytes are ignored, values are clamped like SET_FUNC_CONFIG */
   static const uint8_t wild[1][MXP_FUNC_CONFIG_SIZE] = {{8, 1, 5, 150, 0, 9, 9, 9, 9, 9}};
@@ -490,19 +501,456 @@ static void test_v2_rejects_too_many_records(void) {
   CHECK(mxst_deserialize(t, n, &d)); /* 16 is the limit */
 }
 
+/* A valid object model without running the tracker: tw x th template with a
+ * pattern, box 2x the template (in 320 px), centred at (cx, cy). */
+static void make_model(mxk_model_t *m, uint8_t tw, uint8_t th, int16_t cx, int16_t cy) {
+  memset(m, 0, sizeof(*m));
+  m->tw = tw;
+  m->th = th;
+  m->box_w = (uint16_t)(tw * 2);
+  m->box_h = (uint16_t)(th * 2);
+  m->cx = cx;
+  m->cy = cy;
+  m->rgb[0] = 200;
+  m->rgb[1] = 40;
+  m->rgb[2] = 30;
+  for (int i = 0; i < MXK_HIST_BINS; i++) m->hist[i] = (uint16_t)(i * 1000 + 7);
+  for (int i = 0; i < tw * th; i++) m->tmpl[i] = (uint8_t)(i * 37 + 11);
+}
+
 static void test_serialize_max_fits(void) {
-  CHECK(MXST_BLOB_MAX == 1880);
+  /* v2 maximum (1880) + n_lrn + line record (4 + 3) + object record (4 + 77 + 32 x 32) */
+  CHECK(MXST_BLOB_MAX == 1880 + 1 + 4 + 3 + 4 + 77 + MXK_TMPL_MAX * MXK_TMPL_MAX);
+  CHECK(MXST_BLOB_MAX == 2993);
   mxs_data_t a, b;
   mxst_defaults(&a);
   a.n_colors = 7;
   for (int i = 0; i < 7; i++) a.colors[i].id = (uint8_t)(i + 1);
   a.gesture_cfg.max_hands = 2;
+  a.line_cfg.bands = 12;
+  a.track_cfg.adapt = 50;
+  const uint8_t teal[3] = {20, 200, 180};
+  CHECK(mxst_set_line_color(&a, teal));
+  mxk_model_t m;
+  make_model(&m, MXK_TMPL_MAX, MXK_TMPL_MAX, 160, 120);
+  CHECK(mxst_set_object(&a, &m));
   char nm[MXP_NAME_MAX];
   memset(nm, 'q', sizeof(nm));
-  for (uint16_t i = 0; i < MXST_MAX_NAMES; i++) CHECK(mxst_set_name(&a, MXST_FN_TAG, i, nm, MXP_NAME_MAX));
+  CHECK(mxst_set_name(&a, MXST_FN_TRACK, 1, nm, MXP_NAME_MAX));
+  for (uint16_t i = 1; i < MXST_MAX_NAMES; i++) CHECK(mxst_set_name(&a, MXST_FN_TAG, i, nm, MXP_NAME_MAX));
   size_t n = mxst_serialize(&a, blob, sizeof(blob));
+  /* everything this firmware writes: v1 max + 3 func configs + both learned records */
+  CHECK(n == 1719 + 1 + 3 * MXP_FUNC_CONFIG_SIZE + 1 + 4 + 3 + 4 + 77 + 1024);
   CHECK(n > 0 && n <= (size_t)MXST_BLOB_MAX);
   CHECK(mxst_deserialize(blob, n, &b) && memcmp(&a, &b, sizeof(a)) == 0);
+}
+
+/* ---- blob v3 (M6): line / track func configs, learned line colour and object ---- */
+
+/* A v2 blob written by the v2 mxst_serialize (commit 3a0587d, M8a) before blob
+ * v3 existed: tolerance 45, colours 1 (230,20,20) and 2 (20,40,220), AprilTag
+ * 12 named "門口", gesture 6 named "讚", gesture config 30 / 70 / 2. Never
+ * change it: v3+ firmware must keep reading it. */
+static const uint8_t k_v2_fixture[63] = {
+    0x4d, 0x58, 0x53, 0x54, 0x02, 0x01, 0x2d, 0x64, 0x00, 0x04, 0x01, 0x01,
+    0x3c, 0x04, 0x00, 0xc2, 0x01, 0x00, 0x5a, 0x32, 0x00, 0x00, 0x00, 0x02,
+    0x01, 0xe6, 0x14, 0x14, 0x02, 0x14, 0x28, 0xdc, 0x02, 0x02, 0x0c, 0x00,
+    0x06, 0xe9, 0x96, 0x80, 0xe5, 0x8f, 0xa3, 0x08, 0x06, 0x00, 0x03, 0xe8,
+    0xae, 0x9a, 0x01, 0x08, 0x01, 0x1e, 0x46, 0x02, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x96, 0x2b,
+};
+
+static bool line_cfg_is_default(const mxp_line_config_t *c) {
+  mxp_line_config_t def;
+  mxp_line_config_defaults(&def);
+  uint8_t a[MXP_FUNC_CONFIG_SIZE], b[MXP_FUNC_CONFIG_SIZE];
+  mxp_pack_line_config(c, a);
+  mxp_pack_line_config(&def, b);
+  return memcmp(a, b, sizeof(a)) == 0;
+}
+
+static bool track_cfg_is_default(const mxp_track_config_t *c) {
+  mxp_track_config_t def;
+  mxp_track_config_defaults(&def);
+  uint8_t a[MXP_FUNC_CONFIG_SIZE], b[MXP_FUNC_CONFIG_SIZE];
+  mxp_pack_track_config(c, a);
+  mxp_pack_track_config(&def, b);
+  return memcmp(a, b, sizeof(a)) == 0;
+}
+
+static void test_v1_fixture_new_fields_default(void) {
+  mxs_data_t d;
+  memset(&d, 0xAB, sizeof(d));
+  CHECK(mxst_deserialize(k_v1_fixture, sizeof(k_v1_fixture), &d));
+  CHECK(line_cfg_is_default(&d.line_cfg) && track_cfg_is_default(&d.track_cfg));
+  CHECK(d.line_has_color == 0 && d.has_object == 0);
+}
+
+static void test_deserialize_v2_fixture(void) {
+  mxs_data_t d;
+  memset(&d, 0xAB, sizeof(d));
+  CHECK(mxst_deserialize(k_v2_fixture, sizeof(k_v2_fixture), &d));
+  CHECK(d.cfg.tolerance == 45 && d.cfg.min_area == 100 && d.cfg.dirty == 0);
+  CHECK(d.n_colors == 2 && d.colors[0].id == 1 && d.colors[0].rgb[0] == 230 && d.colors[1].id == 2 &&
+        d.colors[1].rgb[2] == 220);
+  uint8_t l = 0;
+  const char *s = mxst_get_name(&d, MXST_FN_TAG, 12, &l);
+  CHECK(d.n_names == 2 && s && l == 6 && memcmp(s, "\xE9\x96\x80\xE5\x8F\xA3", 6) == 0);
+  s = mxst_get_name(&d, MXST_FN_GESTURE, 6, &l);
+  CHECK(s && l == 3 && memcmp(s, "\xE8\xAE\x9A", 3) == 0);
+  CHECK(gesture_is(&d.gesture_cfg, 30, 70, 2));
+  /* new in v3: defaults, nothing learned */
+  CHECK(line_cfg_is_default(&d.line_cfg) && track_cfg_is_default(&d.track_cfg));
+  CHECK(d.line_has_color == 0 && d.has_object == 0);
+}
+
+static void test_roundtrip_v3_full(void) {
+  mxs_data_t a, b;
+  mxst_defaults(&a);
+  a.line_cfg.threshold = 90;
+  a.line_cfg.roi_pct = 40;
+  a.line_cfg.bands = 6;
+  a.line_cfg.min_width = 10;
+  a.line_cfg.max_width = 120;
+  a.line_cfg.color_tolerance = 44;
+  a.track_cfg.threshold = 65;
+  a.track_cfg.adapt = 0;
+  a.track_cfg.reacquire = 0;
+  a.track_cfg.scale = 0;
+  const uint8_t yellow[3] = {230, 210, 30};
+  CHECK(mxst_set_line_color(&a, yellow));
+  CHECK(a.line_cfg.mode == MXP_LINE_MODE_LEARNED);
+  mxk_model_t m;
+  make_model(&m, 32, 24, 100, 80);
+  CHECK(mxst_set_object(&a, &m));
+  CHECK(mxst_set_name(&a, MXST_FN_TRACK, 1, "\xE7\x90\x83", 3)); /* 球 */
+  CHECK(mxst_set_name(&a, MXST_FN_TAG, 3, "x", 1));
+  size_t n = mxst_serialize(&a, blob, sizeof(blob));
+  CHECK(n > 0 && blob[4] == 3);
+  /* tail: n_lrn 2, line {4, 1, len 3, rgb}, object {5, 1, len 77 + 768, ...}, CRC */
+  const size_t obj_len = 77 + 32 * 24;
+  const size_t o_lrn = n - 2 - (4 + obj_len) - (4 + 3) - 1;
+  CHECK(blob[o_lrn] == 2);
+  CHECK(blob[o_lrn + 1] == 4 && blob[o_lrn + 2] == 1 && blob[o_lrn + 3] == 3 && blob[o_lrn + 4] == 0);
+  CHECK(memcmp(blob + o_lrn + 5, yellow, 3) == 0);
+  const uint8_t *r = blob + o_lrn + 8;
+  CHECK(r[0] == 5 && r[1] == 1 && r[2] == (uint8_t)obj_len && r[3] == (uint8_t)(obj_len >> 8));
+  CHECK(r[4] == 32 && r[5] == 24 && r[6] == 64 && r[7] == 0 && r[8] == 48 && r[9] == 0);
+  CHECK(r[10] == 100 && r[11] == 0 && r[12] == 80 && r[13] == 0 && r[14] == 200 && r[15] == 40 && r[16] == 30);
+  CHECK(r[17] == 7 && r[18] == 0 && r[19] == (uint8_t)1007 && r[20] == (uint8_t)(1007 >> 8)); /* hist[0], hist[1] */
+  CHECK(r[4 + 77] == m.tmpl[0] && r[4 + obj_len - 1] == m.tmpl[32 * 24 - 1]);
+  memset(&b, 0xAB, sizeof(b));
+  CHECK(mxst_deserialize(blob, n, &b));
+  CHECK(memcmp(&a, &b, sizeof(a)) == 0);
+  CHECK(b.line_has_color == 1 && memcmp(b.line_rgb, yellow, 3) == 0 && b.has_object == 1);
+  CHECK(b.object.tw == 32 && b.object.th == 24 && b.object.tmpl[32 * 24] == 0);
+  uint8_t l = 0;
+  const char *s = mxst_get_name(&b, MXST_FN_TRACK, 1, &l);
+  CHECK(s && l == 3 && memcmp(s, "\xE7\x90\x83", 3) == 0);
+}
+
+/* v3 blob = the v2 fixture's content (version 3) + n_lrn + raw learned records + CRC. */
+static size_t build_v3(const uint8_t *lrn, size_t lrn_len, uint8_t n_lrn, uint8_t *out) {
+  size_t o = sizeof(k_v2_fixture) - 2;
+  memcpy(out, k_v2_fixture, o);
+  out[4] = 3;
+  out[o++] = n_lrn;
+  if (lrn_len) memcpy(out + o, lrn, lrn_len);
+  o += lrn_len + 2;
+  fix_crc(out, o);
+  return o;
+}
+
+/* Writes an object record of model m (layout version ver, body length
+ * 77 + tw*th + extra) to p; returns the record size (4 + body). */
+static size_t obj_record(uint8_t *p, const mxk_model_t *m, uint8_t ver, int extra) {
+  size_t body = (size_t)(77 + m->tw * m->th + extra);
+  p[0] = 5;
+  p[1] = ver;
+  p[2] = (uint8_t)body;
+  p[3] = (uint8_t)(body >> 8);
+  uint8_t *q = p + 4;
+  q[0] = m->tw;
+  q[1] = m->th;
+  q[2] = (uint8_t)m->box_w;
+  q[3] = (uint8_t)(m->box_w >> 8);
+  q[4] = (uint8_t)m->box_h;
+  q[5] = (uint8_t)(m->box_h >> 8);
+  q[6] = (uint8_t)m->cx;
+  q[7] = (uint8_t)((uint16_t)m->cx >> 8);
+  q[8] = (uint8_t)m->cy;
+  q[9] = (uint8_t)((uint16_t)m->cy >> 8);
+  memcpy(q + 10, m->rgb, 3);
+  for (int i = 0; i < MXK_HIST_BINS; i++) {
+    q[13 + 2 * i] = (uint8_t)m->hist[i];
+    q[14 + 2 * i] = (uint8_t)(m->hist[i] >> 8);
+  }
+  memcpy(q + 77, m->tmpl, (size_t)m->tw * m->th);
+  if (extra > 0) memset(q + 77 + (size_t)m->tw * m->th, 0, (size_t)extra);
+  return 4 + body;
+}
+
+static void test_v3_learned_records(void) {
+  static uint8_t lrn[2 * (4 + 77 + 1024) + 64];
+  static uint8_t t[MXST_BLOB_MAX + 2048];
+  mxs_data_t d;
+  mxk_model_t m;
+  make_model(&m, 20, 16, 50, 60);
+
+  /* a line colour record only */
+  const uint8_t line[7] = {4, 1, 3, 0, 10, 20, 200};
+  size_t n = build_v3(line, sizeof(line), 1, t);
+  memset(&d, 0xAB, sizeof(d));
+  CHECK(mxst_deserialize(t, n, &d));
+  CHECK(d.line_has_color == 1 && d.line_rgb[0] == 10 && d.line_rgb[1] == 20 && d.line_rgb[2] == 200);
+  CHECK(d.has_object == 0 && d.n_names == 2 && gesture_is(&d.gesture_cfg, 30, 70, 2));
+  /* the line colour does not change the mode (that is the func config's) */
+  CHECK(d.line_cfg.mode == 0);
+
+  /* an object record only */
+  n = build_v3(lrn, obj_record(lrn, &m, 1, 0), 1, t);
+  memset(&d, 0xAB, sizeof(d));
+  CHECK(mxst_deserialize(t, n, &d));
+  CHECK(d.has_object == 1 && d.line_has_color == 0);
+  CHECK(d.object.tw == 20 && d.object.th == 16 && d.object.box_w == 40 && d.object.box_h == 32 &&
+        d.object.cx == 50 && d.object.cy == 60 && d.object.rgb[0] == 200);
+  CHECK(memcmp(d.object.hist, m.hist, sizeof(m.hist)) == 0 && memcmp(d.object.tmpl, m.tmpl, sizeof(m.tmpl)) == 0);
+
+  /* unknown functions and unknown layout versions are skipped */
+  size_t k = 0;
+  const uint8_t unk[9] = {30, 1, 5, 0, 1, 2, 3, 4, 5};
+  memcpy(lrn, unk, sizeof(unk));
+  k += sizeof(unk);
+  const uint8_t line_v2[8] = {4, 2, 4, 0, 1, 2, 3, 4};
+  memcpy(lrn + k, line_v2, sizeof(line_v2));
+  k += sizeof(line_v2);
+  k += obj_record(lrn + k, &m, 2, 5); /* a future object layout */
+  memcpy(lrn + k, unk, sizeof(unk));
+  k += sizeof(unk);
+  n = build_v3(lrn, k, 4, t);
+  memset(&d, 0xAB, sizeof(d));
+  CHECK(mxst_deserialize(t, n, &d));
+  CHECK(d.line_has_color == 0 && d.has_object == 0 && d.n_colors == 2 && d.n_names == 2);
+
+  /* an empty learned list is fine */
+  n = build_v3(NULL, 0, 0, t);
+  CHECK(mxst_deserialize(t, n, &d) && d.line_has_color == 0 && d.has_object == 0);
+
+  /* rejected: */
+  uint8_t two[14];
+  memcpy(two, line, 7);
+  memcpy(two + 7, line, 7);
+  n = build_v3(two, sizeof(two), 2, t);
+  expect_reject("line record twice", t, n);
+  memcpy(two + 7, line_v2, 7); /* same function, other version: still a duplicate */
+  two[9] = 3;
+  n = build_v3(two, sizeof(two), 2, t);
+  expect_reject("line record twice (one unreadable)", t, n);
+  k = obj_record(lrn, &m, 1, 0);
+  k += obj_record(lrn + k, &m, 1, 0);
+  n = build_v3(lrn, k, 2, t);
+  expect_reject("object record twice", t, n);
+  const uint8_t line_len4[8] = {4, 1, 4, 0, 10, 20, 200, 0};
+  n = build_v3(line_len4, sizeof(line_len4), 1, t);
+  expect_reject("line record len 4", t, n);
+  n = build_v3(lrn, obj_record(lrn, &m, 1, 1), 1, t);
+  expect_reject("object record longer than tw*th", t, n);
+  n = build_v3(lrn, obj_record(lrn, &m, 1, -1), 1, t);
+  expect_reject("object record shorter than tw*th", t, n);
+  mxk_model_t bad = m;
+  bad.tw = 40;
+  n = build_v3(lrn, obj_record(lrn, &bad, 1, 0), 1, t);
+  expect_reject("object tw 40", t, n);
+  bad = m;
+  bad.box_w = 8;
+  n = build_v3(lrn, obj_record(lrn, &bad, 1, 0), 1, t);
+  expect_reject("object box_w 8", t, n);
+  bad = m;
+  bad.cx = 320;
+  n = build_v3(lrn, obj_record(lrn, &bad, 1, 0), 1, t);
+  expect_reject("object cx 320", t, n);
+  n = build_v3(line, sizeof(line) - 1, 1, t);
+  expect_reject("record overruns", t, n);
+  n = build_v3(line, sizeof(line), 2, t);
+  expect_reject("n_lrn too many", t, n);
+  n = build_v3(line, sizeof(line), 0, t);
+  expect_reject("n_lrn too few (trailing)", t, n);
+  /* more than MXST_MAX_LRN records (unknown ones, empty bodies) */
+  for (int i = 0; i <= MXST_MAX_LRN; i++) {
+    const uint8_t u[4] = {(uint8_t)(100 + i), 1, 0, 0};
+    memcpy(lrn + 4 * i, u, 4);
+  }
+  n = build_v3(lrn, 4 * (MXST_MAX_LRN + 1), MXST_MAX_LRN + 1, t);
+  expect_reject("n_lrn > max", t, n);
+  n = build_v3(lrn, 4 * MXST_MAX_LRN, MXST_MAX_LRN, t);
+  CHECK(mxst_deserialize(t, n, &d));
+}
+
+static void test_v3_func_config_records(void) {
+  static const uint8_t recs[3][MXP_FUNC_CONFIG_SIZE] = {
+      {5, 1, 200, 99, 7, 0, 9, 9, 9, 9}, /* track, clamped like SET_FUNC_CONFIG */
+      {4, 1, 7, 3, 5, 2, 0, 1, 101, 9},  /* line, clamped */
+      {8, 1, 50, 70, 2, 0, 0, 0, 0, 0},
+  };
+  uint8_t t[MXST_BLOB_MAX + 16];
+  size_t n = build_v2(recs, 3, 3, t);
+  mxs_data_t d;
+  memset(&d, 0xAB, sizeof(d));
+  CHECK(mxst_deserialize(t, n, &d));
+  CHECK(d.track_cfg.threshold == 95 && d.track_cfg.adapt == 50 && d.track_cfg.reacquire == 1 &&
+        d.track_cfg.scale == 0);
+  CHECK(d.line_cfg.mode == 0 && d.line_cfg.threshold == 3 && d.line_cfg.roi_pct == 20 && d.line_cfg.bands == 4 &&
+        d.line_cfg.min_width == 1 && d.line_cfg.max_width == 1 && d.line_cfg.color_tolerance == 100);
+  CHECK(gesture_is(&d.gesture_cfg, 50, 70, 2));
+  /* unknown layout versions keep the defaults */
+  static const uint8_t v2s[2][MXP_FUNC_CONFIG_SIZE] = {
+      {4, 2, 1, 0, 60, 8, 4, 80, 30, 0},
+      {5, 2, 60, 10, 1, 1, 0, 0, 0, 0},
+  };
+  n = build_v2(v2s, 2, 2, t);
+  memset(&d, 0xAB, sizeof(d));
+  CHECK(mxst_deserialize(t, n, &d));
+  CHECK(line_cfg_is_default(&d.line_cfg) && track_cfg_is_default(&d.track_cfg));
+  /* duplicates reject */
+  static const uint8_t dup_line[2][MXP_FUNC_CONFIG_SIZE] = {
+      {4, 1, 1, 0, 60, 8, 4, 80, 30, 0},
+      {4, 2, 1, 0, 60, 8, 4, 80, 30, 0},
+  };
+  n = build_v2(dup_line, 2, 2, t);
+  expect_reject("duplicate line record", t, n);
+  static const uint8_t dup_track[2][MXP_FUNC_CONFIG_SIZE] = {
+      {5, 1, 60, 10, 1, 1, 0, 0, 0, 0},
+      {5, 1, 60, 10, 1, 1, 0, 0, 0, 0},
+  };
+  n = build_v2(dup_track, 2, 2, t);
+  expect_reject("duplicate track record", t, n);
+}
+
+static void test_set_line_color_mode(void) {
+  mxs_data_t d;
+  mxst_defaults(&d);
+  const uint8_t teal[3] = {20, 200, 180}, grey[3] = {128, 128, 128};
+  /* grey has no hue: refused, nothing changes */
+  CHECK(!mxst_set_line_color(&d, grey));
+  CHECK(d.line_has_color == 0 && d.line_cfg.mode == 0);
+  CHECK(mxst_set_line_color(&d, teal));
+  CHECK(d.line_has_color == 1 && memcmp(d.line_rgb, teal, 3) == 0 && d.line_cfg.mode == MXP_LINE_MODE_LEARNED);
+  /* clearing goes back to mode 0 */
+  CHECK(mxst_set_line_color(&d, NULL));
+  CHECK(d.line_has_color == 0 && d.line_rgb[0] == 0 && d.line_rgb[1] == 0 && d.line_rgb[2] == 0 &&
+        d.line_cfg.mode == MXP_LINE_MODE_DARK);
+  /* mode 1 is kept when the colour is cleared */
+  CHECK(mxst_set_line_color(&d, teal));
+  d.line_cfg.mode = MXP_LINE_MODE_LIGHT;
+  CHECK(mxst_set_line_color(&d, NULL));
+  CHECK(d.line_has_color == 0 && d.line_cfg.mode == MXP_LINE_MODE_LIGHT);
+  /* mode 2 without a colour (set by SET_FUNC_CONFIG) also goes back to 0 */
+  d.line_cfg.mode = MXP_LINE_MODE_LEARNED;
+  CHECK(mxst_set_line_color(&d, NULL));
+  CHECK(d.line_cfg.mode == MXP_LINE_MODE_DARK);
+  /* a grey learn does not touch an existing colour */
+  CHECK(mxst_set_line_color(&d, teal));
+  CHECK(!mxst_set_line_color(&d, grey));
+  CHECK(d.line_has_color == 1 && memcmp(d.line_rgb, teal, 3) == 0);
+}
+
+static void test_set_object_clears_name(void) {
+  mxs_data_t d;
+  mxst_defaults(&d);
+  mxk_model_t m, m2;
+  make_model(&m, 24, 24, 160, 120);
+  make_model(&m2, 16, 12, 40, 30);
+  CHECK(mxst_set_object(&d, &m));
+  CHECK(d.has_object == 1 && memcmp(&d.object, &m, sizeof(m)) == 0);
+  CHECK(mxst_set_name(&d, MXST_FN_TRACK, 1, "cup", 3));
+  CHECK(mxst_set_name(&d, MXST_FN_TAG, 1, "tag", 3));
+  /* learning again replaces the object and drops its name */
+  CHECK(mxst_set_object(&d, &m2));
+  CHECK(d.has_object == 1 && d.object.tw == 16 && d.object.cx == 40);
+  CHECK(mxst_get_name(&d, MXST_FN_TRACK, 1, NULL) == NULL && d.n_names == 1);
+  /* template bytes beyond tw*th are zeroed (only tw*th are saved) */
+  mxk_model_t junk = m2;
+  junk.tmpl[16 * 12] = 99;
+  CHECK(mxst_set_object(&d, &junk) && d.object.tmpl[16 * 12] == 0);
+  /* an invalid model is refused, nothing changes */
+  CHECK(mxst_set_name(&d, MXST_FN_TRACK, 1, "cup", 3));
+  mxk_model_t bad = m;
+  bad.tw = 40;
+  CHECK(!mxst_set_object(&d, &bad));
+  CHECK(d.has_object == 1 && d.object.tw == 16 && mxst_get_name(&d, MXST_FN_TRACK, 1, NULL) != NULL);
+  /* clearing drops the object and the name */
+  CHECK(mxst_set_object(&d, NULL));
+  CHECK(d.has_object == 0 && d.object.tw == 0 && mxst_get_name(&d, MXST_FN_TRACK, 1, NULL) == NULL);
+  CHECK(mxst_get_name(&d, MXST_FN_TAG, 1, NULL) != NULL);
+}
+
+static void test_name_keys_m6(void) {
+  mxs_data_t d;
+  mxst_defaults(&d);
+  CHECK(MXST_FN_LINE == MXP_FUNC_LINE && MXST_FN_TRACK == MXP_FUNC_TRACK);
+  CHECK(!mxst_set_name(&d, MXST_FN_LINE, 1, "a", 1));
+  CHECK(mxst_set_name(&d, MXST_FN_TRACK, 1, "b", 1));
+  CHECK(!mxst_set_name(&d, MXST_FN_TRACK, 0, "c", 1));
+  CHECK(!mxst_set_name(&d, MXST_FN_TRACK, 2, "c", 1));
+  /* face detection has no names (M3 review item) */
+  CHECK(!mxst_set_name(&d, MXST_FN_FACE, 0, "d", 1));
+  CHECK(!mxst_set_name(&d, MXST_FN_FACE, 5, "d", 1));
+  CHECK(d.n_names == 1);
+  /* a face / line name, or an object name other than id 1, in a blob is corrupt */
+  size_t n = mxst_serialize(&d, blob, sizeof(blob));
+  CHECK(n > 0);
+  const size_t o_nm = 4 + 1 + MXP_CONFIG_SIZE + 1 + 1;
+  CHECK(blob[o_nm] == 5 && blob[o_nm + 1] == 1);
+  blob[o_nm] = 3;
+  fix_crc(blob, n);
+  expect_reject("face name", blob, n);
+  blob[o_nm] = 4;
+  fix_crc(blob, n);
+  expect_reject("line name", blob, n);
+  blob[o_nm] = 5;
+  blob[o_nm + 1] = 2;
+  fix_crc(blob, n);
+  expect_reject("object name id 2", blob, n);
+}
+
+static void test_serialize_validates_m6(void) {
+  mxs_data_t base, d;
+  mxst_defaults(&base);
+  const uint8_t teal[3] = {20, 200, 180};
+  CHECK(mxst_set_line_color(&base, teal));
+  mxk_model_t m;
+  make_model(&m, 20, 20, 100, 100);
+  CHECK(mxst_set_object(&base, &m));
+  CHECK(mxst_serialize(&base, blob, sizeof(blob)) > 0);
+
+  d = base; d.line_cfg.mode = 3;              expect_no_serialize("line mode 3", &d);
+  d = base; d.line_cfg.roi_pct = 19;          expect_no_serialize("line roi 19", &d);
+  d = base; d.line_cfg.roi_pct = 101;         expect_no_serialize("line roi 101", &d);
+  d = base; d.line_cfg.bands = 3;             expect_no_serialize("line bands 3", &d);
+  d = base; d.line_cfg.bands = 13;            expect_no_serialize("line bands 13", &d);
+  d = base; d.line_cfg.min_width = 0;         expect_no_serialize("line min_width 0", &d);
+  d = base; d.line_cfg.min_width = 101;       expect_no_serialize("line min_width 101", &d);
+  d = base; d.line_cfg.max_width = 3;         expect_no_serialize("line max < min", &d);
+  d = base; d.line_cfg.color_tolerance = 101; expect_no_serialize("line tolerance 101", &d);
+  d = base; d.track_cfg.threshold = 9;        expect_no_serialize("track threshold 9", &d);
+  d = base; d.track_cfg.threshold = 96;       expect_no_serialize("track threshold 96", &d);
+  d = base; d.track_cfg.adapt = 51;           expect_no_serialize("track adapt 51", &d);
+  d = base; d.track_cfg.reacquire = 2;        expect_no_serialize("track reacquire 2", &d);
+  d = base; d.track_cfg.scale = 2;            expect_no_serialize("track scale 2", &d);
+  d = base; d.line_has_color = 2;             expect_no_serialize("line_has_color 2", &d);
+  d = base; d.has_object = 2;                 expect_no_serialize("has_object 2", &d);
+  d = base; d.object.tw = 7;                  expect_no_serialize("object tw 7", &d);
+  d = base; d.object.th = 33;                 expect_no_serialize("object th 33", &d);
+  d = base; d.object.box_h = 241;             expect_no_serialize("object box_h 241", &d);
+  d = base; d.object.cy = -1;                 expect_no_serialize("object cy -1", &d);
+  /* an invalid object is fine while has_object is 0 (it is not saved) */
+  d = base; d.has_object = 0; d.object.tw = 99;
+  CHECK(mxst_serialize(&d, blob, sizeof(blob)) > 0);
+  /* boundary values are valid */
+  d = base;
+  d.line_cfg.roi_pct = 20; d.line_cfg.bands = 12; d.line_cfg.min_width = 100; d.line_cfg.max_width = 100;
+  d.track_cfg.threshold = 95; d.track_cfg.adapt = 50; d.track_cfg.reacquire = 0; d.track_cfg.scale = 0;
+  CHECK(mxst_serialize(&d, blob, sizeof(blob)) > 0);
 }
 
 static void test_name_keys_gesture(void) {
@@ -540,13 +988,22 @@ int main(void) {
   test_learn_color();
   test_forget_names();
   test_deserialize_v1_fixture();
-  test_roundtrip_v2_gesture();
+  test_roundtrip_gesture();
   test_v2_skips_unknown_record();
   test_v2_gesture_bad_version_skipped();
   test_v2_rejects_duplicate_gesture();
   test_v2_rejects_too_many_records();
   test_serialize_max_fits();
   test_name_keys_gesture();
+  test_v1_fixture_new_fields_default();
+  test_deserialize_v2_fixture();
+  test_roundtrip_v3_full();
+  test_v3_learned_records();
+  test_v3_func_config_records();
+  test_set_line_color_mode();
+  test_set_object_clears_name();
+  test_name_keys_m6();
+  test_serialize_validates_m6();
   if (fails) {
     printf("%d failure(s)\n", fails);
     return 1;

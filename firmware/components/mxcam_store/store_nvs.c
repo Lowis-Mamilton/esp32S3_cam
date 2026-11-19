@@ -8,6 +8,10 @@ static const char *TAG = "mxst";
 #define NS "mxcam"
 #define KEY "data"
 
+/* One blob buffer (~3 KB) for load and save: they never run at the same time
+ * (boot code, then the save worker; see mxcam_store.h). */
+static uint8_t s_buf[MXST_BLOB_MAX];
+
 static esp_err_t ensure_init(void) {
   esp_err_t e = nvs_flash_init();
   if (e == ESP_ERR_NVS_NO_FREE_PAGES || e == ESP_ERR_NVS_NEW_VERSION_FOUND) {
@@ -26,9 +30,8 @@ esp_err_t mxst_load(mxs_data_t *d) {
   e = nvs_open(NS, NVS_READONLY, &h);
   if (e == ESP_ERR_NVS_NOT_FOUND) return ESP_OK; /* first boot: namespace not created yet */
   if (e != ESP_OK) return e;
-  static uint8_t buf[MXST_BLOB_MAX];
-  size_t len = sizeof(buf);
-  e = nvs_get_blob(h, KEY, buf, &len);
+  size_t len = sizeof(s_buf);
+  e = nvs_get_blob(h, KEY, s_buf, &len);
   nvs_close(h);
   if (e == ESP_ERR_NVS_NOT_FOUND) return ESP_OK; /* first boot */
   if (e == ESP_ERR_NVS_INVALID_LENGTH) {
@@ -36,18 +39,16 @@ esp_err_t mxst_load(mxs_data_t *d) {
     return ESP_ERR_INVALID_CRC;
   }
   if (e != ESP_OK) return e;
-  mxs_data_t t;
-  if (!mxst_deserialize(buf, len, &t)) {
+  /* d holds the defaults; deserialize changes it only on success */
+  if (!mxst_deserialize(s_buf, len, d)) {
     ESP_LOGW(TAG, "stored blob corrupt, using defaults");
     return ESP_ERR_INVALID_CRC;
   }
-  *d = t;
   return ESP_OK;
 }
 
 esp_err_t mxst_save(const mxs_data_t *d) {
-  static uint8_t buf[MXST_BLOB_MAX];
-  size_t n = mxst_serialize(d, buf, sizeof(buf));
+  size_t n = mxst_serialize(d, s_buf, sizeof(s_buf));
   if (n == 0) return ESP_ERR_INVALID_ARG;
   esp_err_t e = ensure_init();
   if (e != ESP_OK) return e;
@@ -56,7 +57,7 @@ esp_err_t mxst_save(const mxs_data_t *d) {
   if (e != ESP_OK) return e;
   /* One key, one set + commit: NVS applies a per-key set atomically, so a power
    * cut leaves the previous blob or the new one. */
-  e = nvs_set_blob(h, KEY, buf, n);
+  e = nvs_set_blob(h, KEY, s_buf, n);
   if (e == ESP_OK) e = nvs_commit(h);
   nvs_close(h);
   return e;

@@ -531,8 +531,9 @@ static void test_forget(void)
   /* unsupported functions */
   forget(&s, 0, 1, 8);
   CHECK(is_err(&g_r, MXP_CMD_FORGET, MXP_ERR_BAD_PARAM));
-  /* face (3): nothing is learned or named, so FORGET succeeds (see test_face_function) */
-  forget(&s, 4, 1, 9);
+  /* face (3): nothing is learned or named, so FORGET succeeds (see test_face_function);
+   * line (4) and object (5) see test_forget_line_resets_mode / test_forget_object_and_name */
+  forget(&s, 6, 1, 9);
   CHECK(is_err(&g_r, MXP_CMD_FORGET, MXP_ERR_BAD_PARAM));
 }
 
@@ -1081,13 +1082,13 @@ static void test_func_config_errors(void)
   CHECK(is_err(get_fcfg(&s, 0), MXP_CMD_GET_FUNC_CONFIG, MXP_ERR_BAD_PARAM));
   CHECK(is_err(get_fcfg(&s, 1), MXP_CMD_GET_FUNC_CONFIG, MXP_ERR_BAD_PARAM));
   CHECK(is_err(get_fcfg(&s, 3), MXP_CMD_GET_FUNC_CONFIG, MXP_ERR_BAD_PARAM));
-  CHECK(is_err(get_fcfg(&s, 4), MXP_CMD_GET_FUNC_CONFIG, MXP_ERR_BAD_PARAM)); /* until M6 Task 4 */
+  CHECK(is_err(get_fcfg(&s, 4), MXP_CMD_GET_FUNC_CONFIG, MXP_ERR_BAD_PARAM)); /* 4 not in GET_INFO here */
   CHECK(is_err(get_fcfg(&s, 200), MXP_CMD_GET_FUNC_CONFIG, MXP_ERR_BAD_PARAM));
 
   uint8_t p[MXP_FUNC_CONFIG_SIZE + 1] = { 8, 1, 50, 70, 2, 0, 0, 0, 0, 0, 0 };
   CHECK(is_err(set_fcfg(&s, NULL, 0), MXP_CMD_SET_FUNC_CONFIG, MXP_ERR_BAD_LENGTH));
   uint8_t line[MXP_FUNC_CONFIG_SIZE] = { 4, 1, 0, 0, 60, 8, 4, 80, 30, 0 };
-  CHECK(is_err(set_fcfg(&s, line, sizeof(line)), MXP_CMD_SET_FUNC_CONFIG, MXP_ERR_BAD_PARAM));
+  CHECK(is_err(set_fcfg(&s, line, sizeof(line)), MXP_CMD_SET_FUNC_CONFIG, MXP_ERR_BAD_PARAM)); /* not listed */
   uint8_t one = 1;
   CHECK(is_err(set_fcfg(&s, &one, 1), MXP_CMD_SET_FUNC_CONFIG, MXP_ERR_BAD_PARAM));
   CHECK(is_err(set_fcfg(&s, p, 1), MXP_CMD_SET_FUNC_CONFIG, MXP_ERR_BAD_LENGTH));
@@ -1199,6 +1200,463 @@ static void test_save_snapshot_includes_gesture(void)
   CHECK(mxs_complete_store(&s, 31, true) && g_data.cfg.dirty == 0);
 }
 
+/* ---- M6: line tracking (4) and object tracking (5) ---- */
+static const uint8_t k_caps_m6[5] = { 1, 2, 3, 4, 5 };
+
+static mxs_state_t *fresh_m6(mxs_state_t *s)
+{
+  fresh(s);
+  mxs_set_capabilities(s, k_caps_m6, sizeof(k_caps_m6));
+  return s;
+}
+
+/* A valid object model without running the tracker. */
+static void make_model(mxk_model_t *m, uint8_t tw, uint8_t th)
+{
+  memset(m, 0, sizeof(*m));
+  m->tw = tw;
+  m->th = th;
+  m->box_w = (uint16_t)(tw * 2);
+  m->box_h = (uint16_t)(th * 2);
+  m->cx = 160;
+  m->cy = 120;
+  m->rgb[0] = 180;
+  m->rgb[1] = 60;
+  m->rgb[2] = 20;
+  for (int i = 0; i < MXK_HIST_BINS; i++) m->hist[i] = (uint16_t)(i + 1);
+  for (int i = 0; i < tw * th; i++) m->tmpl[i] = (uint8_t)(i * 13);
+}
+
+/* LEARN with an explicit payload length (9, or 11 with an id). */
+static size_t learn_len(mxs_state_t *s, uint8_t func, uint8_t seq, uint16_t len, mxp_frame_t *r, uint8_t *rb,
+                        size_t cap)
+{
+  uint8_t p[11], out[64];
+  learn_payload(func, p);
+  p[9] = 1;
+  p[10] = 0;
+  mxp_frame_t rq = { MXP_CMD_LEARN, seq, len, p };
+  size_t n = mxs_handle(s, &rq, 0, out, sizeof(out));
+  if (n != MXS_DEFERRED && n > 0) decode(out, n, r, rb, cap);
+  return n;
+}
+
+static void test_get_info_lists_five(void)
+{
+  mxs_state_t s;
+  fresh_m6(&s);
+  const mxp_frame_t *r = req(&s, MXP_CMD_GET_INFO, 1, NULL, 0);
+  CHECK(r->cmd == 0x81 && r->len == 23 + 5 && r->payload[22] == 5);
+  for (int i = 0; i < 5; i++) CHECK(r->payload[23 + i] == i + 1);
+  uint8_t four = 4, five = 5;
+  CHECK(req(&s, MXP_CMD_SET_FUNCTION, 2, &four, 1)->cmd == 0x90 && s.function_id == 4);
+  CHECK(req(&s, MXP_CMD_SET_FUNCTION, 3, &five, 1)->cmd == 0x90 && s.function_id == 5);
+}
+
+static void test_func_config_line_track_default(void)
+{
+  mxs_state_t s;
+  fresh_m6(&s);
+  static const uint8_t line[MXP_FUNC_CONFIG_SIZE] = { 4, 1, 0, 0, 60, 8, 4, 80, 30, 0 };
+  static const uint8_t track[MXP_FUNC_CONFIG_SIZE] = { 5, 1, 50, 10, 1, 1, 0, 0, 0, 0 };
+  const mxp_frame_t *r = get_fcfg(&s, 4);
+  CHECK(r->cmd == 0xC4 && r->len == MXP_FUNC_CONFIG_SIZE && memcmp(r->payload, line, sizeof(line)) == 0);
+  r = get_fcfg(&s, 5);
+  CHECK(r->cmd == 0xC4 && r->len == MXP_FUNC_CONFIG_SIZE && memcmp(r->payload, track, sizeof(track)) == 0);
+  CHECK(g_data.cfg.dirty == 0);
+}
+
+static void test_func_config_line_track_set(void)
+{
+  mxs_state_t s;
+  fresh_m6(&s);
+  uint32_t gen = s.data_gen;
+  /* line: clamped, reserved ignored; works while function 0 is current */
+  const uint8_t lp[MXP_FUNC_CONFIG_SIZE] = { 4, 1, 9, 100, 5, 30, 50, 10, 120, 7 };
+  static const uint8_t lw[MXP_FUNC_CONFIG_SIZE] = { 4, 1, 0, 100, 20, 12, 50, 50, 100, 0 };
+  const mxp_frame_t *r = set_fcfg(&s, lp, sizeof(lp));
+  CHECK(r->cmd == 0xC5 && r->len == MXP_FUNC_CONFIG_SIZE && memcmp(r->payload, lw, sizeof(lw)) == 0);
+  CHECK(g_data.line_cfg.threshold == 100 && g_data.line_cfg.roi_pct == 20 && g_data.line_cfg.bands == 12 &&
+        g_data.line_cfg.max_width == 50);
+  CHECK(g_data.cfg.dirty == 1 && s.data_gen == gen + 1);
+  g_data.cfg.dirty = 0;
+  CHECK(set_fcfg(&s, lp, sizeof(lp))->cmd == 0xC5 && g_data.cfg.dirty == 0 && s.data_gen == gen + 1);
+  CHECK(memcmp(get_fcfg(&s, 4)->payload, lw, sizeof(lw)) == 0);
+  /* track */
+  const uint8_t tp[MXP_FUNC_CONFIG_SIZE] = { 5, 1, 5, 80, 3, 0, 1, 1, 1, 1 };
+  static const uint8_t tw[MXP_FUNC_CONFIG_SIZE] = { 5, 1, 10, 50, 1, 0, 0, 0, 0, 0 };
+  r = set_fcfg(&s, tp, sizeof(tp));
+  CHECK(r->cmd == 0xC5 && memcmp(r->payload, tw, sizeof(tw)) == 0);
+  CHECK(g_data.track_cfg.threshold == 10 && g_data.track_cfg.adapt == 50 && g_data.track_cfg.reacquire == 1 &&
+        g_data.track_cfg.scale == 0);
+  CHECK(g_data.cfg.dirty == 1 && s.data_gen == gen + 2);
+  g_data.cfg.dirty = 0;
+  CHECK(set_fcfg(&s, tw, sizeof(tw))->cmd == 0xC5 && g_data.cfg.dirty == 0 && s.data_gen == gen + 2);
+  /* the line config did not move */
+  CHECK(memcmp(get_fcfg(&s, 4)->payload, lw, sizeof(lw)) == 0);
+}
+
+static void test_func_config_line_track_errors(void)
+{
+  mxs_state_t s;
+  fresh_m6(&s);
+  uint8_t p[MXP_FUNC_CONFIG_SIZE + 1] = { 4, 1, 0, 0, 60, 8, 4, 80, 30, 0, 0 };
+  CHECK(is_err(set_fcfg(&s, p, 9), MXP_CMD_SET_FUNC_CONFIG, MXP_ERR_BAD_LENGTH));
+  CHECK(is_err(set_fcfg(&s, p, 11), MXP_CMD_SET_FUNC_CONFIG, MXP_ERR_BAD_LENGTH));
+  p[1] = 2;
+  CHECK(is_err(set_fcfg(&s, p, 10), MXP_CMD_SET_FUNC_CONFIG, MXP_ERR_BAD_PARAM));
+  p[0] = 5;
+  CHECK(is_err(set_fcfg(&s, p, 10), MXP_CMD_SET_FUNC_CONFIG, MXP_ERR_BAD_PARAM));
+  /* functions without a func config, and 8 when it is not in GET_INFO */
+  CHECK(is_err(get_fcfg(&s, 1), MXP_CMD_GET_FUNC_CONFIG, MXP_ERR_BAD_PARAM));
+  CHECK(is_err(get_fcfg(&s, 3), MXP_CMD_GET_FUNC_CONFIG, MXP_ERR_BAD_PARAM));
+  CHECK(is_err(get_fcfg(&s, 8), MXP_CMD_GET_FUNC_CONFIG, MXP_ERR_BAD_PARAM));
+  CHECK(g_data.cfg.dirty == 0);
+  /* 4 / 5 not in GET_INFO's list: BAD_PARAM (protocol.md 9), before the length */
+  fresh(&s);
+  p[0] = 4;
+  p[1] = 1;
+  CHECK(is_err(get_fcfg(&s, 4), MXP_CMD_GET_FUNC_CONFIG, MXP_ERR_BAD_PARAM));
+  CHECK(is_err(get_fcfg(&s, 5), MXP_CMD_GET_FUNC_CONFIG, MXP_ERR_BAD_PARAM));
+  CHECK(is_err(set_fcfg(&s, p, 10), MXP_CMD_SET_FUNC_CONFIG, MXP_ERR_BAD_PARAM));
+  CHECK(is_err(set_fcfg(&s, p, 9), MXP_CMD_SET_FUNC_CONFIG, MXP_ERR_BAD_PARAM));
+  CHECK(g_data.cfg.dirty == 0);
+}
+
+static void test_learn_with_id_rejected(void)
+{
+  mxs_state_t s;
+  fresh_m6(&s);
+  uint8_t rb[64];
+  mxp_frame_t r;
+  for (uint8_t fn = 1; fn <= 5; fn++) {
+    if (fn == 2 || fn == 3) continue;
+    CHECK(req(&s, MXP_CMD_SET_FUNCTION, 1, &fn, 1)->cmd == 0x90 && s.function_id == fn);
+    CHECK(learn_len(&s, fn, 40, 11, &r, rb, sizeof(rb)) != MXS_DEFERRED);
+    CHECK(is_err(&r, MXP_CMD_LEARN, MXP_ERR_BAD_PARAM) && r.seq == 40 && !s.pending_learn.active);
+    /* the 9-byte form is still accepted */
+    CHECK(learn_len(&s, fn, 41, 9, &r, rb, sizeof(rb)) == MXS_DEFERRED && s.pending_learn.active);
+    /* ...and an 11-byte one is BAD_PARAM, not BUSY, while it is pending */
+    CHECK(learn_len(&s, fn, 42, 11, &r, rb, sizeof(rb)) != MXS_DEFERRED);
+    CHECK(is_err(&r, MXP_CMD_LEARN, MXP_ERR_BAD_PARAM));
+    uint8_t zero = 0;
+    req(&s, MXP_CMD_SET_FUNCTION, 2, &zero, 1); /* cancels the pending one */
+    uint8_t out[16];
+    while (pop_deferred(&s, out, sizeof(out)) > 0) {}
+  }
+  /* other lengths stay BAD_LENGTH */
+  uint8_t one = 1;
+  req(&s, MXP_CMD_SET_FUNCTION, 3, &one, 1);
+  CHECK(learn_len(&s, 1, 43, 10, &r, rb, sizeof(rb)) != MXS_DEFERRED);
+  CHECK(is_err(&r, MXP_CMD_LEARN, MXP_ERR_BAD_LENGTH));
+}
+
+static void test_learn_fn_mismatch(void)
+{
+  mxs_state_t s;
+  fresh_m6(&s);
+  uint8_t rb[64], four = 4, five = 5;
+  mxp_frame_t r;
+  req(&s, MXP_CMD_SET_FUNCTION, 1, &four, 1);
+  CHECK(learn(&s, 5, 2, 0, &r, rb, sizeof(rb)) != MXS_DEFERRED && is_err(&r, MXP_CMD_LEARN, MXP_ERR_BAD_PARAM));
+  CHECK(learn(&s, 1, 3, 0, &r, rb, sizeof(rb)) != MXS_DEFERRED && is_err(&r, MXP_CMD_LEARN, MXP_ERR_BAD_PARAM));
+  req(&s, MXP_CMD_SET_FUNCTION, 4, &five, 1);
+  CHECK(learn(&s, 4, 5, 0, &r, rb, sizeof(rb)) != MXS_DEFERRED && is_err(&r, MXP_CMD_LEARN, MXP_ERR_BAD_PARAM));
+  CHECK(!s.pending_learn.active);
+  /* function 0 current: nothing can be learned */
+  uint8_t zero = 0;
+  req(&s, MXP_CMD_SET_FUNCTION, 6, &zero, 1);
+  CHECK(learn(&s, 4, 7, 0, &r, rb, sizeof(rb)) != MXS_DEFERRED && is_err(&r, MXP_CMD_LEARN, MXP_ERR_BAD_PARAM));
+}
+
+static void test_learn_line_flow(void)
+{
+  mxs_state_t s;
+  fresh_m6(&s);
+  uint8_t rb[64], out[64], four = 4, seq = 0;
+  mxp_frame_t r;
+  mxp_learn_req_t lr;
+  const uint8_t teal[3] = { 20, 200, 180 }, orange[3] = { 240, 120, 20 };
+  req(&s, MXP_CMD_SET_FUNCTION, 1, &four, 1);
+  uint32_t gen = s.data_gen;
+  CHECK(learn(&s, 4, 50, 0, &r, rb, sizeof(rb)) == MXS_DEFERRED);
+  CHECK(learn(&s, 4, 51, 0, &r, rb, sizeof(rb)) != MXS_DEFERRED && is_err(&r, MXP_CMD_LEARN, MXP_ERR_BUSY));
+  CHECK(mxs_take_pending_learn(&s, &seq, &lr) && seq == 50 && lr.function_id == 4);
+  CHECK(mxs_finish_learn(&s, seq, teal));
+  size_t n = pop_deferred(&s, out, sizeof(out));
+  decode(out, n, &r, rb, sizeof(rb));
+  CHECK(r.cmd == 0xB0 && r.seq == 50 && r.len == 1 && r.payload[0] == 1);
+  CHECK(g_data.line_has_color == 1 && memcmp(g_data.line_rgb, teal, 3) == 0);
+  CHECK(g_data.line_cfg.mode == MXP_LINE_MODE_LEARNED && g_data.cfg.dirty == 1 && s.data_gen == gen + 1);
+  CHECK(g_data.n_colors == 0); /* the colour function's list is untouched */
+  CHECK(get_fcfg(&s, 4)->payload[2] == 2);
+  /* the same colour again: id 1, nothing changed */
+  g_data.cfg.dirty = 0;
+  CHECK(learn(&s, 4, 52, 0, &r, rb, sizeof(rb)) == MXS_DEFERRED);
+  CHECK(mxs_take_pending_learn(&s, &seq, &lr) && mxs_finish_learn(&s, seq, teal));
+  decode(out, pop_deferred(&s, out, sizeof(out)), &r, rb, sizeof(rb));
+  CHECK(r.cmd == 0xB0 && r.payload[0] == 1 && g_data.cfg.dirty == 0 && s.data_gen == gen + 1);
+  /* another colour replaces it */
+  CHECK(learn(&s, 4, 53, 0, &r, rb, sizeof(rb)) == MXS_DEFERRED);
+  CHECK(mxs_take_pending_learn(&s, &seq, &lr) && mxs_finish_learn(&s, seq, orange));
+  decode(out, pop_deferred(&s, out, sizeof(out)), &r, rb, sizeof(rb));
+  CHECK(r.cmd == 0xB0 && r.payload[0] == 1 && memcmp(g_data.line_rgb, orange, 3) == 0 && g_data.cfg.dirty == 1);
+  /* same colour, but the mode was changed to 0 meanwhile: learning sets 2 again (dirty) */
+  g_data.line_cfg.mode = 0;
+  g_data.cfg.dirty = 0;
+  CHECK(learn(&s, 4, 54, 0, &r, rb, sizeof(rb)) == MXS_DEFERRED);
+  CHECK(mxs_take_pending_learn(&s, &seq, &lr) && mxs_finish_learn(&s, seq, orange));
+  decode(out, pop_deferred(&s, out, sizeof(out)), &r, rb, sizeof(rb));
+  CHECK(r.cmd == 0xB0 && g_data.line_cfg.mode == 2 && g_data.cfg.dirty == 1);
+  /* cancelled meanwhile (function change): nothing learned */
+  CHECK(learn(&s, 4, 55, 0, &r, rb, sizeof(rb)) == MXS_DEFERRED);
+  CHECK(mxs_take_pending_learn(&s, &seq, &lr));
+  uint8_t zero = 0;
+  req(&s, MXP_CMD_SET_FUNCTION, 2, &zero, 1);
+  CHECK(!mxs_finish_learn(&s, seq, teal) && memcmp(g_data.line_rgb, orange, 3) == 0);
+}
+
+static void test_learn_line_no_color(void)
+{
+  mxs_state_t s;
+  fresh_m6(&s);
+  uint8_t rb[64], out[64], four = 4, seq = 0;
+  mxp_frame_t r;
+  mxp_learn_req_t lr;
+  const uint8_t grey[3] = { 90, 90, 90 };
+  req(&s, MXP_CMD_SET_FUNCTION, 1, &four, 1);
+  /* region without a usable colour (NULL) or a grey one (black / white tape) */
+  CHECK(learn(&s, 4, 60, 0, &r, rb, sizeof(rb)) == MXS_DEFERRED);
+  CHECK(mxs_take_pending_learn(&s, &seq, &lr) && mxs_finish_learn(&s, seq, NULL));
+  decode(out, pop_deferred(&s, out, sizeof(out)), &r, rb, sizeof(rb));
+  CHECK(is_err(&r, MXP_CMD_LEARN, MXP_ERR_BAD_PARAM) && r.seq == 60);
+  CHECK(learn(&s, 4, 61, 0, &r, rb, sizeof(rb)) == MXS_DEFERRED);
+  CHECK(mxs_take_pending_learn(&s, &seq, &lr) && mxs_finish_learn(&s, seq, grey));
+  decode(out, pop_deferred(&s, out, sizeof(out)), &r, rb, sizeof(rb));
+  CHECK(is_err(&r, MXP_CMD_LEARN, MXP_ERR_BAD_PARAM) && r.seq == 61);
+  CHECK(g_data.line_has_color == 0 && g_data.line_cfg.mode == 0 && g_data.cfg.dirty == 0);
+  CHECK(!s.pending_learn.active);
+}
+
+static void test_learn_object_flow(void)
+{
+  mxs_state_t s;
+  fresh_m6(&s);
+  uint8_t rb[64], out[64], five = 5, seq = 0;
+  mxp_frame_t r;
+  mxp_learn_req_t lr;
+  mxk_model_t m, m2;
+  make_model(&m, 20, 20);
+  make_model(&m2, 32, 16);
+  req(&s, MXP_CMD_SET_FUNCTION, 1, &five, 1);
+  uint32_t gen = s.data_gen;
+  CHECK(learn(&s, 5, 70, 0, &r, rb, sizeof(rb)) == MXS_DEFERRED);
+  CHECK(!mxs_finish_learn_object(&s, 70, &m)); /* not claimed yet */
+  CHECK(mxs_take_pending_learn(&s, &seq, &lr) && lr.function_id == 5 && lr.x == 100 && lr.w == 20);
+  CHECK(mxs_finish_learn_object(&s, seq, &m));
+  decode(out, pop_deferred(&s, out, sizeof(out)), &r, rb, sizeof(rb));
+  CHECK(r.cmd == 0xB0 && r.seq == 70 && r.len == 1 && r.payload[0] == 1);
+  CHECK(g_data.has_object == 1 && g_data.object.tw == 20 && g_data.cfg.dirty == 1 && s.data_gen == gen + 1);
+  /* name it, then learn again: replaced and the name is gone */
+  CHECK(set_name(&s, 5, 1, "cup", 3)->cmd == 0xB2);
+  CHECK(learn(&s, 5, 71, 0, &r, rb, sizeof(rb)) == MXS_DEFERRED);
+  CHECK(mxs_take_pending_learn(&s, &seq, &lr) && mxs_finish_learn_object(&s, seq, &m2));
+  decode(out, pop_deferred(&s, out, sizeof(out)), &r, rb, sizeof(rb));
+  CHECK(r.cmd == 0xB0 && r.payload[0] == 1 && g_data.object.tw == 32 && g_data.object.th == 16);
+  CHECK(mxst_get_name(&g_data, 5, 1, NULL) == NULL);
+  /* nothing to track (too small / flat region: NULL) or an invalid model -> BAD_PARAM, object kept */
+  g_data.cfg.dirty = 0;
+  CHECK(learn(&s, 5, 72, 0, &r, rb, sizeof(rb)) == MXS_DEFERRED);
+  CHECK(mxs_take_pending_learn(&s, &seq, &lr) && mxs_finish_learn_object(&s, seq, NULL));
+  decode(out, pop_deferred(&s, out, sizeof(out)), &r, rb, sizeof(rb));
+  CHECK(is_err(&r, MXP_CMD_LEARN, MXP_ERR_BAD_PARAM) && r.seq == 72);
+  mxk_model_t bad = m;
+  bad.tw = 40;
+  CHECK(learn(&s, 5, 73, 0, &r, rb, sizeof(rb)) == MXS_DEFERRED);
+  CHECK(mxs_take_pending_learn(&s, &seq, &lr) && mxs_finish_learn_object(&s, seq, &bad));
+  decode(out, pop_deferred(&s, out, sizeof(out)), &r, rb, sizeof(rb));
+  CHECK(is_err(&r, MXP_CMD_LEARN, MXP_ERR_BAD_PARAM) && r.seq == 73);
+  CHECK(g_data.has_object == 1 && g_data.object.tw == 32 && g_data.cfg.dirty == 0);
+  /* the colour completion on an object learn (and vice versa) is a BAD_PARAM, not a crash */
+  CHECK(learn(&s, 5, 74, 0, &r, rb, sizeof(rb)) == MXS_DEFERRED);
+  const uint8_t red[3] = { 230, 20, 20 };
+  CHECK(mxs_take_pending_learn(&s, &seq, &lr) && mxs_finish_learn(&s, seq, red));
+  decode(out, pop_deferred(&s, out, sizeof(out)), &r, rb, sizeof(rb));
+  CHECK(is_err(&r, MXP_CMD_LEARN, MXP_ERR_BAD_PARAM) && g_data.n_colors == 0 && g_data.line_has_color == 0);
+  uint8_t one = 1;
+  req(&s, MXP_CMD_SET_FUNCTION, 2, &one, 1);
+  CHECK(learn(&s, 1, 75, 0, &r, rb, sizeof(rb)) == MXS_DEFERRED);
+  CHECK(mxs_take_pending_learn(&s, &seq, &lr) && mxs_finish_learn_object(&s, seq, &m));
+  decode(out, pop_deferred(&s, out, sizeof(out)), &r, rb, sizeof(rb));
+  CHECK(is_err(&r, MXP_CMD_LEARN, MXP_ERR_BAD_PARAM) && g_data.object.tw == 32);
+  /* cancelled meanwhile: nothing learned, false */
+  req(&s, MXP_CMD_SET_FUNCTION, 3, &five, 1);
+  CHECK(learn(&s, 5, 76, 0, &r, rb, sizeof(rb)) == MXS_DEFERRED);
+  CHECK(mxs_take_pending_learn(&s, &seq, &lr));
+  req(&s, MXP_CMD_SET_FUNCTION, 4, &one, 1);
+  CHECK(!mxs_finish_learn_object(&s, seq, &m) && g_data.object.tw == 32);
+}
+
+static void test_forget_line_resets_mode(void)
+{
+  mxs_state_t s;
+  fresh_m6(&s);
+  const uint8_t teal[3] = { 20, 200, 180 };
+  CHECK(mxst_set_line_color(&g_data, teal));
+  /* other ids: nothing to forget */
+  forget(&s, 4, 2, 1);
+  CHECK(g_r.cmd == 0xB1 && g_data.line_has_color == 1 && g_data.cfg.dirty == 0);
+  forget(&s, 4, 1, 2);
+  CHECK(g_r.cmd == 0xB1 && g_r.len == 0 && g_data.line_has_color == 0 && g_data.line_cfg.mode == 0);
+  CHECK(g_data.cfg.dirty == 1);
+  g_data.cfg.dirty = 0;
+  forget(&s, 4, 1, 3); /* again: idempotent, not dirty */
+  CHECK(g_r.cmd == 0xB1 && g_data.cfg.dirty == 0);
+  /* 0xFFFF works too; mode 1 is kept */
+  CHECK(mxst_set_line_color(&g_data, teal));
+  g_data.line_cfg.mode = 1;
+  forget(&s, 4, 0xFFFF, 4);
+  CHECK(g_r.cmd == 0xB1 && g_data.line_has_color == 0 && g_data.line_cfg.mode == 1 && g_data.cfg.dirty == 1);
+  /* mode 2 set by SET_FUNC_CONFIG without a colour goes back to 0 (dirty) */
+  g_data.cfg.dirty = 0;
+  g_data.line_cfg.mode = 2;
+  forget(&s, 4, 1, 5);
+  CHECK(g_r.cmd == 0xB1 && g_data.line_cfg.mode == 0 && g_data.cfg.dirty == 1);
+  /* FORGET 4 does not depend on GET_INFO's list, like the other functions */
+  fresh(&s);
+  forget(&s, 4, 1, 6);
+  CHECK(g_r.cmd == 0xB1);
+}
+
+static void test_forget_object_and_name(void)
+{
+  mxs_state_t s;
+  fresh_m6(&s);
+  mxk_model_t m;
+  make_model(&m, 16, 16);
+  CHECK(mxst_set_object(&g_data, &m));
+  CHECK(mxst_set_name(&g_data, 5, 1, "ball", 4));
+  CHECK(mxst_set_name(&g_data, 2, 1, "tag", 3));
+  forget(&s, 5, 3, 1);
+  CHECK(g_r.cmd == 0xB1 && g_data.has_object == 1 && g_data.cfg.dirty == 0);
+  forget(&s, 5, 1, 2);
+  CHECK(g_r.cmd == 0xB1 && g_data.has_object == 0 && mxst_get_name(&g_data, 5, 1, NULL) == NULL);
+  CHECK(mxst_get_name(&g_data, 2, 1, NULL) != NULL && g_data.cfg.dirty == 1);
+  g_data.cfg.dirty = 0;
+  forget(&s, 5, 0xFFFF, 3);
+  CHECK(g_r.cmd == 0xB1 && g_data.cfg.dirty == 0);
+  CHECK(mxst_set_object(&g_data, &m));
+  forget(&s, 5, 0xFFFF, 4);
+  CHECK(g_r.cmd == 0xB1 && g_data.has_object == 0 && g_data.cfg.dirty == 1);
+  /* unknown functions are still BAD_PARAM */
+  forget(&s, 6, 1, 5);
+  CHECK(is_err(&g_r, MXP_CMD_FORGET, MXP_ERR_BAD_PARAM));
+}
+
+static void test_set_name_rules_m6(void)
+{
+  mxs_state_t s;
+  fresh_m6(&s);
+  /* line: never */
+  CHECK(is_err(set_name(&s, 4, 1, "x", 1), MXP_CMD_SET_NAME, MXP_ERR_BAD_PARAM));
+  CHECK(is_err(set_name(&s, 4, 1, "", 0), MXP_CMD_SET_NAME, MXP_ERR_BAD_PARAM));
+  /* object: only id 1, only once learned */
+  CHECK(is_err(set_name(&s, 5, 1, "cup", 3), MXP_CMD_SET_NAME, MXP_ERR_BAD_PARAM));
+  mxk_model_t m;
+  make_model(&m, 16, 16);
+  CHECK(mxst_set_object(&g_data, &m));
+  CHECK(is_err(set_name(&s, 5, 0, "cup", 3), MXP_CMD_SET_NAME, MXP_ERR_BAD_PARAM));
+  CHECK(is_err(set_name(&s, 5, 2, "cup", 3), MXP_CMD_SET_NAME, MXP_ERR_BAD_PARAM));
+  CHECK(g_data.n_names == 0 && g_data.cfg.dirty == 0);
+  CHECK(set_name(&s, 5, 1, "\xE6\x9D\xAF", 3)->cmd == 0xB2 && g_r.len == 0); /* 杯 */
+  uint8_t l = 0;
+  const char *nm = mxst_get_name(&g_data, 5, 1, &l);
+  CHECK(nm && l == 3 && memcmp(nm, "\xE6\x9D\xAF", 3) == 0 && g_data.cfg.dirty == 1);
+  /* clearing works; the shared 32-name table applies */
+  CHECK(set_name(&s, 5, 1, "", 0)->cmd == 0xB2 && g_data.n_names == 0);
+  for (uint16_t i = 0; i < MXST_MAX_NAMES; i++) CHECK(set_name(&s, 2, i, "t", 1)->cmd == 0xB2);
+  CHECK(is_err(set_name(&s, 5, 1, "cup", 3), MXP_CMD_SET_NAME, MXP_ERR_FULL));
+  /* face still has no names */
+  CHECK(is_err(set_name(&s, 3, 0, "me", 2), MXP_CMD_SET_NAME, MXP_ERR_BAD_PARAM));
+}
+
+static void test_get_learned_line_and_object(void)
+{
+  mxs_state_t s;
+  fresh_m6(&s);
+  uint8_t four = 4, five = 5;
+  const mxp_frame_t *r = req(&s, MXP_CMD_GET_LEARNED, 1, &four, 1);
+  CHECK(r->cmd == 0xB3 && r->len == 1 && r->payload[0] == 0);
+  r = req(&s, MXP_CMD_GET_LEARNED, 2, &five, 1);
+  CHECK(r->cmd == 0xB3 && r->len == 1 && r->payload[0] == 0);
+  const uint8_t teal[3] = { 20, 200, 180 };
+  CHECK(mxst_set_line_color(&g_data, teal));
+  r = req(&s, MXP_CMD_GET_LEARNED, 3, &four, 1);
+  static const uint8_t want4[] = { 1, 1, 0, 20, 200, 180, 0 };
+  CHECK(r->cmd == 0xB3 && r->len == sizeof(want4) && memcmp(r->payload, want4, sizeof(want4)) == 0);
+  mxk_model_t m;
+  make_model(&m, 16, 16);
+  CHECK(mxst_set_object(&g_data, &m));
+  r = req(&s, MXP_CMD_GET_LEARNED, 4, &five, 1);
+  static const uint8_t want5a[] = { 1, 1, 0, 180, 60, 20, 0 };
+  CHECK(r->cmd == 0xB3 && r->len == sizeof(want5a) && memcmp(r->payload, want5a, sizeof(want5a)) == 0);
+  CHECK(mxst_set_name(&g_data, 5, 1, "ball", 4));
+  r = req(&s, MXP_CMD_GET_LEARNED, 5, &five, 1);
+  static const uint8_t want5b[] = { 1, 1, 0, 180, 60, 20, 4, 'b', 'a', 'l', 'l' };
+  CHECK(r->cmd == 0xB3 && r->len == sizeof(want5b) && memcmp(r->payload, want5b, sizeof(want5b)) == 0);
+  /* face still BAD_PARAM */
+  uint8_t three = 3;
+  CHECK(is_err(req(&s, MXP_CMD_GET_LEARNED, 6, &three, 1), MXP_CMD_GET_LEARNED, MXP_ERR_BAD_PARAM));
+}
+
+static void test_factory_reset_m6(void)
+{
+  mxs_state_t s;
+  fresh_m6(&s);
+  const uint8_t lp[MXP_FUNC_CONFIG_SIZE] = { 4, 1, 1, 0, 40, 6, 4, 80, 30, 0 };
+  const uint8_t tp[MXP_FUNC_CONFIG_SIZE] = { 5, 1, 70, 0, 0, 0, 0, 0, 0, 0 };
+  CHECK(set_fcfg(&s, lp, sizeof(lp))->cmd == 0xC5 && set_fcfg(&s, tp, sizeof(tp))->cmd == 0xC5);
+  const uint8_t teal[3] = { 20, 200, 180 };
+  CHECK(mxst_set_line_color(&g_data, teal));
+  mxk_model_t m;
+  make_model(&m, 16, 16);
+  CHECK(mxst_set_object(&g_data, &m) && mxst_set_name(&g_data, 5, 1, "ball", 4));
+  uint8_t cmd = 0, seq = 0, rb[64];
+  mxp_frame_t r;
+  CHECK(deferred(&s, MXP_CMD_FACTORY_RESET, 30) == MXS_DEFERRED);
+  CHECK(mxs_take_pending_store(&s, &cmd, &seq, NULL) && mxs_complete_store(&s, 30, true));
+  pop_decoded(&s, &r, rb, sizeof(rb));
+  CHECK(r.cmd == 0xC3);
+  static const uint8_t line[MXP_FUNC_CONFIG_SIZE] = { 4, 1, 0, 0, 60, 8, 4, 80, 30, 0 };
+  static const uint8_t track[MXP_FUNC_CONFIG_SIZE] = { 5, 1, 50, 10, 1, 1, 0, 0, 0, 0 };
+  CHECK(memcmp(get_fcfg(&s, 4)->payload, line, sizeof(line)) == 0);
+  CHECK(memcmp(get_fcfg(&s, 5)->payload, track, sizeof(track)) == 0);
+  CHECK(g_data.line_has_color == 0 && g_data.has_object == 0 && g_data.n_names == 0 && g_data.cfg.dirty == 0);
+}
+
+static void test_save_snapshot_includes_object(void)
+{
+  mxs_state_t s;
+  fresh_m6(&s);
+  static mxs_data_t snap;
+  const uint8_t teal[3] = { 20, 200, 180 };
+  mxk_model_t m;
+  make_model(&m, 24, 18);
+  CHECK(mxst_set_line_color(&g_data, teal) && mxst_set_object(&g_data, &m));
+  const uint8_t tp[MXP_FUNC_CONFIG_SIZE] = { 5, 1, 70, 20, 0, 1, 0, 0, 0, 0 };
+  CHECK(set_fcfg(&s, tp, sizeof(tp))->cmd == 0xC5);
+  uint8_t cmd = 0, seq = 0;
+  CHECK(deferred(&s, MXP_CMD_SAVE, 31) == MXS_DEFERRED);
+  CHECK(mxs_take_pending_store(&s, &cmd, &seq, &snap) && cmd == MXP_CMD_SAVE);
+  CHECK(snap.has_object == 1 && memcmp(&snap.object, &m, sizeof(m)) == 0);
+  CHECK(snap.line_has_color == 1 && memcmp(snap.line_rgb, teal, 3) == 0 && snap.line_cfg.mode == 2);
+  CHECK(snap.track_cfg.threshold == 70 && snap.track_cfg.adapt == 20 && snap.track_cfg.reacquire == 0);
+  /* the snapshot serialises */
+  static uint8_t blob[MXST_BLOB_MAX];
+  CHECK(mxst_serialize(&snap, blob, sizeof(blob)) > 0);
+  CHECK(mxs_complete_store(&s, 31, true) && g_data.cfg.dirty == 0);
+}
+
 int main(void)
 {
   test_info();
@@ -1228,6 +1686,21 @@ int main(void)
   test_learn_gesture_rejected();
   test_factory_reset_gesture_defaults();
   test_save_snapshot_includes_gesture();
+  test_get_info_lists_five();
+  test_func_config_line_track_default();
+  test_func_config_line_track_set();
+  test_func_config_line_track_errors();
+  test_learn_with_id_rejected();
+  test_learn_fn_mismatch();
+  test_learn_line_flow();
+  test_learn_line_no_color();
+  test_learn_object_flow();
+  test_forget_line_resets_mode();
+  test_forget_object_and_name();
+  test_set_name_rules_m6();
+  test_get_learned_line_and_object();
+  test_factory_reset_m6();
+  test_save_snapshot_includes_object();
   if (g_fail) {
     printf("%d of %d checks FAILED\n", g_fail, g_checks);
     return 1;
