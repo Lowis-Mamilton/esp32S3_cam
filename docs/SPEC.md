@@ -222,11 +222,12 @@ docs/          規格、協定、ADR
 - [ ] M4：I2C 傳輸方式定稿
 - [x] M1：`firmware/dependencies.lock` 已 commit
 - [x] M1：效能實測（`docs/measurements/m1.md`）
-- [ ] M2：預覽回到 10 fps（換更快的 JPEG 編碼器）、TFT 從 11 fps 提升（SPI 時脈、XCLK）
+- [x] M2：預覽回到約 10 fps（esp_new_jpeg，見 `docs/measurements/m2.md`）
+- [ ] TFT 從 11 fps 提升（SPI 時脈、XCLK）；AprilTag 模式串流時 7 fps
 - [ ] V1.3 擴展板：鏡頭和螢幕腳位已在實板驗證；I2C（41/42）和 UART（1/2）在 M4 驗證
 - [x] 協定 C 程式碼的位置（ADR-0006）
 - [ ] M4：Arduino 函式庫的發佈方式（把 `arduino-lib/` 打包成 release ZIP）
-- [ ] M2 開工前（M1 總審查建議）：
+- [x] M2 開工前（M1 總審查建議）——已在 M2 處理：
   - `mxcam_link` 改成非阻塞的推送佇列（`mxcam_link_push`），推送序號集中在 link；RESULTS 不可以讓 TFT 卡住
   - 需要 pipeline 資料才能回答的指令（例如 LEARN）：先決定用 BUSY＋輪詢，還是延後回應
   - 量測 TFT 每張約 91 ms 花在哪裡（等鏡頭 vs SPI 傳輸），再加入辨識演算法

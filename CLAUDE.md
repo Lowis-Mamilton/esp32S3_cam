@@ -15,7 +15,9 @@ MXCam：ESP32-S3 視覺感測器，搭配 MATRIX Mini R4 使用，設定由電�
 - C（正本，韌體和 Arduino 函式庫共用，ADR-0006）：`arduino-lib/src/protocol/`；韌體元件 `firmware/components/mxcam_protocol/` 直接引用
 - TypeScript：`pc-app/src/protocol/`
 
-韌體裡純 C、可在電腦上測的元件：`mxcam_overlay`（畫框寫字）、`mxcam_service`（指令處理）；碰硬體的：`mxcam_camera`、`mxcam_display`、`mxcam_link`（USB-Serial-JTAG），流程在 `firmware/main/pipeline.c`、`encoder.c`。
+韌體裡純 C、可在電腦上測的元件（各有 `host-test/`，CI 的 host-tests job 全部跑）：`mxcam_overlay`（畫框寫字，含鏡像文字）、`mxcam_service`（指令處理、延後回應佇列）、`mxcam_color`（顏色辨識）、`mxcam_tag`（包裝 vendored `apriltag`，單精度、PSRAM）、`mxcam_store`（NVS 存檔格式）、`mxcam_link/pushq`（推送佇列策略）。碰硬體的：`mxcam_camera`、`mxcam_display`、`mxcam_link`（USB-Serial-JTAG RX/TX task）。流程在 `firmware/main/pipeline.c`（core 1 辨識＋TFT）、`encoder.c`（core 0 esp_new_jpeg）。
+
+**鏡像規則（ADR-0010）**：鏡頭輸出真實影像，所有辨識與協定座標都是真實影像座標；只有 TFT（面板翻轉＋鏡像文字）和 Studio（「鏡像顯示」開關）顯示鏡像。不要在辨識路徑上做任何翻轉。
 
 pc-app（MXCam Studio）程式依用途分：
 - `src/i18n`：多語系（繁中 / English）
@@ -67,6 +69,7 @@ CI（`.github/workflows/ci.yml`）：firmware、pc-app、arduino-lib、host-test
 ## 注意事項
 
 - 開發路徑是 `C:\dev\esp32S3_cam`。ESP-IDF 不支援路徑有空白，不要在舊的 `...\K230 Smart Cam\esp32S3_cam` 副本建置。
+- 實機除錯：每秒一行的統計 log 在 TTL 埠（fps、proc_ms、enc_ms、heap、stack_hw…）。要從電腦送協定指令前，先關掉所有連著板子的 Studio 分頁（自動重連會佔住 OTG 埠）。驗證 AprilTag／影像方向可以把 FRAME 存成 JPEG 用 OpenCV（`cv2.aruco.DICT_APRILTAG_36h11`）離線比對。
 - 除錯訊息走 TTL 孔（UART0），協定走 OTG 孔（原生 USB），不要混用。
 - 硬體腳位以 `docs/SPEC.md` 第 4 節為準；鏡頭（實際是 OV3660）和螢幕腳位已在實板驗證，I2C／UART 腳位到 M4 才驗證。
 - 實機量測紀錄在 `docs/measurements/`。
