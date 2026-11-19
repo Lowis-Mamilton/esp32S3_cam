@@ -6,9 +6,11 @@ import {
   parseError,
   parseFramePush,
   parseInfo,
+  parseResults,
   responseOf,
   type DeviceInfo,
   type FramePush,
+  type ResultsPush,
 } from '../protocol/messages'
 
 export type ConnectionStatus = 'unsupported' | 'disconnected' | 'connecting' | 'connected'
@@ -19,6 +21,15 @@ export interface ConnectionEvents {
   stats(s: { fps: number; kbps: number }): void
   /** Optional: called with the GET_INFO result after each successful connect. */
   info?(i: DeviceInfo): void
+  /** Optional: runs after GET_INFO and before STREAM_START (status is still 'connecting'); a rejection fails the connect. */
+  setup?(i: DeviceInfo): Promise<void>
+  /** Optional: RESULTS pushes (0x61); only sent by the device when streamResults is on. */
+  results?(r: ResultsPush): void
+}
+
+export interface ConnectionOptions {
+  /** Subscribe to RESULTS pushes (STREAM_START flags bit1). Default false. */
+  streamResults?: boolean
 }
 
 /** Device answered a request with an ERROR frame (protocol.md §3). */
@@ -66,6 +77,7 @@ const STOP_ON_DISCONNECT_TIMEOUT_MS = 300
 export class MxcamConnection {
   private readonly serial: Serial | undefined
   private readonly events: ConnectionEvents
+  private readonly streamResults: boolean
   private status: ConnectionStatus
   private session: Session | null = null
   private cleanup: Promise<void> = Promise.resolve()
@@ -97,9 +109,10 @@ export class MxcamConnection {
     }
   }
 
-  constructor(serial: Serial | undefined, events: ConnectionEvents) {
+  constructor(serial: Serial | undefined, events: ConnectionEvents, options: ConnectionOptions = {}) {
     this.serial = serial
     this.events = events
+    this.streamResults = options.streamResults ?? false
     if (!serial) {
       this.status = 'unsupported'
       events.status('unsupported')
@@ -216,6 +229,10 @@ export class MxcamConnection {
       }
       const info = parseInfo(infoFrame.payload)
       this.events.info?.(info)
+      if (this.events.setup) {
+        await this.events.setup(info)
+        if (this.session !== created) throw new Error('disconnected during setup')
+      }
       await this.startStream()
       if (this.session !== created) throw new Error('disconnected during setup')
       this.setStatus('connected')
@@ -263,6 +280,10 @@ export class MxcamConnection {
       this.frameCount++
       this.byteCount += fp.jpeg.length
       this.events.frame(fp)
+      return
+    }
+    if (f.cmd === Cmd.PushResults) {
+      this.events.results?.(parseResults(f.payload))
       return
     }
     const p = this.pending.get(f.seq)
@@ -322,7 +343,7 @@ export class MxcamConnection {
   }
 
   async startStream(maxFps = 10): Promise<void> {
-    const payload = encodeStreamStart({ frames: true, results: false, maxFps, jpegQuality: 0 })
+    const payload = encodeStreamStart({ frames: true, results: this.streamResults, maxFps, jpegQuality: 0 })
     await this.request(Cmd.StreamStart, payload)
     this.stopTimers()
     this.streaming = true

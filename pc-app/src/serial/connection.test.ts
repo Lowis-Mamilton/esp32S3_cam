@@ -469,3 +469,88 @@ describe('MxcamConnection', () => {
     await conn.disconnect()
   })
 })
+
+// ---- M2: results pushes, stream flags and the setup hook ----
+describe('MxcamConnection M2 additions', () => {
+  function resultsPayload(frameId: number, fn: number): Uint8Array {
+    const p = new Uint8Array(6 + 12)
+    const v = new DataView(p.buffer)
+    v.setUint32(0, frameId, true)
+    p[4] = fn
+    p[5] = 1
+    v.setUint16(6, 2, true)
+    v.setInt16(8, 160, true)
+    v.setInt16(10, 120, true)
+    v.setUint16(12, 30, true)
+    v.setUint16(14, 20, true)
+    p[16] = 255
+    return p
+  }
+
+  test('streamResults sets STREAM_START flags bit1; RESULTS pushes reach the results event', async () => {
+    const port = new FakePort()
+    const serial = new FakeSerial(port)
+    const got: { frameId: number; functionId: number; n: number }[] = []
+    const conn = new MxcamConnection(
+      serial as unknown as Serial,
+      {
+        status: () => {},
+        frame: () => {},
+        stats: () => {},
+        results: (r) => got.push({ frameId: r.frameId, functionId: r.functionId, n: r.results.length }),
+      },
+      { streamResults: true },
+    )
+    await conn.connect()
+    expect([...port.requests.find((r) => r.cmd === Cmd.StreamStart)!.payload]).toEqual([3, 10, 0])
+    port.push(encodeFrame(Cmd.PushResults, 0, resultsPayload(42, 1)))
+    await vi.waitFor(() => expect(got).toEqual([{ frameId: 42, functionId: 1, n: 1 }]))
+    await conn.disconnect()
+  })
+
+  test('a RESULTS push without a results handler is ignored; default flags stay frames-only', async () => {
+    const { conn, port, frames } = setup()
+    await conn.connect()
+    port.push(encodeFrame(Cmd.PushResults, 0, resultsPayload(1, 1)))
+    port.push(encodeFrame(Cmd.PushFrame, 1, framePushPayload(2, new Uint8Array([1]))))
+    await vi.waitFor(() => expect(frames).toEqual([2]))
+    expect([...port.requests.find((r) => r.cmd === Cmd.StreamStart)!.payload]).toEqual([1, 10, 0])
+    await conn.disconnect()
+  })
+
+  test('setup hook runs after GET_INFO and before STREAM_START; status stays connecting meanwhile', async () => {
+    const port = new FakePort()
+    const serial = new FakeSerial(port)
+    const statuses: ConnectionStatus[] = []
+    const conn: MxcamConnection = new MxcamConnection(serial as unknown as Serial, {
+      status: (s) => statuses.push(s),
+      frame: () => {},
+      stats: () => {},
+      setup: async (info) => {
+        expect(info.functionIds).toEqual([1])
+        expect(statuses.at(-1)).toBe('connecting')
+        await conn.request(Cmd.GetConfig)
+      },
+    })
+    await conn.connect()
+    expect(port.requests.map((r) => r.cmd)).toEqual([Cmd.GetInfo, Cmd.GetConfig, Cmd.StreamStart])
+    expect(statuses).toEqual(['connecting', 'connected'])
+    await conn.disconnect()
+  })
+
+  test('a failing setup hook fails the connect and closes the port', async () => {
+    const port = new FakePort()
+    const serial = new FakeSerial(port)
+    const conn = new MxcamConnection(serial as unknown as Serial, {
+      status: () => {},
+      frame: () => {},
+      stats: () => {},
+      setup: async () => {
+        throw new Error('boom')
+      },
+    })
+    await expect(conn.connect()).rejects.toThrow('boom')
+    expect(port.closed).toBe(true)
+    expect(port.requests.some((r) => r.cmd === Cmd.StreamStart)).toBe(false)
+  })
+})
