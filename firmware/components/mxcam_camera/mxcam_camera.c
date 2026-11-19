@@ -48,7 +48,12 @@ esp_err_t mxcam_camera_init(void)
     sensor_t *s = esp_camera_sensor_get();
     if (s && s->set_hmirror) {
         int before = s->status.hmirror, vflip = s->status.vflip;
-        s->set_hmirror(s, 1);
+        if (s->set_hmirror(s, 1) != 0) {
+            /* Recognition would run on a mirrored image: report it as an init error. */
+            ESP_LOGE(TAG, "sensor set_hmirror failed: recognition would run mirrored");
+            esp_camera_deinit();
+            return ESP_ERR_INVALID_STATE;
+        }
         ESP_LOGI(TAG, "sensor hmirror %d -> 1 (vflip %d)", before, vflip);
     }
     return ESP_OK;

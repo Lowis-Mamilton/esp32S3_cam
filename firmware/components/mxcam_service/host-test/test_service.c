@@ -299,6 +299,16 @@ static void test_learn(void)
   CHECK(!mxs_complete_learn(&s, 21, 1)); /* nothing pending */
 }
 
+/* Pop the front deferred packet and decode it. */
+static void pop_decoded(mxs_state_t *s, mxp_frame_t *r, uint8_t *rb, size_t cap)
+{
+  uint8_t out[MXS_DEFERRED_PKT], seq = 0;
+  size_t n = mxs_peek_deferred(s, &seq, out, sizeof(out));
+  CHECK(n > 0);
+  decode(out, n, r, rb, cap);
+  mxs_ack_deferred(s);
+}
+
 static void test_learn_cancel(void)
 {
   mxp_info_t info = make_info();
@@ -328,6 +338,8 @@ static void test_learn_cancel(void)
   /* stream/host timeout cancels it too */
   s.function_id = 1;
   CHECK(learn(&s, 1, 32, 1000, &r, rb, sizeof(rb)) == MXS_DEFERRED);
+  mxp_learn_req_t req;
+  CHECK(mxs_take_pending_learn(&s, &seq, &req)); /* claimed: only the host timeout applies */
   mxs_tick(&s, 3999);
   CHECK(s.pending_learn.active);
   CHECK(mxs_peek_deferred(&s, &seq, out, sizeof(out)) == 0);
@@ -343,7 +355,6 @@ static void test_learn_cancel(void)
    * LEARN as BUSY; a new LEARN is accepted afterwards. */
   s.function_id = 1;
   CHECK(learn(&s, 1, 33, 5000, &r, rb, sizeof(rb)) == MXS_DEFERRED);
-  mxp_learn_req_t req;
   CHECK(mxs_take_pending_learn(&s, &seq, &req));
   call(&s, MXP_CMD_SET_FUNCTION, 7, &zero, 1, 5001, &r, rb, sizeof(rb));
   CHECK(!s.pending_learn.active);
@@ -354,6 +365,23 @@ static void test_learn_cancel(void)
   s.function_id = 1;
   CHECK(learn(&s, 1, 34, 5002, &r, rb, sizeof(rb)) == MXS_DEFERRED);
   CHECK(!mxs_complete_learn(&s, 34, 2)); /* not claimed yet */
+  CHECK(s.pending_learn.active);
+
+  /* an unclaimed LEARN is cancelled after 1000 ms (BAD_PARAM), a claimed one is not */
+  mxst_defaults(&g_data);
+  mxs_init(&s, &info, &g_data);
+  s.function_id = 1;
+  CHECK(learn(&s, 1, 50, 10000, &r, rb, sizeof(rb)) == MXS_DEFERRED);
+  mxs_tick(&s, 11000); /* exactly 1000 ms: still waiting */
+  CHECK(s.pending_learn.active);
+  CHECK(mxs_peek_deferred(&s, &seq, out, sizeof(out)) == 0);
+  mxs_tick(&s, 11001);
+  CHECK(!s.pending_learn.active);
+  pop_decoded(&s, &r, rb, sizeof(rb));
+  CHECK(r.cmd == 0xFF && r.seq == 50 && r.payload[0] == MXP_CMD_LEARN && r.payload[1] == MXP_ERR_BAD_PARAM);
+  CHECK(learn(&s, 1, 51, 11002, &r, rb, sizeof(rb)) == MXS_DEFERRED); /* not BUSY any more */
+  CHECK(mxs_take_pending_learn(&s, &seq, &req));
+  mxs_tick(&s, 12500); /* claimed: the pipeline completes it */
   CHECK(s.pending_learn.active);
 
   /* two cancels before a flush are both delivered, in order */
@@ -665,29 +693,31 @@ static void test_save_reset(void)
   CHECK(mxs_take_pending_store(&s, &cmd, &seq, &snap));
   CHECK(cmd == MXP_CMD_SAVE && seq == 40 && snap.n_colors == 1 && snap.colors[0].id == 1);
   CHECK(!mxs_take_pending_store(&s, &cmd, &seq, &snap)); /* claimed once */
-  CHECK(mxs_complete_store(&s, 39, true, out, sizeof(out)) == 0); /* wrong seq */
-  size_t n = mxs_complete_store(&s, 40, true, out, sizeof(out));
+  CHECK(!mxs_complete_store(&s, 39, true)); /* wrong seq */
+  CHECK(mxs_peek_deferred(&s, &seq, out, sizeof(out)) == 0);
+  CHECK(mxs_complete_store(&s, 40, true));
   mxp_frame_t r;
   uint8_t rb[64];
-  decode(out, n, &r, rb, sizeof(rb));
+  pop_decoded(&s, &r, rb, sizeof(rb));
   CHECK(r.cmd == 0xC2 && r.seq == 40 && r.len == 0);
   CHECK(g_data.cfg.dirty == 0);
-  CHECK(mxs_complete_store(&s, 40, true, out, sizeof(out)) == 0); /* only once */
+  CHECK(!mxs_complete_store(&s, 40, true)); /* only once */
+  CHECK(mxs_peek_deferred(&s, &seq, out, sizeof(out)) == 0);
 
   /* a change made while the save was running keeps dirty set */
   CHECK(deferred(&s, MXP_CMD_SAVE, 50) == MXS_DEFERRED);
   CHECK(mxs_take_pending_store(&s, &cmd, &seq, &snap));
   forget(&s, 1, 1, 51);
   CHECK(g_data.cfg.dirty == 1);
-  n = mxs_complete_store(&s, 50, true, out, sizeof(out));
-  decode(out, n, &r, rb, sizeof(rb));
+  CHECK(mxs_complete_store(&s, 50, true));
+  pop_decoded(&s, &r, rb, sizeof(rb));
   CHECK(r.cmd == 0xC2 && g_data.cfg.dirty == 1);
 
   /* a failed save answers INTERNAL and keeps dirty */
   CHECK(deferred(&s, MXP_CMD_SAVE, 52) == MXS_DEFERRED);
   CHECK(mxs_take_pending_store(&s, &cmd, &seq, &snap));
-  n = mxs_complete_store(&s, 52, false, out, sizeof(out));
-  decode(out, n, &r, rb, sizeof(rb));
+  CHECK(mxs_complete_store(&s, 52, false));
+  pop_decoded(&s, &r, rb, sizeof(rb));
   CHECK(r.cmd == 0xFF && r.seq == 52 && r.payload[0] == MXP_CMD_SAVE && r.payload[1] == MXP_ERR_INTERNAL);
   CHECK(g_data.cfg.dirty == 1);
 
@@ -697,14 +727,14 @@ static void test_save_reset(void)
   g_data.cfg.tolerance = 90;
   CHECK(deferred(&s, MXP_CMD_FACTORY_RESET, 60) == MXS_DEFERRED);
   CHECK(mxs_take_pending_store(&s, &cmd, &seq, &snap) && cmd == MXP_CMD_FACTORY_RESET && seq == 60);
-  n = mxs_complete_store(&s, 60, false, out, sizeof(out));
-  decode(out, n, &r, rb, sizeof(rb));
+  CHECK(mxs_complete_store(&s, 60, false));
+  pop_decoded(&s, &r, rb, sizeof(rb));
   CHECK(r.cmd == 0xFF && r.payload[0] == MXP_CMD_FACTORY_RESET && r.payload[1] == MXP_ERR_INTERNAL);
   CHECK(g_data.n_colors == 1 && g_data.cfg.tolerance == 90);
   CHECK(deferred(&s, MXP_CMD_FACTORY_RESET, 61) == MXS_DEFERRED);
   CHECK(mxs_take_pending_store(&s, &cmd, &seq, &snap));
-  n = mxs_complete_store(&s, 61, true, out, sizeof(out));
-  decode(out, n, &r, rb, sizeof(rb));
+  CHECK(mxs_complete_store(&s, 61, true));
+  pop_decoded(&s, &r, rb, sizeof(rb));
   CHECK(r.cmd == 0xC3 && r.seq == 61 && r.len == 0);
   mxs_data_t def;
   mxst_defaults(&def);

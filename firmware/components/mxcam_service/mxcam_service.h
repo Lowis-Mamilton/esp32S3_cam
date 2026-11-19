@@ -25,15 +25,17 @@ extern "C" {
 /* mxs_handle returns this instead of a size when the response is deferred:
  * nothing is sent now.
  * - LEARN (function 1): the pipeline claims it (mxs_take_pending_learn) and
- *   completes it on the next frame (mxs_finish_learn / mxs_complete_learn);
+ *   completes it on the next frame (mxs_finish_learn, which calls mxs_complete_learn);
  *   a SET_FUNCTION change or host timeout cancels it (BAD_PARAM). Either way
  *   the response packet is queued in the state's deferred outbox and the link
  *   sends it (mxs_peek_deferred / mxs_ack_deferred) — never the pipeline.
  * - SAVE / FACTORY_RESET: the save worker claims them with
  *   mxs_take_pending_store(), does the NVS work outside the state lock and
- *   answers with mxs_complete_store(). They are never cancelled. */
+ *   answers with mxs_complete_store(), which queues the reply in the outbox
+ *   like LEARN. They are never cancelled. */
 #define MXS_DEFERRED ((size_t)-1)
 #define MXS_DEFERRED_QUEUE 4
+#define MXS_LEARN_CLAIM_TIMEOUT_MS 1000 /* an unclaimed LEARN is cancelled (BAD_PARAM) after this */
 #define MXS_DEFERRED_PKT 12 /* LEARN 0xB0 (10 B) or ERROR (11 B) */
 
 /* Largest packed results payload: 6 + 8 x (12 + 18). */
@@ -50,6 +52,7 @@ typedef struct {
   bool active;  /* a LEARN is outstanding (queued or claimed): further LEARNs get BUSY */
   bool claimed; /* the pipeline took it; it will complete it itself */
   uint8_t seq;
+  uint32_t queued_ms; /* when the LEARN request arrived */
   mxp_learn_req_t req;
 } mxs_pending_learn_t;
 
@@ -137,11 +140,12 @@ bool mxs_finish_learn(mxs_state_t *s, uint8_t seq, const uint8_t *rgb);
 /* Save worker: claims the pending SAVE / FACTORY_RESET (once). For SAVE,
  * *snapshot receives a copy of the data to write (may be NULL for a reset). */
 bool mxs_take_pending_store(mxs_state_t *s, uint8_t *cmd, uint8_t *seq, mxs_data_t *snapshot);
-/* Completes the claimed store op `seq`: ok -> empty 0xC2 / 0xC3 (SAVE clears
- * dirty unless data changed after the snapshot; FACTORY_RESET loads the
- * defaults into data), !ok -> ERROR INTERNAL with data unchanged. Returns the
- * packet size, or 0 when nothing with that seq is claimed. */
-size_t mxs_complete_store(mxs_state_t *s, uint8_t seq, bool ok, uint8_t *out, size_t out_cap);
+/* Completes the claimed store op `seq` and queues its reply in the deferred
+ * outbox: ok -> empty 0xC2 / 0xC3 (SAVE clears dirty unless data changed
+ * after the snapshot; FACTORY_RESET loads the defaults into data), !ok ->
+ * ERROR INTERNAL with data unchanged. false (nothing queued) when nothing
+ * with that seq is claimed. */
+bool mxs_complete_store(mxs_state_t *s, uint8_t seq, bool ok);
 
 /* Pipeline: stores the packed results of the latest processed frame for
  * GET_RESULTS (ignored when len > MXS_RESULTS_MAX). The caller must drop a
@@ -151,7 +155,8 @@ size_t mxs_complete_store(mxs_state_t *s, uint8_t seq, bool ok, uint8_t *out, si
 void mxs_set_results(mxs_state_t *s, const uint8_t *packed, uint16_t len);
 
 /* Stops streaming when no request arrived for more than 3000 ms (and cancels a
- * pending LEARN). */
+ * pending LEARN). Also cancels a LEARN nobody claimed within
+ * MXS_LEARN_CLAIM_TIMEOUT_MS (BAD_PARAM). */
 void mxs_tick(mxs_state_t *s, uint32_t now_ms);
 /* A request arrived within the last 3000 ms. */
 bool mxs_host_connected(const mxs_state_t *s, uint32_t now_ms);

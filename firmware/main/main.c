@@ -81,10 +81,11 @@ void app_main(void)
         ESP_LOGE(TAG, "display init failed");
         boot_error = "DISPLAY INIT FAILED";
     }
-    bool camera_ok = mxcam_camera_init() == ESP_OK;
+    esp_err_t cam_err = mxcam_camera_init();
+    bool camera_ok = cam_err == ESP_OK;
     if (!camera_ok) {
-        ESP_LOGE(TAG, "camera init failed");
-        boot_error = "CAMERA INIT FAILED";
+        ESP_LOGE(TAG, "camera init failed: %s", esp_err_to_name(cam_err));
+        boot_error = cam_err == ESP_ERR_INVALID_STATE ? "CAMERA MIRROR FAILED" : "CAMERA INIT FAILED";
     }
     /* Not a boot error: colour still works; AprilTag is just left out of
      * GET_INFO (SET_FUNCTION 2 -> BAD_PARAM). LED stays blue, log only. */

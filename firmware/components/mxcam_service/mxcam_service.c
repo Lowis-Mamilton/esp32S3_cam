@@ -298,6 +298,7 @@ size_t mxs_handle(mxs_state_t *s, const mxp_frame_t *req, uint32_t now_ms, uint8
     s->pending_learn.claimed = false;
     s->pending_learn.seq = req->seq;
     s->pending_learn.req = lr;
+    s->pending_learn.queued_ms = now_ms;
     return MXS_DEFERRED;
   }
   case MXP_CMD_GET_RESULTS:
@@ -382,13 +383,11 @@ bool mxs_take_pending_store(mxs_state_t *s, uint8_t *cmd, uint8_t *seq, mxs_data
   return true;
 }
 
-size_t mxs_complete_store(mxs_state_t *s, uint8_t seq, bool ok, uint8_t *out, size_t out_cap)
+bool mxs_complete_store(mxs_state_t *s, uint8_t seq, bool ok)
 {
   mxs_pending_store_t *p = &s->pending_store;
-  if (!p->active || !p->claimed || p->seq != seq) return 0;
-  size_t n = ok ? mxp_encode(MXP_RESPONSE(p->cmd), seq, NULL, 0, out, out_cap)
-                : mxp_encode_error(seq, p->cmd, MXP_ERR_INTERNAL, out, out_cap);
-  if (n == 0) return 0;
+  if (!p->active || !p->claimed || p->seq != seq) return false;
+  outbox_push_packet(s, seq, p->cmd, NULL, 0, !ok, MXP_ERR_INTERNAL);
   if (ok && p->cmd == MXP_CMD_SAVE) {
     if (s->data_gen == p->gen) s->data->cfg.dirty = 0; /* nothing changed since the snapshot */
   } else if (ok && p->cmd == MXP_CMD_FACTORY_RESET) {
@@ -396,7 +395,7 @@ size_t mxs_complete_store(mxs_state_t *s, uint8_t seq, bool ok, uint8_t *out, si
     s->data_gen++;
   }
   p->active = false;
-  return n;
+  return true;
 }
 
 void mxs_set_results(mxs_state_t *s, const uint8_t *packed, uint16_t len)
@@ -423,6 +422,11 @@ void mxs_ack_deferred(mxs_state_t *s)
 
 void mxs_tick(mxs_state_t *s, uint32_t now_ms)
 {
+  /* Nobody claimed the LEARN (e.g. camera grabs keep failing): do not wedge
+   * LEARN as BUSY until the host times out. */
+  if (s->pending_learn.active && !s->pending_learn.claimed &&
+      (uint32_t)(now_ms - s->pending_learn.queued_ms) > MXS_LEARN_CLAIM_TIMEOUT_MS)
+    cancel_learn(s);
   if (elapsed_ms(s, now_ms) > MXS_STREAM_TIMEOUT_MS) {
     s->streaming = false;
     cancel_learn(s);

@@ -12,7 +12,6 @@
 #include "mxcam_proto.h"
 #include "pushq.h"
 
-static const char *TAG = "link";
 
 #define TX_RING_SIZE 8192
 #define RX_RING_SIZE 2048
@@ -98,17 +97,6 @@ static bool send_packet(const uint8_t *data, size_t len, uint32_t budget_us)
 bool mxcam_link_send(const uint8_t *data, size_t len)
 {
     return send_packet(data, len, SEND_BUDGET_US);
-}
-
-bool mxcam_link_respond(uint8_t cmd, uint8_t seq, const uint8_t *payload, uint16_t len)
-{
-    uint8_t buf[128];
-    if (len > MXCAM_LINK_RESPOND_MAX_PAYLOAD) {
-        ESP_LOGW(TAG, "respond: payload %u > %u, not sent", (unsigned)len, MXCAM_LINK_RESPOND_MAX_PAYLOAD);
-        return false;
-    }
-    size_t n = mxp_encode(cmd, seq, payload, len, buf, sizeof(buf));
-    return n > 0 && mxcam_link_send(buf, n);
 }
 
 void mxcam_link_flush_deferred(void)
@@ -245,8 +233,9 @@ static void rx_task(void *arg)
             /* Function changed: queued RESULTS were computed for the old one. */
             if (mxs_take_results_invalidated(s_state)) mxcam_link_drop_results_locked();
             mxcam_link_state_unlock();
-            /* MXS_DEFERRED: the pipeline answers later (mxcam_link_send/respond).
-             * A send failure: host will time out and retry. */
+            /* MXS_DEFERRED: the answer is queued in the outbox later (pipeline /
+             * store worker) and sent by mxcam_link_flush_deferred. A send
+             * failure here: host will time out and retry. */
             if (m > 0 && m != MXS_DEFERRED) mxcam_link_send(out, m);
             mxcam_link_flush_deferred();
         }

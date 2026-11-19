@@ -20,7 +20,7 @@ static void worker_task(void *arg)
 {
     (void)arg;
     static mxs_data_t snap; /* ~1.9 KB: keep it off the stack */
-    uint8_t out[16], cmd = 0, seq = 0;
+    uint8_t cmd = 0, seq = 0;
     for (;;) {
         vTaskDelay(pdMS_TO_TICKS(POLL_MS));
         mxcam_link_state_lock();
@@ -39,10 +39,11 @@ static void worker_task(void *arg)
             ESP_LOGE(TAG, "%s failed: %s", cmd == MXP_CMD_SAVE ? "save" : "factory reset", esp_err_to_name(e));
 
         mxcam_link_state_lock();
-        size_t n = mxs_complete_store(s_state, seq, e == ESP_OK, out, sizeof(out));
+        mxs_complete_store(s_state, seq, e == ESP_OK); /* queues the reply in the outbox */
         mxcam_link_state_unlock();
-        /* Every claimed store op completes; a send failure means the host times out. */
-        if (n > 0) mxcam_link_send(out, n);
+        /* Every claimed store op completes; the link sends the reply (acked after
+         * a successful send, retried at the next flush). */
+        mxcam_link_kick_deferred();
     }
 }
 
