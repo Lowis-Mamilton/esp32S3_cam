@@ -29,7 +29,9 @@ interface Props {
 }
 
 const MIN_DRAG = 4 // frame px
-const LABEL_H = 20
+const TAB_H = 18
+/** Rough tab width: CJK glyphs are about twice as wide as Latin ones at 12px. */
+const tabWidth = (text: string) => Math.ceil([...text].reduce((w, c) => w + (c.charCodeAt(0) > 255 ? 13 : 7), 14))
 const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v))
 
 export default function LiveStage({ ref, connected, fps, kbps, fn, canLearn, onLearn, results, learned, showNames }: Props) {
@@ -40,6 +42,7 @@ export default function LiveStage({ ref, connected, fps, kbps, fn, canLearn, onL
   const [vp, setVp] = useState<Viewport>({ width: 0, height: 0 })
   const [drag, setDrag] = useState<{ x0: number; y0: number; x1: number; y1: number } | null>(null)
   const [toast, setToast] = useState<{ text: string; error: boolean } | null>(null)
+  const dragCleanup = useRef<(() => void) | null>(null)
   const toastTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
 
   useImperativeHandle(ref, () => ({
@@ -93,9 +96,11 @@ export default function LiveStage({ ref, connected, fps, kbps, fn, canLearn, onL
   // Track the displayed size; the overlay is laid out in CSS pixels so text and lines stay crisp.
   useLayoutEffect(() => {
     const el = stageRef.current
-    if (!el) return
+    const canvas = canvasRef.current
+    if (!el || !canvas) return
     const measure = () => {
-      const r = el.getBoundingClientRect()
+      // The canvas fills the stage's content box, so its rect has no border skew.
+      const r = canvas.getBoundingClientRect()
       setVp((p) => (p.width === r.width && p.height === r.height ? p : { width: r.width, height: r.height }))
     }
     measure()
@@ -106,6 +111,11 @@ export default function LiveStage({ ref, connected, fps, kbps, fn, canLearn, onL
   }, [])
 
   useEffect(() => () => clearTimeout(toastTimer.current), [])
+  // Abort any drag in flight on unmount or when learning becomes unavailable.
+  useEffect(() => {
+    if (!canLearn) dragCleanup.current?.()
+    return () => dragCleanup.current?.()
+  }, [canLearn])
 
   const say = useCallback((text: string, error: boolean) => {
     setToast({ text, error })
@@ -128,7 +138,7 @@ export default function LiveStage({ ref, connected, fps, kbps, fn, canLearn, onL
   )
 
   const frameAt = (clientX: number, clientY: number) => {
-    const r = stageRef.current!.getBoundingClientRect()
+    const r = canvasRef.current!.getBoundingClientRect()
     const f = toFrame({ width: r.width, height: r.height }, clientX - r.left, clientY - r.top)
     return { x: clamp(f.x, 0, FRAME_W), y: clamp(f.y, 0, FRAME_H) }
   }
@@ -144,11 +154,19 @@ export default function LiveStage({ ref, connected, fps, kbps, fn, canLearn, onL
       cur = { ...cur, x1: b.x, y1: b.y }
       setDrag(cur)
     }
-    const up = (ev: MouseEvent) => {
+    const cleanup = () => {
       window.removeEventListener('mousemove', move)
       window.removeEventListener('mouseup', up)
-      const b = frameAt(ev.clientX, ev.clientY)
+      window.removeEventListener('keydown', key)
+      dragCleanup.current = null
       setDrag(null)
+    }
+    const key = (ev: KeyboardEvent) => {
+      if (ev.key === 'Escape') cleanup()
+    }
+    const up = (ev: MouseEvent) => {
+      cleanup()
+      const b = frameAt(ev.clientX, ev.clientY)
       const x = Math.round(Math.min(a.x, b.x))
       const y = Math.round(Math.min(a.y, b.y))
       const width = Math.round(Math.max(a.x, b.x)) - x
@@ -158,6 +176,8 @@ export default function LiveStage({ ref, connected, fps, kbps, fn, canLearn, onL
     }
     window.addEventListener('mousemove', move)
     window.addEventListener('mouseup', up)
+    window.addEventListener('keydown', key)
+    dragCleanup.current = cleanup
   }
 
   const kind = fn === 1 ? 'color' : fn === 2 ? 'tag' : 'face'
@@ -175,24 +195,40 @@ export default function LiveStage({ ref, connected, fps, kbps, fn, canLearn, onL
       <div ref={stageRef} className={`stage${canLearn ? ' learnable' : ''}`} onMouseDown={onMouseDown}>
         <canvas ref={canvasRef} width={FRAME_W} height={FRAME_H} />
         <div className="overlay" aria-hidden="true">
-          {shown.map((r, i) => {
-            // Result x/y are the box centre.
-            const a = toScreen(vp, r.x - r.width / 2, r.y - r.height / 2)
-            const b = toScreen(vp, r.x + r.width / 2, r.y + r.height / 2)
-            const flip = a.py < LABEL_H
-            const style = {
-              '--c': idColorVar(r),
-              left: a.px,
-              top: a.py,
-              width: b.px - a.px,
-              height: b.py - a.py,
-            } as CSSProperties
-            return (
-              <div key={i} className={`box${r.kind === 'color' && r.id === 0 ? ' unlearned' : ''}`} style={style}>
-                <span className={`tab${flip ? ' below' : ''}`}>{labelFor(r, learned, showNames, t)}</span>
-              </div>
-            )
-          })}
+          <div className="boxes">
+            {shown.map((r, i) => {
+              // Result x/y are the box centre.
+              const a = toScreen(vp, r.x - r.width / 2, r.y - r.height / 2)
+              const b = toScreen(vp, r.x + r.width / 2, r.y + r.height / 2)
+              const style = {
+                '--c': idColorVar(r),
+                left: a.px,
+                top: a.py,
+                width: b.px - a.px,
+                height: b.py - a.py,
+              } as CSSProperties
+              return <div key={i} className={`box${r.kind === 'color' && r.id === 0 ? ' unlearned' : ''}`} style={style} />
+            })}
+          </div>
+          <div className="tabs">
+            {shown.map((r, i) => {
+              const a = toScreen(vp, r.x - r.width / 2, r.y - r.height / 2)
+              const bottom = toScreen(vp, r.x, r.y + r.height / 2).py
+              const text = labelFor(r, learned, showNames, t)
+              const w = tabWidth(text)
+              const left = clamp(a.px - 2, 0, Math.max(0, vp.width - w))
+              let top = a.py - TAB_H - 1 // above the box
+              if (top < 0) top = bottom + 1 // below, if there is room
+              if (top + TAB_H > vp.height) top = a.py + 1 // otherwise inside the box top
+              top = clamp(top, 0, Math.max(0, vp.height - TAB_H))
+              const style = { '--c': idColorVar(r), left, top, width: w } as CSSProperties
+              return (
+                <span key={i} className="tab" style={style}>
+                  {text}
+                </span>
+              )
+            })}
+          </div>
           <div className="crosshair" style={{ left: centre.px, top: centre.py }} />
           {dragBox && <div className="drag-rect" style={dragBox} />}
         </div>
@@ -206,18 +242,19 @@ export default function LiveStage({ ref, connected, fps, kbps, fn, canLearn, onL
           )}
         </div>
         {!connected && <div className="stage-idle">{t('liveIdle')}</div>}
-        {toast && (
-          <div role="status" className={`toast${toast.error ? ' error' : ''}`}>
-            {toast.text}
-          </div>
-        )}
       </div>
       {canLearn && (
         <div className="stage-actions">
           <button type="button" className="btn" onClick={() => void learn({ x: 152, y: 112, width: 16, height: 16 })}>
             {t('learnCenter')}
           </button>
-          <span className="muted">{t('dragHint')}</span>
+          {toast ? (
+            <span role="status" className={`toast${toast.error ? ' error' : ''}`}>
+              {toast.text}
+            </span>
+          ) : (
+            <span className="muted">{t('dragHint')}</span>
+          )}
         </div>
       )}
     </div>

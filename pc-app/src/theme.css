@@ -303,32 +303,37 @@ button {
 .box.unlearned {
   border-width: 1px;
 }
-.box .tab {
+.tabs {
   position: absolute;
-  left: -2px;
-  bottom: 100%;
-  margin-bottom: 1px;
-  padding: 1px 6px;
+  inset: 0;
+  z-index: 2;
+}
+.tab {
+  position: absolute;
+  height: 18px;
+  padding: 0 6px;
   border-radius: 3px;
   background: var(--c);
   color: #0d0c0b;
   font: 600 12px/18px var(--font-ui);
   white-space: nowrap;
+  overflow: hidden;
 }
-.box .tab.below {
-  bottom: auto;
-  top: 100%;
-  margin: 1px 0 0;
+.boxes {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
 }
 .crosshair {
   position: absolute;
-  width: 20px;
-  height: 20px;
+  z-index: 3;
+  width: 36px;
+  height: 36px;
   transform: translate(-50%, -50%);
-  opacity: 0.7;
   background:
-    linear-gradient(var(--accent), var(--accent)) center / 1px 100% no-repeat,
-    linear-gradient(var(--accent), var(--accent)) center / 100% 1px no-repeat;
+    linear-gradient(var(--accent), var(--accent)) center / 2px 100% no-repeat,
+    linear-gradient(var(--accent), var(--accent)) center / 100% 2px no-repeat;
+  filter: drop-shadow(0 0 1px #000) drop-shadow(0 0 1px #000);
 }
 .drag-rect {
   position: absolute;
@@ -336,10 +341,6 @@ button {
   background: var(--accent-soft);
 }
 .toast {
-  position: absolute;
-  top: 10px;
-  left: 50%;
-  transform: translateX(-50%);
   padding: 4px 12px;
   border-radius: var(--radius);
   background: var(--surface-2);
@@ -348,7 +349,6 @@ button {
 }
 .toast.error {
   border-color: var(--danger);
-  background: var(--danger-soft);
   color: var(--danger);
 }
 

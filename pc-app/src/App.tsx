@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import type { Device, Result } from './device/types'
 import { useDevice } from './device/useDevice'
 import { describeError, type ErrorText } from './i18n/core'
@@ -48,6 +48,7 @@ export default function App({ serial }: Props) {
       if (!userClosed.current) setErrorOf({ device, error: describeError(e) })
     })
   }
+  const onLearn = useCallback((region: Parameters<Device['learnColor']>[0]) => device!.learnColor(region), [device])
   const onDisconnect = () => {
     userClosed.current = true
     void device?.disconnect()
@@ -80,7 +81,7 @@ export default function App({ serial }: Props) {
               kbps={demo ? null : stats.kbps}
               fn={view.id}
               canLearn={view.id === 1 && !!device && (demo || supported.includes(1))}
-              onLearn={(region) => device!.learnColor(region)}
+              onLearn={onLearn}
               results={results}
               learned={snapshot.learned[view.id]}
               showNames={view.id === 3 ? false : snapshot.params[view.id === 1 ? 'color' : 'tag'].showNames}

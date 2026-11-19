@@ -163,3 +163,60 @@ test('crosshair is shown even when learning is unavailable (real device)', () =>
   expect(ch.style.left).toBe('320px')
   expect(ch.style.top).toBe('240px')
 })
+
+test('tabs render in a layer after all boxes so no box covers a tab', () => {
+  stubRect(640, 480)
+  const { container } = setup({
+    results: [
+      { id: 1, kind: 'color', x: 100, y: 100, width: 80, height: 80 },
+      { id: 2, kind: 'color', x: 110, y: 110, width: 80, height: 80 },
+    ],
+  })
+  const boxes = container.querySelector('.boxes')!
+  const tabs = container.querySelector('.tabs')!
+  expect(boxes.querySelectorAll('.box').length).toBe(2)
+  expect(tabs.querySelectorAll('.tab').length).toBe(2)
+  expect(boxes.compareDocumentPosition(tabs) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  expect(boxes.querySelector('.tab')).toBeNull()
+})
+
+test('tabs stay inside the stage at the right edge and for negative box origins', () => {
+  stubRect(640, 480)
+  const { container } = setup({
+    results: [
+      { id: 1, kind: 'color', x: 310, y: 120, width: 40, height: 40 }, // right edge
+      { id: 2, kind: 'color', x: 10, y: 5, width: 60, height: 40 }, // left < 0, top < 0
+    ],
+  })
+  const tabs = [...container.querySelectorAll<HTMLElement>('.tab')]
+  for (const tab of tabs) {
+    const left = parseFloat(tab.style.left)
+    const top = parseFloat(tab.style.top)
+    const w = parseFloat(tab.style.width)
+    expect(left).toBeGreaterThanOrEqual(0)
+    expect(left + w).toBeLessThanOrEqual(640)
+    expect(top).toBeGreaterThanOrEqual(0)
+    expect(top + 18).toBeLessThanOrEqual(480)
+  }
+})
+
+test('learn message appears in the controls row next to the learn button', async () => {
+  setup({ onLearn: () => Promise.reject(new DemoLearnError('no-color')) })
+  await act(async () => {
+    fireEvent.click(screen.getByRole('button', { name: '學習中央' }))
+  })
+  const msg = await screen.findByText('框選範圍內沒有顏色')
+  expect(msg.closest('.stage-actions')).not.toBeNull()
+})
+
+test('Escape cancels a drag', async () => {
+  stubRect(640, 480)
+  const onLearn = vi.fn(async () => 1)
+  const { container } = setup({ onLearn })
+  fireEvent.mouseDown(container.querySelector('.stage')!, { clientX: 20, clientY: 20 })
+  fireEvent.keyDown(window, { key: 'Escape' })
+  await act(async () => {
+    fireEvent.mouseUp(window, { clientX: 200, clientY: 200 })
+  })
+  expect(onLearn).not.toHaveBeenCalled()
+})
