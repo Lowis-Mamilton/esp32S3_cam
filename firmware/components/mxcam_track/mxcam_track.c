@@ -1,6 +1,7 @@
 #include "mxcam_track.h"
 
 #include <math.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "mxcam_gray.h"
@@ -279,9 +280,10 @@ static bool window_geom(const mxk_model_t *m, int cx, int cy, int bw, int bh, fl
   return g->wr >= m->tw && g->hr >= m->th;
 }
 
-static uint32_t coarse_macs(const geom_t *g, const mxk_model_t *m, int step) {
+/* NCC multiply-accumulates of one scale: coarse grid + the 8 refine points. */
+static uint32_t scale_macs(const geom_t *g, const mxk_model_t *m, int step) {
   uint32_t nu = (uint32_t)((g->wr - m->tw) / step + 1), nv = (uint32_t)((g->hr - m->th) / step + 1);
-  return nu * nv * (uint32_t)m->tw * m->th;
+  return (nu * nv + 8u) * (uint32_t)m->tw * m->th;
 }
 
 typedef struct {
@@ -344,9 +346,10 @@ static void search_scale(const tmpl_t *t, const geom_t *g, float cs, int step, m
   for (int j = 0; j < t->th; j++) memcpy(s_w.patch + j * t->tw, s_w.win + (bv + j) * wr + bu, (size_t)t->tw);
 }
 
-/* Multi-scale search around (cx, cy) with the current box. */
-static match_t search(const mxk_model_t *m, const mxp_track_config_t *cfg, mxk_state_t *st, const uint8_t *tdata,
-                      int cx, int cy) {
+/* Multi-scale search around (cx, cy) with the current box. st->tick (toggled
+ * once per frame by mxk_track) picks the extra scale under fallback (1). */
+static match_t search(const mxk_model_t *m, const mxp_track_config_t *cfg, const mxk_state_t *st,
+                      const uint8_t *tdata, int cx, int cy, uint32_t budget) {
   match_t best = {-2.0f, 1.0f, cx, cy};
   tmpl_t t;
   tmpl_init(&t, tdata, m->tw, m->th);
@@ -361,20 +364,26 @@ static match_t search(const mxk_model_t *m, const mxp_track_config_t *cfg, mxk_s
     if (i > 0 && scales[i] == c) ok[i] = false; /* clamped onto the base scale */
   }
   /* Budget fallbacks, in the plan's order: (1) one extra scale per frame,
-   * alternating 0.9 / 1.1; (2) coarse step 3. */
+   * alternating 0.9 / 1.1; (2) coarse step 3; then (only reachable with the
+   * half budget of a lost + reacquire frame) the base scale alone. */
   int step = 2;
   bool use[3] = {ok[0], nsc > 1 && ok[1], nsc > 1 && ok[2]};
   uint32_t cost = 0;
   for (int i = 0; i < 3; i++)
-    if (use[i]) cost += coarse_macs(&g[i], m, step);
-  if (cost > MXK_MAC_BUDGET && nsc > 1) {
-    st->tick ^= 1;
+    if (use[i]) cost += scale_macs(&g[i], m, step);
+  if (cost > budget && nsc > 1) {
     if (st->tick) use[2] = false; else use[1] = false;
     cost = 0;
     for (int i = 0; i < 3; i++)
-      if (use[i]) cost += coarse_macs(&g[i], m, step);
+      if (use[i]) cost += scale_macs(&g[i], m, step);
   }
-  if (cost > MXK_MAC_BUDGET) step = 3;
+  if (cost > budget) {
+    step = 3;
+    cost = 0;
+    for (int i = 0; i < 3; i++)
+      if (use[i]) cost += scale_macs(&g[i], m, step);
+  }
+  if (cost > budget) use[1] = use[2] = false;
   for (int i = 0; i < 3; i++)
     if (use[i]) search_scale(&t, &g[i], scales[i], step, &best);
   return best;
@@ -425,8 +434,11 @@ bool mxk_learn(const uint16_t *frame, uint16_t x, uint16_t y, uint16_t w, uint16
   if (bw < MXK_MIN_BOX || bh < MXK_MIN_BOX) return false;
 
   build_gray(frame);
+  /* The template covers exactly the box: box_w/2 x box_h/2 half-pixels from
+   * (x0/2, y0/2), the same geometry mxk_track assumes (no bias for odd
+   * coordinates or sizes). hw/hh only size it. */
   int hx0 = x0 / 2, hy0 = y0 / 2, hx1 = (x1 + 1) / 2, hy1 = (y1 + 1) / 2;
-  int hw = hx1 - hx0, hh = hy1 - hy0, lng = hw > hh ? hw : hh;
+  int hw = (bw + 1) / 2, hh = (bh + 1) / 2, lng = hw > hh ? hw : hh;
   int tw = hw, th = hh;
   if (lng > MXK_TMPL_MAX) {
     tw = (hw * MXK_TMPL_MAX + lng / 2) / lng;
@@ -436,7 +448,8 @@ bool mxk_learn(const uint16_t *frame, uint16_t x, uint16_t y, uint16_t w, uint16
   th = clampi(th, MXK_TMPL_MIN, MXK_TMPL_MAX);
   uint8_t *tmpl = s_w.patch; /* scratch: keeps 1 KB off the caller's stack */
   memset(tmpl, 0, TN);
-  resample((float)hx0, (float)hy0, (float)hw / (float)tw, (float)hh / (float)th, tw, th, tmpl);
+  resample((float)x0 * 0.5f, (float)y0 * 0.5f, (float)bw * 0.5f / (float)tw, (float)bh * 0.5f / (float)th, tw, th,
+           tmpl);
   tmpl_t t;
   tmpl_init(&t, tmpl, tw, th);
   if (t.vt < (int64_t)t.n * t.n * (MXK_MIN_STD * MXK_MIN_STD)) return false; /* no texture */
@@ -512,14 +525,23 @@ uint8_t mxk_track(const uint16_t *frame, const mxk_model_t *m, const mxp_track_c
   int thr = clampi(cfg->threshold, 10, 95), adapt = clampi(cfg->adapt, 0, 50);
   build_gray(frame);
 
-  int cx = st->cx, cy = st->cy;
-  if (st->lost && cfg->reacquire) {
-    if (!backproject(frame, m, st->w, st->h, &cx, &cy)) {
-      go_lost(st, m);
-      return 0;
+  st->tick ^= 1;
+
+  /* Always the last position first (also while lost: a target that comes back
+   * where it was lost is found even if a bigger same-colour decoy wins the
+   * back-projection). */
+  /* a lost + reacquire frame may run two searches: each gets half the budget */
+  const bool reacq = st->lost && cfg->reacquire;
+  const uint32_t budget = reacq ? MXK_MAC_BUDGET / 2 : MXK_MAC_BUDGET;
+  match_t b = search(m, cfg, st, st->live, st->cx, st->cy, budget);
+  if (b.score * 100.0f < (float)thr && reacq) {
+    int cx, cy, lng = st->w > st->h ? st->w : st->h;
+    /* a peak within one long side was already inside the first window */
+    if (backproject(frame, m, st->w, st->h, &cx, &cy) && (abs(cx - st->cx) > lng || abs(cy - st->cy) > lng)) {
+      match_t b2 = search(m, cfg, st, st->live, cx, cy, budget);
+      if (b2.score > b.score) b = b2;
     }
   }
-  match_t b = search(m, cfg, st, st->live, cx, cy);
   int conf = b.score > 0.0f ? (int)lroundf(b.score * 100.0f) : 0;
   if (conf > 100) conf = 100;
   if (conf < thr) {

@@ -17,9 +17,9 @@ extern "C" {
  * NCC around the last position (window = box centre +- (box/2 + long side)) at
  * scales 0.9 / 1.0 / 1.1 (1.0 only when cfg->scale is 0), coarse step 2 then
  * +-1 refinement; confidence = round(max(0, NCC) * 100); below the threshold
- * the target is lost and there is no record. While lost with reacquire = 1 a
- * histogram back-projection over the whole frame proposes a position that NCC
- * must confirm. The live template adapts by adapt% when the score is >=
+ * the target is lost and there is no record. While lost the last position is
+ * searched first; if that fails and reacquire = 1, a histogram back-projection
+ * over the whole frame proposes a position that NCC must confirm. The live template adapts by adapt% when the score is >=
  * max(threshold, 70) and the patch still matches the learned template; it
  * returns to the learned template when the target is lost. All coordinates
  * are 320x240 real-image coordinates (ADR-0010). */
@@ -29,10 +29,14 @@ extern "C" {
 #define MXK_HIST_BINS 32 /* 12 hues x 2 saturations (S 0.2-0.5, >= 0.5) + 8 brightness bins (S < 0.2) */
 #define MXK_MIN_BOX 16   /* 320 px */
 #define MXK_MIN_STD 6    /* grey standard deviation lower bound */
-/* Per-frame NCC multiply-accumulate budget (~26 ms at ~5.3 cycles/MAC on
- * ESP32-S3 @ 240 MHz, estimated from the generated code). Above it the plan's
- * fallbacks apply in order: (1) only one extra scale per frame (0.9 / 1.1
- * alternating), (2) coarse step 3. */
+/* Per-frame NCC multiply-accumulate budget (coarse grid + refine; a lost +
+ * reacquire frame splits it between its two searches). ~26 ms at ~5.3
+ * cycles/MAC on ESP32-S3 @ 240 MHz from the generated inner loop, but that
+ * excludes the per-position ncc_score (int64, sqrtf, divide), resampling and
+ * cache misses: a review estimates 33-38 ms per frame for 48-120 px boxes.
+ * Task 5 measures and tunes this. Above it the plan's fallbacks apply in
+ * order: (1) only one extra scale per frame (0.9 / 1.1 alternating), (2)
+ * coarse step 3. */
 #define MXK_MAC_BUDGET 1200000u
 
 typedef struct {

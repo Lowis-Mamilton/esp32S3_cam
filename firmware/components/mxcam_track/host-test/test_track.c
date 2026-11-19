@@ -297,6 +297,104 @@ static void test_no_drift(void) {
   }
 }
 
+/* Fix round 1: while lost, a larger same-colour decoy wins the back-projection;
+ * the target coming back where it was lost must still be found (the last
+ * position is searched first). */
+static void test_reacquire_prefers_last_position(void) {
+  mxk_model_t m;
+  mxk_state_t st;
+  mxp_track_config_t cfg = def_cfg();
+  mxp_result_t r;
+  CHECK(learn_std(&m, &st));
+  for (int i = 0; i < 3; i++) { /* target gone, decoy (earlier in scan order) present */
+    fill(BG);
+    stripes(200, 0, 70, 8, RED, WHITE);
+    CHECK(mxk_track(frame, &m, &cfg, &st, &r) == 0);
+  }
+  CHECK(st.lost);
+  int found_at = -1;
+  for (int i = 0; i < 2 && found_at < 0; i++) {
+    scene(100, 80);
+    stripes(200, 0, 70, 8, RED, WHITE);
+    if (mxk_track(frame, &m, &cfg, &st, &r) == 1) found_at = i;
+  }
+  CHECK(found_at >= 0);
+  if (found_at >= 0) {
+    NEAR(r.x, 120, 2);
+    NEAR(r.y, 100, 2);
+  }
+}
+
+/* Fix round 2a: a slightly changed target (a dark spot) is still tracked and
+ * the live template adapts towards it; the learned template does not change. */
+static void test_adapt_updates_live(void) {
+  mxk_model_t m, before;
+  mxk_state_t st;
+  mxp_track_config_t cfg = def_cfg();
+  mxp_result_t r;
+  CHECK(learn_std(&m, &st));
+  before = m;
+  for (int k = 0; k < 5; k++) {
+    scene(100, 80);
+    for (int j = 96; j < 104; j++)
+      for (int i = 116; i < 124; i++) frame[j * FW + i] = px(40, 40, 40);
+    CHECK(mxk_track(frame, &m, &cfg, &st, &r) == 1);
+    CHECK(r.confidence >= 70);
+  }
+  CHECK(memcmp(st.live, m.tmpl, (size_t)(m.tw * m.th)) != 0);
+  CHECK(memcmp(&m, &before, sizeof m) == 0);
+}
+
+/* Fix round 2b: a decoy that matches the live template (score >= 70) but not
+ * the learned one must not be blended into the live template. */
+static void test_adapt_gate_rejects_decoy(void) {
+  mxk_model_t m, ms;
+  mxk_state_t st;
+  mxp_track_config_t cfg = def_cfg();
+  mxp_result_t r;
+  CHECK(learn_std(&m, &st));
+  fill(BG);
+  stripes(100, 80, 40, 8, RED, WHITE);
+  CHECK(mxk_learn(frame, 100, 80, 40, 40, &ms));
+  CHECK(ms.tw == m.tw && ms.th == m.th);
+  memcpy(st.live, ms.tmpl, sizeof st.live); /* live has drifted to the stripes */
+  uint8_t live0[sizeof st.live];
+  memcpy(live0, st.live, sizeof live0);
+  fill(BG); /* same stripes, other colours: the patch differs from live by >> 5 levels */
+  stripes(100, 80, 40, 8, px(150, 60, 60), px(190, 190, 190));
+  CHECK(mxk_track(frame, &m, &cfg, &st, &r) == 1); /* found through the live template */
+  CHECK(r.confidence >= 70);
+  CHECK(memcmp(st.live, live0, sizeof live0) == 0); /* learned-template gate refused the update */
+}
+
+/* Fix round 4: odd region coordinates/sizes; the template covers exactly the
+ * learned box (box_w/2 half-pixels from x/2), so the same frame tracks at a
+ * high score, the learned size and the box centre. */
+static void test_learn_odd_region(void) {
+  const int rg[][3] = {{101, 81, 41}, {100, 80, 41}, {101, 81, 40}, {103, 83, 37}};
+  for (int k = 0; k < 4; k++) {
+    mxk_model_t m;
+    mxk_state_t st;
+    mxp_track_config_t cfg = def_cfg();
+    mxp_result_t r;
+    int x = rg[k][0], y = rg[k][1], w = rg[k][2];
+    fill(BG);
+    checker(x, y, w, 8.0f, RED, WHITE);
+    CHECK(mxk_learn(frame, (uint16_t)x, (uint16_t)y, (uint16_t)w, (uint16_t)w, &m));
+    NEAR(m.box_w, w, 0);
+    mxk_reset(&st, &m);
+    cfg.adapt = 0;
+    CHECK(mxk_track(frame, &m, &cfg, &st, &r) == 1);
+    /* >= 90, not ~100: the stored centre is an integer (120 for 120.5), so the
+     * search grid can sit a quarter half-pixel off (before the fix: 78) */
+    CHECK(r.confidence >= 90);
+    if (r.confidence < 90) printf("  region %d,%d %d: confidence %d\n", x, y, w, r.confidence);
+    NEAR(r.w, w, 0);
+    NEAR(r.x, x + w / 2, 1);
+    NEAR(r.y, y + w / 2, 1);
+  }
+}
+
 static void test_model_valid(void) {
   mxk_model_t m, bad;
   scene(100, 80);
@@ -346,6 +444,25 @@ static void test_mac_budget_large_box(void) {
     if (mxk_test_macs() > max_macs) max_macs = mxk_test_macs();
   }
   CHECK(max_macs <= MXK_MAC_BUDGET);
+  /* lost + reacquire with the target far away: last-position search plus the
+   * back-projection search together stay within the budget */
+  {
+    mxk_state_t s2 = st;
+    s2.lost = 1;
+    for (int k = 0; k < 4; k++) {
+      fill(BG);
+      blocks(8, 150, 72, 8, 7u);
+      uint8_t n = mxk_track(frame, &m, &cfg, &s2, &r);
+      CHECK(mxk_test_macs() <= MXK_MAC_BUDGET);
+      if (mxk_test_macs() > max_macs) max_macs = mxk_test_macs();
+      if (n) {
+        NEAR(r.x, 44, 3);
+        NEAR(r.y, 186, 3);
+        break;
+      }
+    }
+    CHECK(!s2.lost);
+  }
   printf("info: 72 px box: max %lu NCC MACs/frame (budget %lu)\n", (unsigned long)max_macs,
          (unsigned long)MXK_MAC_BUDGET);
 
@@ -386,6 +503,10 @@ int main(void) {
   test_distractor_rejected();
   test_no_drift();
   test_model_valid();
+  test_reacquire_prefers_last_position();
+  test_adapt_updates_live();
+  test_adapt_gate_rejects_decoy();
+  test_learn_odd_region();
   test_mac_budget_large_box();
   if (fails) {
     printf("%d failure(s)\n", fails);
