@@ -52,3 +52,31 @@ add_custom_target(mxcam_git_header
     VERBATIM)
 add_dependencies(${COMPONENT_LIB} mxcam_git_header)
 target_include_directories(${COMPONENT_LIB} PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/generated")
+
+# Hand landmark prototype phase B (handlm_bench.cpp), local builds only:
+#   idf.py -DMXCAM_HANDLM_BENCH=ON build   (and =OFF to go back; the value stays
+#   in the CMake cache). Models + test data go to the `storage` partition with
+#   tools/handlm/pack_storage.py + esptool, not into the app image. Never
+#   enabled in committed builds/CI. docs/research/hand-landmarks-proto-b.md
+#   -DMXCAM_HANDLM_BENCH_EARLY=ON loads the first storage model at boot BEFORE
+#   the face / gesture models (afterwards no PSRAM block is big enough for the
+#   int16-depthwise variants); -DMXCAM_HANDLM_BENCH_ONLY=<n> benches only
+#   storage entry n (once).
+# Source and libraries are added here, not in idf_component_register: the
+# requirement scan does not see -D cache values, and default builds must not
+# depend on them.
+option(MXCAM_HANDLM_BENCH "Hand landmark on-device benchmark (models from the storage partition)" OFF)
+option(MXCAM_HANDLM_BENCH_EARLY "Load the landmark model before the face/gesture models" OFF)
+if(MXCAM_HANDLM_BENCH)
+    target_sources(${COMPONENT_LIB} PRIVATE "handlm_bench.cpp")
+    target_compile_definitions(${COMPONENT_LIB} PRIVATE MXCAM_HANDLM_BENCH)
+    target_link_libraries(${COMPONENT_LIB} PRIVATE idf::espressif__esp-dl idf::esp_partition idf::spi_flash)
+    if(MXCAM_HANDLM_BENCH_EARLY)
+        target_compile_definitions(${COMPONENT_LIB} PRIVATE MXCAM_HANDLM_BENCH_EARLY)
+    endif()
+    # -DMXCAM_HANDLM_BENCH_ONLY=<n>: only storage entry n (with _EARLY: loaded first at boot).
+    set(MXCAM_HANDLM_BENCH_ONLY "" CACHE STRING "Only bench this storage directory entry")
+    if(NOT MXCAM_HANDLM_BENCH_ONLY STREQUAL "")
+        target_compile_definitions(${COMPONENT_LIB} PRIVATE MXCAM_HANDLM_BENCH_ONLY=${MXCAM_HANDLM_BENCH_ONLY})
+    endif()
+endif()

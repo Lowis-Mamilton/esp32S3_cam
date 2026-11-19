@@ -2,6 +2,7 @@
 #include <string.h>
 
 #include "encoder.h"
+#include "handlm_bench.h" /* empty unless MXCAM_HANDLM_BENCH */
 #include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_mac.h"
@@ -100,6 +101,10 @@ void app_main(void)
      * allocates during that ~80 ms window, including IDF system and driver
      * tasks that are already running (e.g. the camera driver). Only when the
      * pipeline can run; a failure just leaves function 3 out of GET_INFO. */
+#if defined(MXCAM_HANDLM_BENCH) && defined(MXCAM_HANDLM_BENCH_EARLY)
+    /* Hand landmark bench, early variant: the landmark model first (largest PSRAM block). */
+    if (display_ok && camera_ok) handlm_bench_boot();
+#endif
     bool face_ok = false;
     if (display_ok && camera_ok) {
         int64_t tf = esp_timer_get_time();
@@ -126,6 +131,10 @@ void app_main(void)
         else
             ESP_LOGE(TAG, "gesture init failed (no memory?): function 8 disabled");
     }
+#if defined(MXCAM_HANDLM_BENCH) && !defined(MXCAM_HANDLM_BENCH_EARLY)
+    /* Hand landmark bench: same rule as mxh_init (before any task). */
+    if (display_ok && camera_ok && gesture_ok) handlm_bench_boot();
+#endif
     ESP_LOGI(TAG, "gesture config: hand_threshold %u, gesture_threshold %u, max_hands %u",
              s_data.gesture_cfg.hand_threshold, s_data.gesture_cfg.gesture_threshold, s_data.gesture_cfg.max_hands);
 

@@ -10,6 +10,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "gesture_bench.h" /* empty unless MXCAM_GESTURE_BENCH */
+#include "handlm_bench.h"  /* empty unless MXCAM_HANDLM_BENCH */
 #include "mxcam_camera.h"
 #include "mxcam_color.h"
 #include "mxcam_display.h"
@@ -525,6 +526,9 @@ static void pipeline_task(void *arg)
 #endif
 #if defined(MXCAM_GESTURE_BENCH) && !defined(MXCAM_GESTURE_BENCH_FEED)
             gesture_bench_frame(frame); /* frame is still clean (no overlay yet) */
+#endif
+#ifdef MXCAM_HANDLM_BENCH
+            handlm_bench_frame(frame); /* frame is still clean (no overlay yet) */
 #endif
 
             size_t plen = publish ? mxp_pack_results(&res, packed, sizeof(packed)) : 0;
