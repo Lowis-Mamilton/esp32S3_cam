@@ -106,6 +106,54 @@
       "seq": 0,
       "payload_hex": "01000000e80300004001f000ffd8ffd9",
       "encoded_hex": "4d58016000100001000000e80300004001f000ffd8ffd91ca8"
+    },
+    {
+      "name": "results_color_two",
+      "ver": 1,
+      "cmd": 160,
+      "seq": 5,
+      "payload_hex": "2a000000010201006400500028001e00ff000200fa00c80014001200ff00",
+      "encoded_hex": "4d5801a0051e002a000000010201006400500028001e00ff000200fa00c80014001200ff00f73d"
+    },
+    {
+      "name": "results_tag_one",
+      "ver": 1,
+      "cmd": 97,
+      "seq": 0,
+      "payload_hex": "2b00000002010300a000780034003200ff12941186005f00ba006200b800920088009000",
+      "encoded_hex": "4d5801610024002b00000002010300a000780034003200ff12941186005f00ba006200b8009200880090009c0b"
+    },
+    {
+      "name": "config_default",
+      "ver": 1,
+      "cmd": 192,
+      "seq": 6,
+      "payload_hex": "011e64000401013c0400c201005a32000000",
+      "encoded_hex": "4d5801c0061200011e64000401013c0400c201005a32000000d0e5"
+    },
+    {
+      "name": "learn_request",
+      "ver": 1,
+      "cmd": 48,
+      "seq": 7,
+      "payload_hex": "018c00640028002800",
+      "encoded_hex": "4d580130070900018c0064002800280035f8"
+    },
+    {
+      "name": "set_name_utf8",
+      "ver": 1,
+      "cmd": 50,
+      "seq": 8,
+      "payload_hex": "0102000ce7b485e889b2e7a98de69ca8",
+      "encoded_hex": "4d5801320810000102000ce7b485e889b2e7a98de69ca8ceab"
+    },
+    {
+      "name": "learned_list",
+      "ver": 1,
+      "cmd": 179,
+      "seq": 9,
+      "payload_hex": "020100ff000006e7b485e889b202000000ff04626c7565",
+      "encoded_hex": "4d5801b3091700020100ff000006e7b485e889b202000000ff04626c756556e1"
     }
   ],
   "decoder": [
@@ -207,5 +255,111 @@
         }
       ]
     }
-  ]
+  ],
+  "payloads": {
+    "results_color_two": {
+      "frame_id": 42,
+      "function_id": 1,
+      "results": [
+        {
+          "id": 1,
+          "x": 100,
+          "y": 80,
+          "width": 40,
+          "height": 30,
+          "confidence": 255
+        },
+        {
+          "id": 2,
+          "x": 250,
+          "y": 200,
+          "width": 20,
+          "height": 18,
+          "confidence": 255
+        }
+      ]
+    },
+    "results_tag_one": {
+      "frame_id": 43,
+      "function_id": 2,
+      "results": [
+        {
+          "id": 3,
+          "x": 160,
+          "y": 120,
+          "width": 52,
+          "height": 50,
+          "confidence": 255,
+          "extra": {
+            "rotation_cdeg": 4500,
+            "corners": [
+              [
+                134,
+                95
+              ],
+              [
+                186,
+                98
+              ],
+              [
+                184,
+                146
+              ],
+              [
+                136,
+                144
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    "config_default": {
+      "tolerance": 30,
+      "min_area": 100,
+      "color_max_results": 4,
+      "color_show_names": 1,
+      "tag_show_names": 1,
+      "face_threshold": 60,
+      "face_max_results": 4,
+      "uart_baud": 115200,
+      "i2c_address": 90,
+      "led_brightness": 50,
+      "dirty": 0
+    },
+    "learn_request": {
+      "function_id": 1,
+      "x": 140,
+      "y": 100,
+      "width": 40,
+      "height": 40
+    },
+    "set_name_utf8": {
+      "function_id": 1,
+      "id": 2,
+      "name": "紅色積木"
+    },
+    "learned_list": {
+      "items": [
+        {
+          "id": 1,
+          "rgb": [
+            255,
+            0,
+            0
+          ],
+          "name": "紅色"
+        },
+        {
+          "id": 2,
+          "rgb": [
+            0,
+            0,
+            255
+          ],
+          "name": "blue"
+        }
+      ]
+    }
+  }
 }

@@ -11,6 +11,48 @@ def c(s):
     return '"' + s + '"'
 
 
+def cstr(s):
+    """C string literal using octal escapes for every non-printable / non-ASCII UTF-8 byte."""
+    safe = lambda b: 0x20 <= b < 0x7F and chr(b) not in ('"', "\\")
+    return '"' + "".join(chr(b) if safe(b) else "\\%03o" % b for b in s.encode("utf-8")) + '"'
+
+
+def emit_payloads(v, o):
+    """Typed C constants for the decoded expectations. Needs mxcam_proto.h included first."""
+    pl = v["payloads"]
+    for name in ("results_color_two", "results_tag_one"):
+        p = pl[name]
+        recs = []
+        for r in p["results"]:
+            extra = []
+            if "extra" in r:
+                e = r["extra"]
+                vals = [e["rotation_cdeg"]] + [n for c in e["corners"] for n in c]
+                for n in vals:
+                    n &= 0xFFFF
+                    extra += [n & 0xFF, n >> 8]
+            recs.append("{%d, %d, %d, %d, %d, %d, %d, {%s}}" % (
+                r["id"], r["x"], r["y"], r["width"], r["height"], r["confidence"], len(extra),
+                ", ".join(str(b) for b in extra) or "0"))
+        o.append("static const mxp_results_t VEC_P_%s = {%d, %d, %d, {%s}};" % (
+            name.upper(), p["frame_id"], p["function_id"], len(recs), ", ".join(recs)))
+    c = pl["config_default"]
+    o.append("static const mxp_config_t VEC_P_CONFIG_DEFAULT = {%d, %d, %d, %d, %d, %d, %d, %du, %d, %d, %d};" % (
+        c["tolerance"], c["min_area"], c["color_max_results"], c["color_show_names"], c["tag_show_names"],
+        c["face_threshold"], c["face_max_results"], c["uart_baud"], c["i2c_address"], c["led_brightness"], c["dirty"]))
+    l = pl["learn_request"]
+    o.append("static const mxp_learn_req_t VEC_P_LEARN_REQUEST = {%d, %d, %d, %d, %d};" % (
+        l["function_id"], l["x"], l["y"], l["width"], l["height"]))
+    n = pl["set_name_utf8"]
+    o.append("static const mxp_set_name_t VEC_P_SET_NAME_UTF8 = {%d, %d, %d, %s};" % (
+        n["function_id"], n["id"], len(n["name"].encode("utf-8")), cstr(n["name"])))
+    items = pl["learned_list"]["items"]
+    o.append("static const mxp_learned_t VEC_P_LEARNED_LIST[] = {")
+    for it in items:
+        o.append("  {%d, {%d, %d, %d}, %d, %s}," % (it["id"], *it["rgb"], len(it["name"].encode("utf-8")), cstr(it["name"])))
+    o.append("};")
+
+
 def main():
     src, dst = sys.argv[1], sys.argv[2]
     with open(src, encoding="utf-8") as f:
@@ -35,6 +77,7 @@ def main():
         ex = ", ".join("{%d, %d, %s}" % (x["cmd"], x["seq"], c(x["payload_hex"])) for x in e["expect"])
         o.append("  {%s, %d, {%s}, %d, {%s}}," % (c(e["name"]), len(e["chunks_hex"]), ch, len(e["expect"]), ex))
     o.append("};")
+    emit_payloads(v, o)
     o.append("#define VEC_COUNT(a) ((int)(sizeof(a) / sizeof((a)[0])))")
     with open(dst, "w", encoding="utf-8", newline="\n") as f:
         f.write("\n".join(o) + "\n")
