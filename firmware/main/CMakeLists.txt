@@ -1,7 +1,7 @@
-idf_component_register(SRCS "main.c" "pipeline.c" "encoder.c" "status_led.c" "store_worker.c"
+idf_component_register(SRCS "main.c" "pipeline.c" "encoder.c" "status_led.c" "store_worker.c" "gesture_bench.c"
                        REQUIRES esp_psram esp_timer freertos log heap mxcam_protocol mxcam_camera mxcam_display
                                 mxcam_overlay mxcam_service mxcam_link mxcam_store mxcam_color mxcam_tag
-                                mxcam_face esp_hw_support)
+                                mxcam_face mxcam_gesture esp_hw_support)
 
 # Face detection on-board benchmark (pipeline.c face_bench), local builds only:
 #   idf.py -DMXCAM_FACE_BENCH=ON build   (and -DMXCAM_FACE_BENCH=OFF to go back;
@@ -16,6 +16,22 @@ if(MXCAM_FACE_BENCH)
     if(MXCAM_FACE_BENCH_IMAGE)
         target_add_binary_data(${COMPONENT_LIB} "${MXCAM_FACE_BENCH_IMAGE}" BINARY RENAME_TO face_bench_img)
         target_compile_definitions(${COMPONENT_LIB} PRIVATE MXCAM_FACE_BENCH_IMAGE)
+    endif()
+endif()
+
+# Gesture recognition on-board benchmark (gesture_bench.c), local builds only:
+#   idf.py -DMXCAM_GESTURE_BENCH=ON build   (and -DMXCAM_GESTURE_BENCH=OFF to go
+#   back; the value stays in the CMake cache). Never enabled in committed
+#   builds/CI. Optional MXCAM_GESTURE_BENCH_IMAGE: a file of whole 320x240
+#   RGB565 big-endian frames (camera byte order) that the benchmark also runs
+#   on, so it can be checked without a hand in front of the camera.
+option(MXCAM_GESTURE_BENCH "Log a gesture recognition benchmark once per second" OFF)
+set(MXCAM_GESTURE_BENCH_IMAGE "" CACHE FILEPATH "Test frames for the gesture benchmark (RGB565BE 320x240)")
+if(MXCAM_GESTURE_BENCH)
+    target_compile_definitions(${COMPONENT_LIB} PRIVATE MXCAM_GESTURE_BENCH)
+    if(MXCAM_GESTURE_BENCH_IMAGE)
+        target_add_binary_data(${COMPONENT_LIB} "${MXCAM_GESTURE_BENCH_IMAGE}" BINARY RENAME_TO gesture_bench_img)
+        target_compile_definitions(${COMPONENT_LIB} PRIVATE MXCAM_GESTURE_BENCH_IMAGE)
     endif()
 endif()
 

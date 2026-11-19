@@ -1,0 +1,7 @@
+## Espressif hand detection (espdet_pico 224x224) + gesture classification
+## (MobileNetV2 0.5, 128x128) on esp-dl 3.3.x. Both 0.2.1 (MIT) require esp-dl
+## ~3.3.14, which supports ESP-IDF >= 5.3 on the ESP32-S3 (we build with
+## v5.5.6). hand_gesture_recognition itself depends on hand_detect ~0.2.0.
+dependencies:
+  espressif/hand_detect: "~0.2.1"
+  espressif/hand_gesture_recognition: "~0.2.1"

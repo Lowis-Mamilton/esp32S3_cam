@@ -104,6 +104,28 @@ dependencies:
     - esp32c61
     - esp32h4
     version: 1.0.2
+  espressif/hand_detect:
+    component_hash: 9118a724be3b62c1107644d2a0b0d3cd902f983e7877174b119ed885faa6d985
+    dependencies:
+    - name: espressif/esp-dl
+      registry_url: https://components.espressif.com
+      require: private
+      version: ~3.3.14
+    source:
+      registry_url: https://components.espressif.com/
+      type: service
+    version: 0.2.1
+  espressif/hand_gesture_recognition:
+    component_hash: 8af6dca31b0b263da350605cb58a8930f12ca3c7999259d2a510797e6d862e10
+    dependencies:
+    - name: espressif/hand_detect
+      registry_url: https://components.espressif.com
+      require: private
+      version: ~0.2.0
+    source:
+      registry_url: https://components.espressif.com/
+      type: service
+    version: 0.2.1
   espressif/human_face_detect:
     component_hash: 78e59910d978521b75402062adb6496deb8f03b45581c39c748fa15000bf3e28
     dependencies:
@@ -133,8 +155,10 @@ direct_dependencies:
 - espressif/esp32-camera
 - espressif/esp_lcd_ili9341
 - espressif/esp_new_jpeg
+- espressif/hand_detect
+- espressif/hand_gesture_recognition
 - espressif/human_face_detect
 - espressif/led_strip
-manifest_hash: e72095d92e27d04c8986f2eac48da3172d07c0461cf26b567a360ff8b4b920fc
+manifest_hash: dc78175f6afdaa3a86fdf74252dfe7ef3259b1125aaa2ed3c996bb4858da29ca
 target: esp32s3
 version: 2.0.0

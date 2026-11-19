@@ -55,7 +55,7 @@
 | 11 | 幾何形狀 | 自寫（輪廓＋多邊形近似） | 否 | M7 |
 | 12 | 動態偵測 | 自寫（畫面差分＋連通區域） | 否 | M7 |
 | 7 | 人體偵測 | `pedestrian_detect`（esp-dl） | 否 | M8 |
-| 8 | 手勢辨識 | `hand_detect`＋`hand_gesture_recognition`（esp-dl） | 否 | M8 |
+| 8 | 手勢辨識 | `hand_detect`＋`hand_gesture_recognition`（esp-dl） | 否 | M8a（提前，2026-11-19 使用者決定） |
 | 9 | 人臉辨識 | 人臉偵測＋`human_face_recognition` 特徵模型 | 是 | M9 |
 | 10 | 自學習分類 | 手工特徵＋kNN | 是 | M9 |
 
@@ -63,7 +63,7 @@
   - **物體追蹤（功能 5，ADR-0018）**：**一次追一個目標**（`id = 1`）。在即時畫面上框住物體按 LEARN 就學會（再 LEARN 會取代舊的、名字一起清掉）；物體**要有花紋或明暗變化**，純色、沒有紋理的東西或太小（< 16×16 px）學不到。之後每張在上次位置附近找（會跟著變大變小），結果是框的中心與大小、`confidence` = 相似度 ×100；**跟丟時沒有紀錄**（R4 讀到 0 筆就是跟丟）。跟丟後預設會**自動在全畫面找回**（`reacquire`）；同色但花紋不同的東西不會被當成目標。學到的物體跟顏色一樣，**SAVE 後斷電仍在**。參數見 `docs/protocol.md` §9（Track config v1）。
   - 延後：條碼（沒有適合授權、可用於 IDF 5 的函式庫）、貓狗偵測、ImageNet 分類。放棄：COCO 物件偵測（約 1 s／張）、姿態、OCR 等 ESP32-S3 沒有可用模型的功能。
   - 手勢（兩隻手）與人臉辨識約 3 fps，NN 功能的效能目標放寬為 ≥ 3 fps。
-  - 架構前置（M6 開頭）：GET_INFO 功能上限調到 32、各功能自己的參數（Config v1 之外）、LEARN 可指定 ID；M8 起模型放 flash 的模型分割區、切換功能時才載入。
+  - 架構前置（M6 開頭）：GET_INFO 功能上限調到 32、各功能自己的參數（Config v1 之外）、LEARN 可指定 ID；手勢（M8a）先放 app rodata、開機載入（ADR-0019）；加入第三個 NN 模型（人體或人臉辨識）時才改成模型分割區＋按需載入。
     - **M6 已完成協定部分**（ADR-0016、`docs/protocol.md` §9）：GET_INFO 功能清單上限 32；`GET_FUNC_CONFIG (0x44)`／`SET_FUNC_CONFIG (0x45)`，每個功能一個固定版面＋自己的 `layout_version`（功能 1–3 的參數留在 Config v1）；不新增能力位元，GET_INFO 的功能清單就是能力；LEARN 可多帶 `id (u16)`（11 bytes，M6 韌體一律回 `BAD_PARAM`）。模型分割區仍待 M8。
 
 ### 顏色學習流程
@@ -165,6 +165,7 @@ USB、UART、I2C 三種傳輸用同一套封包。
 - 效能設定：CPU 240 MHz、PSRAM 80 MHz、flash QIO 80 MHz（M1 起固定，作為量測基準）
 - 人臉模型放在 app 的 flash rodata（不改分割表），映像檔約 2.1 MiB（4 MB factory 分割區剩 47%）；開機時在其他 task 啟動前載入（約 80 ms、PSRAM 約 425 KB），失敗時功能 3 不列在 GET_INFO（見 ADR-0011）
 - 人臉偵測無串流 44–58 ms（0–2 張臉），串流時最多約 62 ms（M3 實測），**每張畫面都偵測**（不降頻）：TFT 不串流時 10–11 fps、Studio 串流時 7 fps，都高於 ≥ 5 fps 的目標（降頻的門檻：不串流時 TFT < 7 fps 才改成每 2 張偵測一次，`pipeline.c` 的 `FACE_EVERY`）
+- 手勢模型（`hand_detect` espdet_pico 224×224＋`hand_gesture_recognition` MobileNetV2 0.5，約 1.28 MB）也放 app 的 flash rodata，映像檔 3,526,000 B（factory 4 MB 剩 16%，上限 3,774,873 B）；開機時緊接在人臉之後、其他 task 啟動前載入（實測 332 ms、PSRAM 1.74 MiB、內部 RAM 0），開機完成時 PSRAM 剩約 3.9 MiB（見 ADR-0019、`docs/measurements/m8a.md`）
 
 ### 6.2 電腦軟體 `pc-app/`：MXCam Studio
 
@@ -231,6 +232,7 @@ docs/          規格、協定、ADR
 | M4 | UART、I2C、Arduino 函式庫、電位轉換接線 | R4 用範例程式讀到三種功能的結果，延遲 ≤ 50 ms |
 | M5 | 網頁燒錄、PWA 離線、GitHub Pages、多語系 | 新電腦只開網頁就能燒錄並使用 |
 | M6 | 架構前置、線條追蹤、物體追蹤 | 兩個功能 TFT ≥ 10 fps（不串流）、實機驗收通過 |
+| M8a | 手勢辨識（功能 8） | 一隻手 ≥ 3 fps、實機 9 種手勢驗收通過 |
 
 ## 9. 測試策略
 

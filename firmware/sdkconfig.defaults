@@ -29,3 +29,14 @@ CONFIG_COMPILER_OPTIMIZATION_PERF=y
 CONFIG_FLASH_HUMAN_FACE_DETECT_MSRMNP_S8_V1=y
 CONFIG_HUMAN_FACE_DETECT_MSRMNP_S8_V1=y
 CONFIG_HUMAN_FACE_DETECT_MODEL_IN_FLASH_RODATA=y
+# Gesture recognition (mxcam_gesture, ADR-0019): hand_detect's espdet_pico
+# 224x224 hand detector (~486 KB) + hand_gesture_recognition's MobileNetV2 0.5
+# classifier (~769 KB), ~1.28 MB together, embedded in the app as flash rodata
+# (no partition table change). Weights are copied to PSRAM when mxh_init loads
+# them at boot. These are the components' defaults, written down on purpose.
+CONFIG_FLASH_ESPDET_PICO_224_224_HAND=y
+CONFIG_ESPDET_PICO_224_224_HAND=y
+CONFIG_HAND_DETECT_MODEL_IN_FLASH_RODATA=y
+CONFIG_FLASH_HAND_GESTURE_CLS_MOBILENETV2_0_5_S8_V1=y
+CONFIG_HAND_GESTURE_CLS_MOBILENETV2_0_5_S8_V1=y
+CONFIG_HAND_GESTURE_CLS_MODEL_IN_FLASH_RODATA=y

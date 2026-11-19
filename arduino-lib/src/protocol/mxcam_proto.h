@@ -63,8 +63,26 @@ enum {
   MXP_FUNC_APRILTAG = 2,
   MXP_FUNC_FACE = 3,
   MXP_FUNC_LINE = 4,
-  MXP_FUNC_TRACK = 5
+  MXP_FUNC_TRACK = 5,
+  MXP_FUNC_GESTURE = 8
 };
+
+/* Gesture ids (function 8, ResultRecord id): 1..5 = fingers shown;
+ * 0 = a hand whose gesture is not recognised (no_gesture / no_hand / below
+ * gesture_threshold). */
+enum {
+  MXP_GESTURE_UNKNOWN = 0,
+  MXP_GESTURE_ONE = 1,
+  MXP_GESTURE_TWO = 2,
+  MXP_GESTURE_THREE = 3,
+  MXP_GESTURE_FOUR = 4,
+  MXP_GESTURE_FIVE = 5,
+  MXP_GESTURE_LIKE = 6,
+  MXP_GESTURE_OK = 7,
+  MXP_GESTURE_CALL = 8,
+  MXP_GESTURE_DISLIKE = 9
+};
+#define MXP_GESTURE_MAX 9
 
 /* CRC-16/CCITT-FALSE (poly 0x1021, init 0xFFFF). */
 uint16_t mxp_crc16(const uint8_t *data, size_t len);

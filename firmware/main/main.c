@@ -12,6 +12,7 @@
 #include "mxcam_camera.h"
 #include "mxcam_display.h"
 #include "mxcam_face.h"
+#include "mxcam_gesture.h"
 #include "mxcam_git.h" /* generated at every build: MXCAM_FW_GIT, MXCAM_FW_GIT_DESC */
 #include "mxcam_link.h"
 #include "mxcam_overlay.h"
@@ -108,6 +109,24 @@ void app_main(void)
         else
             ESP_LOGE(TAG, "face detection init failed (no memory?): function 3 disabled");
     }
+    /* Gesture models (hand detector + classifier, ADR-0019): same rule as
+     * mxf_init, right after it and before any task is created. Not listed in
+     * GET_INFO yet (M8a Task 4 wires function 8 into the pipeline). */
+    bool gesture_ok = false;
+    if (display_ok && camera_ok) {
+        size_t gi0 = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
+        size_t gp0 = heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
+        int64_t tg = esp_timer_get_time();
+        gesture_ok = mxh_init();
+        if (gesture_ok)
+            ESP_LOGI(TAG, "gesture ready in %u ms (internal %u -> %u, PSRAM %u -> %u)",
+                     (unsigned)((esp_timer_get_time() - tg) / 1000), (unsigned)gi0,
+                     (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL), (unsigned)gp0,
+                     (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
+        else
+            ESP_LOGE(TAG, "gesture init failed (no memory?): function 8 disabled");
+    }
+    (void)gesture_ok;
 
     mxp_info_t info;
     build_info(&info);

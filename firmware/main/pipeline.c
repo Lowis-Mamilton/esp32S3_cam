@@ -9,6 +9,7 @@
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "gesture_bench.h" /* empty unless MXCAM_GESTURE_BENCH */
 #include "mxcam_camera.h"
 #include "mxcam_color.h"
 #include "mxcam_display.h"
@@ -464,6 +465,9 @@ static void pipeline_task(void *arg)
             last_fn = ctx.fn;
 #ifdef MXCAM_FACE_BENCH
             face_bench(frame, &ctx.cfg); /* frame is still clean (no overlay yet) */
+#endif
+#ifdef MXCAM_GESTURE_BENCH
+            gesture_bench_frame(frame); /* frame is still clean (no overlay yet) */
 #endif
 
             size_t plen = publish ? mxp_pack_results(&res, packed, sizeof(packed)) : 0;
