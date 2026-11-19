@@ -13,7 +13,7 @@ import FirmwarePage from './ui/pages/FirmwarePage'
 import SettingsPage from './ui/pages/SettingsPage'
 import LiveStage, { type LiveStageHandle } from './ui/live/LiveStage'
 
-const FN_KEY: Record<FunctionId, MessageKey> = { 1: 'fnColor', 2: 'fnTag', 3: 'fnFace' }
+const FN_KEY: Record<FunctionId, MessageKey> = { 1: 'fnColor', 2: 'fnTag', 3: 'fnFace', 8: 'fnFace' /* TODO Task 6 */ }
 const NOTICE_MS = 4000
 const SET_FUNCTION_RETRY_MS = 500
 

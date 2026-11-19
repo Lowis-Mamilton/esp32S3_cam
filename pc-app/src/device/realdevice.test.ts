@@ -455,3 +455,152 @@ test('face: the fake firmware answers BAD_PARAM to LEARN and SET_NAME for 3 and 
   await expect(d.forget(3, 0)).resolves.toBeUndefined()
   expect(fw.config.dirty).toBe(false) // nothing was removed: firmware leaves dirty unchanged
 })
+
+// ---- M8a: gesture recognition (function 8) ----
+
+const gestureFw = () => {
+  const fw = new FakeFirmware()
+  fw.functionIds = [1, 2, 3, 8]
+  return fw
+}
+
+test('gesture: connect loads gesture func config', async () => {
+  const fw = gestureFw()
+  fw.gesture = { handThreshold: 30, gestureThreshold: 70, maxHands: 2 }
+  const d = await connected(fw)
+  expect([...sent(fw, Cmd.GetFuncConfig)[0].payload]).toEqual([8])
+  expect(d.snapshot().supported).toEqual([1, 2, 3, 8])
+  expect(d.snapshot().params.gesture).toEqual({ handThreshold: 30, gestureThreshold: 70, maxHands: 2 })
+  await d.setFunction(8)
+  expect(fw.active).toBe(8)
+})
+
+test('gesture: setParams sends SET_FUNC_CONFIG and applies the clamped reply', async () => {
+  const fw = gestureFw()
+  const d = await connected(fw)
+  await d.setParams({ gesture: { handThreshold: 5, gestureThreshold: 80, maxHands: 2 } })
+  expect([...sent(fw, Cmd.SetFuncConfig)[0].payload]).toEqual([8, 1, 10, 80, 2, 0, 0, 0, 0, 0]) // clamped on our side too
+  expect(d.snapshot().params.gesture).toEqual({ handThreshold: 10, gestureThreshold: 80, maxHands: 2 })
+  expect(d.snapshot().dirty).toBe(true)
+  expect(fw.config.dirty).toBe(true)
+})
+
+test('gesture: setting the current value sends nothing and stays clean', async () => {
+  const fw = gestureFw()
+  const d = await connected(fw)
+  await d.setParams({ gesture: { ...d.snapshot().params.gesture } })
+  expect(sent(fw, Cmd.SetFuncConfig)).toHaveLength(0)
+  expect(d.snapshot().dirty).toBe(false)
+})
+
+test('gesture: results are kind gesture with a confidence', async () => {
+  const fw = gestureFw()
+  const d = await connected(fw)
+  await d.setFunction(8)
+  let got: Result[] = []
+  d.onResults((r) => (got = r))
+  fw.pushResults(4, 8, [{ id: 7, x: 120, y: 100, width: 80, height: 90, confidence: 92 }])
+  await waitFor(() => expect(got).toHaveLength(1))
+  expect(got[0]).toMatchObject({ id: 7, kind: 'gesture', confidence: 92, x: 120, y: 100 })
+})
+
+test('gesture: names use SET_NAME 8 and GET_LEARNED 8', async () => {
+  const fw = gestureFw()
+  fw.names.set('8:6', '前進')
+  const d = await connected(fw)
+  expect(sent(fw, Cmd.GetLearned).map((r) => r.payload[0])).toEqual([1, 2, 8])
+  expect(d.snapshot().learned[8]).toEqual([{ id: 6, name: '前進' }])
+  await d.setName(8, 9, '後退')
+  expect(fw.names.get('8:9')).toBe('後退')
+  expect(d.snapshot().learned[8].map((e) => e.id)).toEqual([6, 9])
+  await d.forget(8, 6)
+  expect(d.snapshot().learned[8].map((e) => e.id)).toEqual([9])
+})
+
+test('gesture: old firmware does not get a gesture func config request', async () => {
+  const fw = new FakeFirmware()
+  fw.functionIds = [1, 2, 3]
+  const d = await connected(fw)
+  expect(sent(fw, Cmd.GetFuncConfig)).toHaveLength(0)
+  expect(d.snapshot().supported).not.toContain(8)
+  await expect(d.setFunction(8)).rejects.toBeInstanceOf(NotSupportedError)
+  await expect(d.setParams({ gesture: { handThreshold: 50, gestureThreshold: 60, maxHands: 1 } })).rejects.toBeInstanceOf(NotSupportedError)
+})
+
+test('gesture: func config unsupported drops gesture without failing the connect', async () => {
+  const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+  const fw = gestureFw()
+  fw.unknown.add(Cmd.GetFuncConfig)
+  const d = await connected(fw)
+  expect(d.snapshot().status).toBe('connected')
+  expect(d.snapshot().supported).toEqual([1, 2, 3])
+  expect(warn).toHaveBeenCalled()
+  warn.mockRestore()
+})
+
+// ---- pause preview: results keep flowing, FRAME stops ----
+
+test('pause preview: STREAM_START flags 0x02 is sent, results still arrive, no frames; resume sends 0x03', async () => {
+  const fw = gestureFw()
+  const d = await connected(fw)
+  const frames: unknown[] = []
+  let got: Result[] = []
+  d.onFrame((f) => frames.push(f))
+  d.onResults((r) => (got = r))
+  expect(d.snapshot().previewPaused).toBe(false)
+  await d.setPreviewPaused(true)
+  const starts = sent(fw, Cmd.StreamStart)
+  expect([...starts[starts.length - 1].payload]).toEqual([2, 10, 0])
+  expect(d.snapshot().previewPaused).toBe(true)
+  fw.pushFrame(1)
+  fw.pushResults(1, 8, [{ id: 2, x: 100, y: 100, width: 50, height: 50, confidence: 80 }])
+  await waitFor(() => expect(got).toHaveLength(1))
+  expect(frames).toHaveLength(0)
+  await d.setPreviewPaused(false)
+  const after = sent(fw, Cmd.StreamStart)
+  expect([...after[after.length - 1].payload]).toEqual([3, 10, 0])
+  expect(d.snapshot().previewPaused).toBe(false)
+  fw.pushFrame(2)
+  await waitFor(() => expect(frames).toHaveLength(1))
+})
+
+test('pause preview: reconnecting resets it to not paused', async () => {
+  let fw = gestureFw()
+  const serial = {
+    addEventListener: () => {},
+    removeEventListener: () => {},
+    getPorts: async () => [fw.port],
+    requestPort: async () => fw.port,
+  } as unknown as Serial
+  const d = new RealDevice(serial)
+  devices.push(d)
+  await waitFor(() => expect(d.snapshot().status).toBe('connected'))
+  await d.setPreviewPaused(true)
+  expect(d.snapshot().previewPaused).toBe(true)
+  await d.disconnect()
+  await waitFor(() => expect(d.snapshot().status).toBe('disconnected'))
+  expect(d.snapshot().previewPaused).toBe(false)
+  fw = gestureFw() // the board comes back with a fresh stream
+  await d.connect()
+  await waitFor(() => expect(d.snapshot().status).toBe('connected'))
+  expect(d.snapshot().previewPaused).toBe(false)
+  expect([...sent(fw, Cmd.StreamStart)[0].payload]).toEqual([3, 10, 0])
+})
+
+test('pause preview: not connected rejects', async () => {
+  const d = new RealDevice(undefined)
+  devices.push(d)
+  await expect(d.setPreviewPaused(true)).rejects.toBeInstanceOf(NotConnectedError)
+})
+
+test('gesture: importConfig applies gesture params and names', async () => {
+  const fw = gestureFw()
+  const d = await connected(fw)
+  const file = JSON.parse(d.exportConfig())
+  file.params.gesture = { handThreshold: 55, gestureThreshold: 75, maxHands: 2 }
+  file.learned[8] = [{ id: 7, name: 'OK啦' }]
+  await d.importConfig(JSON.stringify(file))
+  expect(fw.gesture).toEqual({ handThreshold: 55, gestureThreshold: 75, maxHands: 2 })
+  expect(fw.names.get('8:7')).toBe('OK啦')
+  expect(d.snapshot().learned[8]).toEqual([{ id: 7, name: 'OK啦' }])
+})

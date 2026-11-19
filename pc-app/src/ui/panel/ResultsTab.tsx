@@ -10,6 +10,7 @@ const KIND: Record<FunctionId, Result["kind"]> = {
   1: "color",
   2: "tag",
   3: "face",
+  8: "gesture",
 };
 
 interface Props {

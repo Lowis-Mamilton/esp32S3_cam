@@ -1,4 +1,5 @@
 import { parseConfig } from './config'
+import { drawGestureScene, gestureSceneAt, recognizeGestures } from './demo/gesture'
 import { colorAt, matchLearned, recognize } from './demo/recognize'
 import { drawScene, sceneAt, type SceneObject } from './demo/scene'
 import {
@@ -28,10 +29,18 @@ export const DEMO_INFO: DeviceInfo = {
   frameWidth: 320,
   frameHeight: 240,
   maxResults: 8,
-  functionIds: [1, 2, 3],
+  functionIds: [1, 2, 3, 8],
 }
 
 const FRAME_INTERVAL_MS = 100
+
+const clampN = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, Math.round(v)))
+/** Like the firmware (protocol.md section 10). */
+const clampGesture = (g: FunctionParams['gesture']): FunctionParams['gesture'] => ({
+  handThreshold: clampN(g.handThreshold, 10, 95),
+  gestureThreshold: clampN(g.gestureThreshold, 0, 100),
+  maxHands: clampN(g.maxHands, 1, 2) as 1 | 2,
+})
 
 /** Browser-only device: simulated scene and recognition, config kept in memory. `now` is injectable for tests. */
 export class DemoDevice implements Device {
@@ -44,6 +53,7 @@ export class DemoDevice implements Device {
   private system = defaultSystem()
   private active: FunctionId | 0 = 1
   private dirty = false
+  private previewPaused = false
   private snap: DeviceSnapshot | null = null
   private timer: ReturnType<typeof setInterval> | null
   private tick = 0
@@ -60,10 +70,17 @@ export class DemoDevice implements Device {
 
   private onTick() {
     const n = this.tick++
-    const objs = sceneAt(this.now() - this.t0)
+    const t = this.now() - this.t0
+    const objs = sceneAt(t)
     this.lastObjs = objs
-    this.frames.emit({ kind: 'canvas', draw: (ctx) => drawScene(ctx, objs) })
-    this.results.emit(this.active === 0 ? [] : recognize(this.active, objs, this.learned[this.active], this.params))
+    if (this.active === 8) {
+      const hands = gestureSceneAt(t)
+      if (!this.previewPaused) this.frames.emit({ kind: 'canvas', draw: (ctx) => drawGestureScene(ctx, hands) })
+      this.results.emit(recognizeGestures(hands, this.params.gesture))
+    } else {
+      if (!this.previewPaused) this.frames.emit({ kind: 'canvas', draw: (ctx) => drawScene(ctx, objs) })
+      this.results.emit(this.active === 0 ? [] : recognize(this.active, objs, this.learned[this.active], this.params))
+    }
     if (n % 10 === 0) this.stats.emit({ fps: 1000 / FRAME_INTERVAL_MS, kbps: 0 })
   }
 
@@ -81,7 +98,7 @@ export class DemoDevice implements Device {
       mode: 'demo',
       status: 'connected',
       info: DEMO_INFO,
-      supported: [1, 2, 3],
+      supported: [1, 2, 3, 8],
       activeFunction: this.active,
       learned: this.learned,
       params: this.params,
@@ -89,6 +106,7 @@ export class DemoDevice implements Device {
       dirty: this.dirty,
       lost: false,
       configKnown: true,
+      previewPaused: this.previewPaused,
     })
   }
 
@@ -117,7 +135,14 @@ export class DemoDevice implements Device {
     this.changed()
   }
 
+  async setPreviewPaused(paused: boolean) {
+    if (paused === this.previewPaused) return
+    this.previewPaused = paused
+    this.changed()
+  }
+
   async learnColor(region: { x: number; y: number; width: number; height: number }): Promise<number> {
+    if (this.active === 8) throw new LearnError('no-color') // gestures are fixed: nothing to learn
     const rgb = colorAt(this.lastObjs, region)
     if (!rgb) throw new LearnError('no-color')
     const list = this.learned[1]
@@ -147,10 +172,11 @@ export class DemoDevice implements Device {
   async setName(fn: FunctionId, id: number, name: string) {
     if (nameBytes(name) > NAME_MAX_BYTES) throw new Error(`name longer than ${NAME_MAX_BYTES} bytes`)
     if (fn === 2 && !(Number.isInteger(id) && id >= 0 && id <= 586)) throw new Error('invalid tag id')
+    if (fn === 8 && !(Number.isInteger(id) && id >= 1 && id <= 9)) throw new Error('invalid gesture id')
     const list = this.learned[fn]
     const cur = list.find((e) => e.id === id)
-    // Colours and faces must already be learned; tags need no learning, so naming an unseen tag creates it.
-    if (!cur && fn !== 2) return
+    // Colours and faces must already be learned; tags and gestures need no learning, so naming an unseen one creates it.
+    if (!cur && fn !== 2 && fn !== 8) return
     if (cur && cur.name === name) return
     const next = cur ? list.map((e) => (e.id === id ? { ...e, name } : e)) : [...list, { id, name }].sort((a, b) => a.id - b.id)
     this.learned = { ...this.learned, [fn]: next }
@@ -161,6 +187,7 @@ export class DemoDevice implements Device {
       color: { ...this.params.color, ...p.color },
       tag: { ...this.params.tag, ...p.tag },
       face: { ...this.params.face, ...p.face },
+      gesture: p.gesture ? clampGesture({ ...this.params.gesture, ...p.gesture }) : this.params.gesture,
     }
     if (JSON.stringify(next) === JSON.stringify(this.params)) return // nothing changed: stay clean
     this.params = next

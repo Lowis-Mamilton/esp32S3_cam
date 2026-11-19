@@ -6,7 +6,7 @@ export type { ConnectionStatus, DeviceInfo, FunctionId }
 
 export interface Result {
   id: number // 0 = not learned
-  kind: 'color' | 'tag' | 'face'
+  kind: 'color' | 'tag' | 'face' | 'gesture'
   /** Box centre in 320x240 frame coordinates (not the top-left corner). */
   x: number
   y: number
@@ -31,6 +31,7 @@ export interface FunctionParams {
   color: { tolerance: number /* 0-100 */; minArea: number; maxResults: number /* 1-8 */; showNames: boolean }
   tag: { showNames: boolean }
   face: { threshold: number /* 0-100 */; maxResults: number /* 1-8 */ }
+  gesture: { handThreshold: number /* 10-95 */; gestureThreshold: number /* 0-100 */; maxHands: 1 | 2 }
 }
 export interface SystemConfig {
   uartBaud: 115200 | 9600
@@ -51,6 +52,8 @@ export interface DeviceSnapshot {
   lost: boolean
   /** params/system/dirty are the device's own values (false: defaults, e.g. not connected or old firmware). */
   configKnown: boolean
+  /** Preview paused: the device keeps sending RESULTS but no FRAME (STREAM_START flags 0x02). Reset on (re)connect. */
+  previewPaused: boolean
 }
 /** Real mode and not connected: nothing can be configured yet; the hint is "connect first". */
 export const needsConnection = (s: DeviceSnapshot): boolean => s.mode === 'real' && s.status !== 'connected'
@@ -79,6 +82,8 @@ export interface Device {
   setName(fn: FunctionId, id: number, name: string): Promise<void>
   setParams(p: Partial<FunctionParams>): Promise<void>
   setSystem(c: Partial<SystemConfig>): Promise<void>
+  /** Pause the live picture only; results keep flowing. Rejects when not connected (real mode). */
+  setPreviewPaused(paused: boolean): Promise<void>
   save(): Promise<void>
   factoryReset(): Promise<void>
   exportConfig(): string
@@ -145,12 +150,13 @@ export const defaultParams = (): FunctionParams => ({
   color: { tolerance: 30, minArea: 100, maxResults: 4, showNames: true },
   tag: { showNames: true },
   face: { threshold: 60, maxResults: 4 },
+  gesture: { handThreshold: 40, gestureThreshold: 60, maxHands: 1 },
 })
 export const defaultSystem = (): SystemConfig => ({ uartBaud: 115200, i2cAddress: 0x5a, ledBrightness: 50 })
-export const emptyLearned = (): Record<FunctionId, LearnedId[]> => ({ 1: [], 2: [], 3: [] })
+export const emptyLearned = (): Record<FunctionId, LearnedId[]> => ({ 1: [], 2: [], 3: [], 8: [] })
 
 export function toFunctionIds(ids: number[]): FunctionId[] {
-  return ids.filter((i): i is FunctionId => i === 1 || i === 2 || i === 3)
+  return ids.filter((i): i is FunctionId => i === 1 || i === 2 || i === 3 || i === 8)
 }
 
 /** Tiny listener set shared by both backends. */

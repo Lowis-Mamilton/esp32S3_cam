@@ -1,7 +1,7 @@
 import type { Lang } from '../../i18n'
 import type { FunctionId } from '../layout/types'
 
-const ALGO: Record<FunctionId, string> = { 1: 'MXCAM_ALGO_COLOR', 2: 'MXCAM_ALGO_TAG', 3: 'MXCAM_ALGO_FACE' }
+const ALGO: Record<FunctionId, string> = { 1: 'MXCAM_ALGO_COLOR', 2: 'MXCAM_ALGO_TAG', 3: 'MXCAM_ALGO_FACE', 8: 'MXCAM_ALGO_GESTURE' }
 
 const TEXT = {
   'zh-TW': {

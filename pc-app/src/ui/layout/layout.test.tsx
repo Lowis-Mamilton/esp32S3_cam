@@ -17,6 +17,7 @@ const idleSnapshot: DeviceSnapshot = {
   system: defaultSystem(),
   dirty: false,
   lost: false,
+  previewPaused: false,
   configKnown: true,
 }
 

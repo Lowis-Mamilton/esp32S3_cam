@@ -1,5 +1,5 @@
 import { expect, test } from 'vitest'
-import { parseConfig } from './config'
+import { ConfigFileError, parseConfig } from './config'
 import { defaultParams, defaultSystem, emptyLearned } from './types'
 
 const base = () => ({ version: 1, learned: emptyLearned(), params: defaultParams(), system: defaultSystem() })
@@ -80,4 +80,36 @@ test.each(bad)('rejects out-of-range config: %s', (_name, mut) => {
 
 test('rejects non-JSON, wrong version and wrong shapes', () => {
   for (const s of ['nope', '{}', '{"version":2}', 'null', '[]']) expect(() => parseConfig(s)).toThrow(Error)
+})
+
+// ---- M8a: gesture in the config file ----
+
+test('an old file without params.gesture or learned[8] imports with gesture defaults', () => {
+  const raw = JSON.parse(JSON.stringify(base()))
+  delete raw.params.gesture
+  delete raw.learned[8]
+  const c = parseConfig(JSON.stringify(raw))
+  expect(c.params.gesture).toEqual(defaultParams().gesture)
+  expect(c.learned[8]).toEqual([])
+})
+
+test('gesture params and names round-trip; limits are enforced', () => {
+  const c = parseConfig(
+    make((c) => {
+      c.params.gesture = { handThreshold: 95, gestureThreshold: 0, maxHands: 2 }
+      c.learned[8] = [
+        { id: 1, name: 'one' },
+        { id: 9, name: '倒讚' },
+      ]
+    }),
+  )
+  expect(c.params.gesture).toEqual({ handThreshold: 95, gestureThreshold: 0, maxHands: 2 })
+  expect(c.learned[8].map((e) => e.id)).toEqual([1, 9])
+  expect(() => parseConfig(make((c) => void (c.params.gesture.maxHands = 3 as 1 | 2)))).toThrow(ConfigFileError)
+  expect(() => parseConfig(make((c) => void (c.params.gesture.maxHands = 0 as 1 | 2)))).toThrow(ConfigFileError)
+  expect(() => parseConfig(make((c) => void (c.params.gesture.handThreshold = 9)))).toThrow(ConfigFileError)
+  expect(() => parseConfig(make((c) => void (c.params.gesture.gestureThreshold = 101)))).toThrow(ConfigFileError)
+  expect(() => parseConfig(make((c) => void (c.learned[8] = [{ id: 0, name: 'x' }])))).toThrow(ConfigFileError)
+  expect(() => parseConfig(make((c) => void (c.learned[8] = [{ id: 10, name: 'x' }])))).toThrow(ConfigFileError)
+  expect(() => parseConfig(make((c) => void (c.learned[8] = [{ id: 1, name: 'a' }, { id: 1, name: 'b' }])))).toThrow(ConfigFileError)
 })

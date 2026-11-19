@@ -5,7 +5,7 @@ import { Cmd, ErrorCode, responseOf } from '../protocol/messages'
 import { DemoDevice } from './DemoDevice'
 import { RealDevice } from './RealDevice'
 import { sceneAt } from './demo/scene'
-import { NotSupportedError, type Device, type FrameSource } from './types'
+import { LearnError, NotSupportedError, emptyLearned, toFunctionIds, type Device, type FrameSource, type Result } from './types'
 import { useDevice } from './useDevice'
 
 beforeEach(() => {
@@ -61,7 +61,7 @@ test('DemoDevice starts connected with all three functions and DEMO firmware', (
   const s = d.snapshot()
   expect(s.mode).toBe('demo')
   expect(s.status).toBe('connected')
-  expect(s.supported).toEqual([1, 2, 3])
+  expect(s.supported).toEqual([1, 2, 3, 8])
   expect(s.info?.firmwareVersion).toBe('DEMO')
   expect(s.dirty).toBe(false)
   d.dispose()
@@ -202,7 +202,7 @@ test('useDevice: demo toggle persists, disposes the old device, and demo -> real
   expect(batches.length).toBeGreaterThanOrEqual(2)
   expect(batches.some((b) => b.length > 0)).toBe(true)
   expect(batches.every((b) => (b as { kind: string }[]).every((r) => r.kind === 'color'))).toBe(true)
-  expect(result.current.snapshot.learned).toEqual({ 1: [], 2: [], 3: [] })
+  expect(result.current.snapshot.learned).toEqual({ 1: [], 2: [], 3: [], 8: [] })
   expect(result.current.snapshot.dirty).toBe(false)
   expect(result.current.snapshot.status).toBe('connected')
 })
@@ -326,4 +326,60 @@ test('DemoDevice.setName: no-ops do not dirty; ids and names are validated', asy
   await d.setName(2, 586, 'edge')
   expect(d.snapshot().dirty).toBe(false)
   d.dispose()
+})
+
+// ---- M8a: gesture in the demo device ----
+
+test('demo learn on gesture is rejected', async () => {
+  const d = new DemoDevice(() => 0)
+  await d.setFunction(8)
+  await expect(d.learnColor({ x: 0, y: 0, width: 320, height: 240 })).rejects.toBeInstanceOf(LearnError)
+  d.dispose()
+})
+
+test('demo names gesture ids 1-9 only, and supports function 8', async () => {
+  const d = new DemoDevice(() => 0)
+  expect(d.snapshot().supported).toEqual([1, 2, 3, 8])
+  await d.setName(8, 6, '前進')
+  expect(d.snapshot().learned[8]).toEqual([{ id: 6, name: '前進' }])
+  await expect(d.setName(8, 0, 'x')).rejects.toThrow()
+  await expect(d.setName(8, 10, 'x')).rejects.toThrow()
+  d.dispose()
+})
+
+test('demo emits gesture results while function 8 is active, and pausing the preview stops frames only', async () => {
+  vi.useFakeTimers()
+  const d = new DemoDevice(() => 0)
+  const frames = vi.fn()
+  const results = vi.fn()
+  d.onFrame(frames)
+  d.onResults(results)
+  await d.setFunction(8)
+  vi.advanceTimersByTime(500)
+  expect(results).toHaveBeenCalled()
+  expect(results.mock.calls.every(([r]) => (r as Result[]).every((x) => x.kind === 'gesture'))).toBe(true)
+  expect(frames).toHaveBeenCalled()
+  await d.setPreviewPaused(true)
+  expect(d.snapshot().previewPaused).toBe(true)
+  frames.mockClear()
+  results.mockClear()
+  vi.advanceTimersByTime(500)
+  expect(frames).not.toHaveBeenCalled()
+  expect(results).toHaveBeenCalled()
+  await d.setPreviewPaused(false)
+  vi.advanceTimersByTime(300)
+  expect(frames).toHaveBeenCalled()
+  d.dispose()
+})
+
+test('demo gesture params are clamped like the firmware', async () => {
+  const d = new DemoDevice(() => 0)
+  await d.setParams({ gesture: { handThreshold: 5, gestureThreshold: 150, maxHands: 3 as 1 | 2 } })
+  expect(d.snapshot().params.gesture).toEqual({ handThreshold: 10, gestureThreshold: 100, maxHands: 2 })
+  d.dispose()
+})
+
+test('emptyLearned has function 8 and toFunctionIds keeps 8', () => {
+  expect(Object.keys(emptyLearned()).sort()).toEqual(['1', '2', '3', '8'])
+  expect(toFunctionIds([1, 4, 8, 9])).toEqual([1, 8])
 })

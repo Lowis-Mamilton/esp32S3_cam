@@ -383,6 +383,21 @@ export class MxcamConnection {
     }, STATS_INTERVAL_MS)
   }
 
+  /** Pause/resume the FRAME push only (STREAM_START bit0); RESULTS and the other parameters stay. Needs a running stream. */
+  async setFrames(frames: boolean): Promise<void> {
+    const prev = this.streamPayload
+    if (!this.streaming || !prev) throw new Error('not streaming')
+    const next = new Uint8Array(prev)
+    next[0] = frames ? next[0] | 1 : next[0] & ~1
+    this.streamPayload = next // also what the watchdog resends
+    try {
+      await this.request(Cmd.StreamStart, next)
+    } catch (e) {
+      if (this.streamPayload === next) this.streamPayload = prev
+      throw e
+    }
+  }
+
   private resendStreamStart() {
     if (!this.streaming || !this.streamPayload || !this.session) return
     this.request(Cmd.StreamStart, this.streamPayload).catch(() => {})

@@ -1,4 +1,4 @@
-import { NAME_MAX_BYTES, emptyLearned, nameBytes, type FunctionId, type FunctionParams, type LearnedId, type SystemConfig } from './types'
+import { NAME_MAX_BYTES, defaultParams, emptyLearned, nameBytes, type FunctionId, type FunctionParams, type LearnedId, type SystemConfig } from './types'
 
 /** Versioned device configuration, as exported/imported by Studio. */
 export interface Config {
@@ -8,6 +8,7 @@ export interface Config {
 }
 
 const FNS: FunctionId[] = [1, 2, 3]
+const MAX_GESTURE_ID = 9
 const MAX_TAG_ID = 586 // tag36h11 has 587 codes
 
 const isObj = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v)
@@ -37,8 +38,8 @@ function parseLearned(fn: FunctionId, list: unknown): LearnedId[] {
   const seen = new Set<number>()
   return list.map((e: unknown): LearnedId => {
     if (!isObj(e) || typeof e.name !== 'string' || nameBytes(e.name) > NAME_MAX_BYTES) return bad(`learned.${fn} entry`)
-    // color: 1-7, tag: 0-586, face: 1-7 (same slots as colour)
-    const ok = fn === 2 ? isInt(e.id, 0, MAX_TAG_ID) : isInt(e.id, 1, 7)
+    // color: 1-7, tag: 0-586, face: 1-7 (same slots as colour), gesture: 1-9
+    const ok = fn === 2 ? isInt(e.id, 0, MAX_TAG_ID) : fn === 8 ? isInt(e.id, 1, MAX_GESTURE_ID) : isInt(e.id, 1, 7)
     if (!ok) return bad(`learned.${fn} id`)
     const id = e.id as number
     if (seen.has(id)) return bad(`learned.${fn} duplicate id`)
@@ -63,12 +64,20 @@ export function parseConfig(json: string): Config {
   if (!isObj(learned)) return bad('learned')
   const out = emptyLearned()
   for (const fn of FNS) out[fn] = parseLearned(fn, learned[fn])
+  if (learned[8] !== undefined) out[8] = parseLearned(8, learned[8]) // optional: files from before M8a have none
   if (!isObj(params) || !isObj(params.color) || !isObj(params.tag) || !isObj(params.face)) return bad('params')
   const { color: c, tag: t, face: f } = params
   if (!inRange(c.tolerance, 0, 100) || !isInt(c.minArea, 0) || !isInt(c.maxResults, 1, 8) || !isBool(c.showNames))
     return bad('params.color')
   if (!isBool(t.showNames)) return bad('params.tag')
   if (!inRange(f.threshold, 0, 100) || !isInt(f.maxResults, 1, 8)) return bad('params.face')
+  let gesture = defaultParams().gesture // optional: files from before M8a have none
+  if (params.gesture !== undefined) {
+    const g = params.gesture
+    if (!isObj(g) || !isInt(g.handThreshold, 10, 95) || !isInt(g.gestureThreshold, 0, 100) || (g.maxHands !== 1 && g.maxHands !== 2))
+      return bad('params.gesture')
+    gesture = { handThreshold: g.handThreshold, gestureThreshold: g.gestureThreshold, maxHands: g.maxHands }
+  }
   if (!isObj(system)) return bad('system')
   const { uartBaud, i2cAddress, ledBrightness } = system
   if ((uartBaud !== 115200 && uartBaud !== 9600) || !isValidI2cAddress(i2cAddress) || !inRange(ledBrightness, 0, 100))
@@ -79,6 +88,7 @@ export function parseConfig(json: string): Config {
       color: { tolerance: c.tolerance, minArea: c.minArea, maxResults: c.maxResults, showNames: c.showNames },
       tag: { showNames: t.showNames },
       face: { threshold: f.threshold, maxResults: f.maxResults },
+      gesture,
     },
     system: { uartBaud, i2cAddress, ledBrightness },
   }

@@ -3,10 +3,14 @@ import {
   ErrorCode,
   encodeConfig,
   encodeForget,
+  encodeFuncConfig,
+  encodeGetFuncConfig,
   encodeLearn,
   encodeSetName,
   parseConfig as parseWireConfig,
+  parseFuncConfig,
   parseLearned,
+  FunctionId as WireFn,
   type DeviceConfig,
   type ResultRecord,
   type ResultsPush,
@@ -54,7 +58,8 @@ const REFRESH_RETRY_MS = 500
 const REFRESH_RETRIES = 3
 /** Face detection has nothing learned or named, so it is never asked (GET_LEARNED is for colour and tag). */
 const hasLearned = (fn: FunctionId) => fn !== 3
-const KIND: Record<FunctionId, Result['kind']> = { 1: 'color', 2: 'tag', 3: 'face' }
+const KIND: Record<FunctionId, Result['kind']> = { 1: 'color', 2: 'tag', 3: 'face', 8: 'gesture' }
+const GESTURE: FunctionId = 8
 const ERROR_NAME: Record<number, string> = {
   [ErrorCode.UnknownCmd]: 'UNKNOWN_CMD',
   [ErrorCode.BadLength]: 'BAD_LENGTH',
@@ -65,7 +70,7 @@ const ERROR_NAME: Record<number, string> = {
   [ErrorCode.Full]: 'FULL',
 }
 
-const isFn = (n: number): n is FunctionId => n === 1 || n === 2 || n === 3
+const isFn = (n: number): n is FunctionId => n === 1 || n === 2 || n === 3 || n === 8
 const isUnsupported = (e: unknown) =>
   e instanceof MxcamError && (e.code === ErrorCode.UnknownCmd || e.code === ErrorCode.NotSupported)
 const clampInt = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, Math.round(v)))
@@ -81,8 +86,9 @@ async function retryOnTimeout<T>(op: () => Promise<T>): Promise<T> {
   }
 }
 
-function toParams(c: DeviceConfig): FunctionParams {
+function toParams(c: DeviceConfig, gesture: FunctionParams['gesture'] = defaultParams().gesture): FunctionParams {
   return {
+    gesture,
     color: { tolerance: c.tolerance, minArea: c.minArea, maxResults: c.colorMaxResults, showNames: c.colorShowNames },
     tag: { showNames: c.tagShowNames },
     face: { threshold: c.faceThreshold, maxResults: c.faceMaxResults },
@@ -91,6 +97,15 @@ function toParams(c: DeviceConfig): FunctionParams {
 function toSystem(c: DeviceConfig): SystemConfig {
   return { uartBaud: c.uartBaud === 9600 ? 9600 : 115200, i2cAddress: c.i2cAddress, ledBrightness: c.ledBrightness }
 }
+/** Same limits as the firmware's clamp (protocol.md section 10), so a value cannot wrap in its u8 field. */
+const clampGesture = (g: FunctionParams['gesture']): FunctionParams['gesture'] => ({
+  handThreshold: clampInt(g.handThreshold, 10, 95),
+  gestureThreshold: clampInt(g.gestureThreshold, 0, 100),
+  maxHands: clampInt(g.maxHands, 1, 2) as 1 | 2,
+})
+const sameGesture = (a: FunctionParams['gesture'], b: FunctionParams['gesture']) =>
+  a.handThreshold === b.handThreshold && a.gestureThreshold === b.gestureThreshold && a.maxHands === b.maxHands
+
 /** Full Config v1 from Studio's view; values are clamped so they cannot wrap in the u8/u16 fields. */
 function toWire(base: DeviceConfig, p: FunctionParams, s: SystemConfig): DeviceConfig {
   return {
@@ -139,6 +154,11 @@ export class RealDevice implements Device {
   private config: DeviceConfig | null = null
   /** false once the firmware answered GET_CONFIG with UNKNOWN_CMD / NOT_SUPPORTED. */
   private configSupported = true
+  /** Gesture config (function 8, GET_FUNC_CONFIG); null until read. */
+  private gestureCfg: FunctionParams['gesture'] | null = null
+  /** Functions the firmware lists but cannot configure (func config unknown): treated as not supported. */
+  private readonly dropped = new Set<FunctionId>()
+  private previewPaused = false
   private learned = emptyLearned()
   private active: FunctionId | 0 = 0
   /** Function changes by others are only detected once Studio has set the function itself in this session. */
@@ -195,6 +215,9 @@ export class RealDevice implements Device {
   private reset() {
     this.config = null
     this.configSupported = true
+    this.gestureCfg = null
+    this.dropped.clear()
+    this.previewPaused = false
     this.learned = emptyLearned()
     this.active = 0
     this.ownFnSet = false
@@ -221,11 +244,12 @@ export class RealDevice implements Device {
       supported: this.supportedFns(),
       activeFunction: this.active,
       learned: this.learned,
-      params: c ? toParams(c) : defaultParams(),
+      params: c ? toParams(c, this.gestureCfg ?? undefined) : { ...defaultParams(), gesture: this.gestureCfg ?? defaultParams().gesture },
       system: c ? toSystem(c) : defaultSystem(),
       dirty: c?.dirty ?? false,
       lost: this.lost,
       configKnown: c !== null,
+      previewPaused: this.previewPaused,
     })
   }
 
@@ -256,7 +280,7 @@ export class RealDevice implements Device {
   // ---- protocol helpers ----
 
   private supportedFns(): FunctionId[] {
-    return toFunctionIds(this.info?.functionIds ?? [])
+    return toFunctionIds(this.info?.functionIds ?? []).filter((f) => !this.dropped.has(f))
   }
   private ensureConnected() {
     if (this.status !== 'connected') throw new NotConnectedError()
@@ -295,6 +319,21 @@ export class RealDevice implements Device {
     }
   }
 
+  /** GET_FUNC_CONFIG 8; a firmware that cannot answer drops gesture from `supported` instead of failing the connect. */
+  private async loadGestureConfig(retry = false) {
+    try {
+      const get = () => this.call(Cmd.GetFuncConfig, encodeGetFuncConfig(WireFn.Gesture))
+      const c = parseFuncConfig((await (retry ? retryOnTimeout(get) : get())).payload)
+      if (c.functionId !== WireFn.Gesture) throw new DeviceOpError('failed', 'GET_FUNC_CONFIG answered another function')
+      this.gestureCfg = clampGesture(c.gesture as FunctionParams['gesture'])
+    } catch (e) {
+      if (!(e instanceof NotSupportedError)) throw e
+      console.warn('MXCam: firmware lists gesture but has no GET_FUNC_CONFIG; gesture is disabled')
+      this.dropped.add(GESTURE)
+      this.gestureCfg = null
+    }
+  }
+
   private async loadLearned(fn: FunctionId, retry = false) {
     let list: LearnedId[] = []
     try {
@@ -314,6 +353,7 @@ export class RealDevice implements Device {
   /** Runs during connect (status 'connecting'): GET_CONFIG, then GET_LEARNED per supported function. A lost reply is retried once. */
   private async loadAll() {
     await this.loadConfig(true)
+    if (this.supportedFns().includes(GESTURE)) await this.loadGestureConfig(true)
     for (const fn of this.supportedFns()) if (hasLearned(fn)) await this.loadLearned(fn, true)
     this.changed()
   }
@@ -322,6 +362,7 @@ export class RealDevice implements Device {
   private async refresh(fns: FunctionId[]) {
     for (const fn of fns) if (this.supportedFns().includes(fn) && hasLearned(fn)) await this.loadLearned(fn)
     if (this.configSupported) await this.loadConfig()
+    if (this.supportedFns().includes(GESTURE)) await this.loadGestureConfig()
     this.changed()
   }
 
@@ -380,6 +421,14 @@ export class RealDevice implements Device {
       this.fnInFlight = Math.max(0, this.fnInFlight - 1)
       this.quietUntil = Math.max(this.quietUntil, this.now() + OWN_SWITCH_QUIET_MS)
     }
+    this.changed()
+  }
+
+  async setPreviewPaused(paused: boolean): Promise<void> {
+    this.ensureConnected()
+    if (paused === this.previewPaused) return
+    await this.conn.setFrames(!paused) // STREAM_START with flags 0x02 (results only) / 0x03; max_fps and quality are kept
+    this.previewPaused = paused
     this.changed()
   }
 
@@ -444,6 +493,20 @@ export class RealDevice implements Device {
     this.changed()
   }
 
+  /** SET_FUNC_CONFIG 8; the device answers with what it applied (clamped). A real change marks the config dirty, like the firmware. */
+  private async applyGesture(want: FunctionParams['gesture']) {
+    const next = clampGesture(want)
+    const old = this.gestureCfg ?? defaultParams().gesture
+    if (this.gestureCfg && sameGesture(old, next)) return
+    const reply = parseFuncConfig(
+      (await this.call(Cmd.SetFuncConfig, encodeFuncConfig({ functionId: WireFn.Gesture, gesture: next }))).payload,
+    )
+    if (reply.functionId !== WireFn.Gesture) throw new DeviceOpError('failed', 'SET_FUNC_CONFIG answered another function')
+    this.gestureCfg = clampGesture(reply.gesture as FunctionParams['gesture'])
+    if (this.config && !sameGesture(old, this.gestureCfg)) this.config = { ...this.config, dirty: true }
+    this.changed()
+  }
+
   private queued<T>(op: () => Promise<T>): Promise<T> {
     const run = this.configQueue.then(op, op)
     this.configQueue = run.catch(() => {})
@@ -454,9 +517,11 @@ export class RealDevice implements Device {
     return this.queued(async () => {
       this.ensureConnected()
       const cur = this.requireConfig()
-      const old = toParams(cur)
-      const params = { color: { ...old.color, ...p.color }, tag: { ...old.tag, ...p.tag }, face: { ...old.face, ...p.face } }
+      if (p.gesture) this.requireFn(GESTURE)
+      const old = toParams(cur, this.gestureCfg ?? undefined)
+      const params = { color: { ...old.color, ...p.color }, tag: { ...old.tag, ...p.tag }, face: { ...old.face, ...p.face }, gesture: old.gesture }
       await this.applyConfig(toWire(cur, params, toSystem(cur)))
+      if (p.gesture) await this.applyGesture({ ...old.gesture, ...p.gesture })
     })
   }
 
@@ -464,7 +529,7 @@ export class RealDevice implements Device {
     return this.queued(async () => {
       this.ensureConnected()
       const cur = this.requireConfig()
-      await this.applyConfig(toWire(cur, toParams(cur), { ...toSystem(cur), ...c }))
+      await this.applyConfig(toWire(cur, toParams(cur, this.gestureCfg ?? undefined), { ...toSystem(cur), ...c }))
     })
   }
 
@@ -487,7 +552,7 @@ export class RealDevice implements Device {
   exportConfig(): string {
     this.ensureConnected()
     const c = this.requireConfig()
-    return JSON.stringify({ version: 1, learned: this.learned, params: toParams(c), system: toSystem(c) })
+    return JSON.stringify({ version: 1, learned: this.learned, params: toParams(c, this.gestureCfg ?? undefined), system: toSystem(c) })
   }
 
   /**
@@ -506,6 +571,7 @@ export class RealDevice implements Device {
     // Check the shared name table first, so a file that cannot fit never wipes the tag names.
     if (this.namesAfterImport(file, fns) > NAME_TABLE_SIZE) throw new DeviceOpError('names-full', 'name table full')
     await this.applyConfig(toWire(cur, file.params, file.system))
+    if (fns.includes(GESTURE)) await this.applyGesture(file.params.gesture)
     let colorsNeedRelearn = false
     if (fns.includes(1)) {
       for (const e of file.learned[1]) {
@@ -523,6 +589,11 @@ export class RealDevice implements Device {
       await this.call(Cmd.Forget, encodeForget(2, FORGET_ALL))
       for (const e of file.learned[2]) if (e.name) await this.sendName(2, e.id, e.name)
     }
+    // Old files have no gesture names, so an empty list leaves the board's names alone.
+    if (fns.includes(GESTURE) && file.learned[8].length > 0) {
+      await this.call(Cmd.Forget, encodeForget(GESTURE, FORGET_ALL))
+      for (const e of file.learned[8]) if (e.name) await this.sendName(GESTURE, e.id, e.name)
+    }
     await this.refreshAfter(fns)
     return { colorsNeedRelearn }
   }
@@ -536,7 +607,8 @@ export class RealDevice implements Device {
       return (same && e ? e.name : b.name) !== ''
     }).length
     const tags = (fns.includes(2) ? file.learned[2] : this.learned[2]).filter((e) => e.name !== '').length
-    return colours + tags
+    const gestures = (fns.includes(GESTURE) ? (file.learned[8].length > 0 ? file.learned[8] : this.learned[8]) : []).filter((e) => e.name !== '').length
+    return colours + tags + gestures
   }
 
   dispose() {

@@ -1,5 +1,6 @@
 import { expect, test } from 'vitest'
-import { defaultParams, type LearnedId } from '../types'
+import { defaultParams, type FunctionParams, type LearnedId } from '../types'
+import { gestureSceneAt, recognizeGestures, type DemoHand } from './gesture'
 import { DemoLearnError, colorAt, matchLearned, recognize } from './recognize'
 import { sceneAt, type SceneObject } from './scene'
 
@@ -160,4 +161,55 @@ test('demo blobs still sometimes leave the frame', () => {
   let out = 0
   for (let t = 0; t < 40000; t += 50) if (sceneAt(t).some((o) => o.kind === 'blob' && (o.x - o.r < 0 || o.x + o.r > 320))) out++
   expect(out).toBeGreaterThan(0)
+})
+
+// ---- M8a: gesture demo scene ----
+
+const hand = (o: Partial<DemoHand>): DemoHand => ({ x: 100, y: 100, size: 80, gesture: 6, handScore: 90, gestureScore: 90, ...o })
+const gp = (o: Partial<FunctionParams['gesture']> = {}): FunctionParams['gesture'] => ({ ...defaultParams().gesture, ...o })
+
+test('gestureSceneAt cycles all gestures', () => {
+  const seen = new Set<number>()
+  for (let t = 100; t <= 15100; t += 1500) for (const h of gestureSceneAt(t)) seen.add(h.gesture)
+  expect([...seen].sort((a, b) => a - b)).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8, 9])
+})
+
+test('gestureSceneAt is deterministic, stays inside the frame, and shows a second hand part of the time', () => {
+  expect(gestureSceneAt(4321)).toEqual(gestureSceneAt(4321))
+  let one = 0
+  let two = 0
+  for (let t = 0; t < 24000; t += 100) {
+    const hs = gestureSceneAt(t)
+    if (hs.length === 1) one++
+    else if (hs.length === 2) two++
+    else throw new Error(`${hs.length} hands`)
+    for (const h of hs) {
+      expect(h.x - h.size / 2).toBeGreaterThanOrEqual(0)
+      expect(h.x + h.size / 2).toBeLessThanOrEqual(320)
+      expect(h.y - h.size / 2).toBeGreaterThanOrEqual(0)
+      expect(h.y + h.size / 2).toBeLessThanOrEqual(240)
+    }
+  }
+  expect(one).toBeGreaterThan(0)
+  expect(two).toBeGreaterThan(0)
+})
+
+test('recognizeGestures applies thresholds', () => {
+  const hands = [
+    hand({ x: 50, handScore: 30 }), // below hand threshold: gone
+    hand({ x: 200, handScore: 77, gestureScore: 50 }), // below gesture threshold: id 0, confidence = handScore
+    hand({ x: 250, gesture: 7, handScore: 90, gestureScore: 88 }),
+  ]
+  const out = recognizeGestures(hands, gp({ handThreshold: 40, gestureThreshold: 60, maxHands: 2 }))
+  expect(out).toEqual([
+    { id: 7, kind: 'gesture', x: 250, y: 100, width: 80, height: 80, confidence: 88 },
+    { id: 0, kind: 'gesture', x: 200, y: 100, width: 80, height: 80, confidence: 77 },
+  ])
+  expect(recognizeGestures(hands, gp({ handThreshold: 95 }))).toEqual([])
+})
+
+test('recognizeGestures keeps maxHands by hand score', () => {
+  const hands = [hand({ x: 50, handScore: 60 }), hand({ x: 150, handScore: 95 }), hand({ x: 250, handScore: 80 })]
+  expect(recognizeGestures(hands, gp({ maxHands: 1 })).map((r) => r.x)).toEqual([150])
+  expect(recognizeGestures(hands, gp({ maxHands: 2 })).map((r) => r.x)).toEqual([150, 250])
 })

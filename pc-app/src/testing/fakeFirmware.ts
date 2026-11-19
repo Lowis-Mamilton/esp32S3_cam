@@ -2,6 +2,16 @@
 import { Decoder, encodeFrame, type Frame } from '../protocol/codec'
 import { Cmd, ErrorCode, encodeConfig, parseConfig, responseOf, type DeviceConfig } from '../protocol/messages'
 
+/** Gesture config v1 values (docs/protocol.md section 10). */
+export interface FakeGestureConfig {
+  handThreshold: number
+  gestureThreshold: number
+  maxHands: number
+}
+export const DEFAULT_GESTURE: FakeGestureConfig = { handThreshold: 40, gestureThreshold: 60, maxHands: 1 }
+const GESTURE_FN = 8
+const clampN = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v))
+
 export const DEFAULT_CONFIG: DeviceConfig = {
   tolerance: 30,
   minArea: 100,
@@ -77,6 +87,10 @@ export class FakeFirmware {
   functionIds = [1, 2]
   active = 0
   config: DeviceConfig = { ...DEFAULT_CONFIG }
+  /** Gesture config v1 (function 8; GET/SET_FUNC_CONFIG). Add 8 to functionIds to enable it. */
+  gesture: FakeGestureConfig = { ...DEFAULT_GESTURE }
+  /** flags byte of the last STREAM_START (bit0 FRAME, bit1 RESULTS); pushFrame sends nothing when bit0 is 0, like the firmware. */
+  streamFlags = 0
   colors: { id: number; rgb: [number, number, number] }[] = []
   /** key `${fn}:${id}` */
   names = new Map<string, string>()
@@ -148,6 +162,7 @@ export class FakeFirmware {
   }
 
   pushFrame(frameId: number) {
+    if ((this.streamFlags & 1) === 0) return
     const p = new Uint8Array(12 + 4)
     const v = new DataView(p.buffer)
     v.setUint32(0, frameId, true)
@@ -225,10 +240,29 @@ export class FakeFirmware {
     switch (f.cmd) {
       case Cmd.GetInfo:
         return this.reply(f, infoPayload(this.functionIds))
-      case Cmd.Ping:
       case Cmd.StreamStart:
+        this.streamFlags = p[0] ?? 0
+        return this.reply(f, new Uint8Array(0))
+      case Cmd.Ping:
       case Cmd.StreamStop:
         return this.reply(f, new Uint8Array(0))
+      case Cmd.GetFuncConfig:
+        if (p.length !== 1) return this.reply(f, { error: ErrorCode.BadLength })
+        if (!this.hasFuncConfig(p[0])) return this.reply(f, { error: ErrorCode.BadParam })
+        return this.reply(f, this.gesturePayload())
+      case Cmd.SetFuncConfig: {
+        if (p.length !== 10) return this.reply(f, { error: ErrorCode.BadLength })
+        if (!this.hasFuncConfig(p[0]) || p[1] !== 1) return this.reply(f, { error: ErrorCode.BadParam })
+        const g = this.gesture
+        const next = {
+          handThreshold: clampN(p[2], 10, 95),
+          gestureThreshold: Math.min(100, p[3]),
+          maxHands: clampN(p[4], 1, 2),
+        }
+        if (JSON.stringify(next) !== JSON.stringify(g)) this.config.dirty = true
+        this.gesture = next
+        return this.reply(f, this.gesturePayload())
+      }
       case Cmd.SetFunction:
         if (this.failSetFunction > 0) {
           this.failSetFunction--
@@ -261,7 +295,8 @@ export class FakeFirmware {
         return this.reply(f, this.configPayload())
       }
       case Cmd.GetLearned:
-        if (p[0] !== 1 && p[0] !== 2) return this.reply(f, { error: ErrorCode.BadParam })
+        if (p[0] !== 1 && p[0] !== 2 && !(p[0] === GESTURE_FN && this.functionIds.includes(GESTURE_FN)))
+          return this.reply(f, { error: ErrorCode.BadParam })
         return this.reply(f, this.learnedPayload(p[0]))
       case Cmd.Learn: {
         // like the firmware: only the colour function learns, and only while it is the active one
@@ -289,7 +324,7 @@ export class FakeFirmware {
         const fn = p[0]
         const id = v.getUint16(1, true)
         // face (3) has nothing to forget: answers OK like firmware (protocol.md 0x31)
-        if (fn !== 1 && fn !== 2 && fn !== 3) return this.reply(f, { error: ErrorCode.BadParam })
+        if (fn !== 1 && fn !== 2 && fn !== 3 && !this.hasGestureNames(fn)) return this.reply(f, { error: ErrorCode.BadParam })
         const before = this.colors.length + this.names.size // like firmware: dirty only if something was removed
         if (fn === 1) this.colors = id === 0xffff ? [] : this.colors.filter((c) => c.id !== id)
         for (const k of [...this.names.keys()]) if (k.startsWith(`${fn}:`) && (id === 0xffff || k === `${fn}:${id}`)) this.names.delete(k)
@@ -300,7 +335,8 @@ export class FakeFirmware {
         const fn = p[0]
         const id = v.getUint16(1, true)
         const name = new TextDecoder().decode(p.subarray(4, 4 + p[3]))
-        if (fn !== 1 && fn !== 2) return this.reply(f, { error: ErrorCode.BadParam }) // face has no names
+        if (fn !== 1 && fn !== 2 && !this.hasGestureNames(fn)) return this.reply(f, { error: ErrorCode.BadParam }) // face has no names
+        if (fn === GESTURE_FN && (id < 1 || id > 9)) return this.reply(f, { error: ErrorCode.BadParam }) // 9 fixed gestures
         if (fn === 1 && !this.colors.some((c) => c.id === id)) return this.reply(f, { error: ErrorCode.BadParam })
         if (name === '') this.names.delete(`${fn}:${id}`)
         else {
@@ -319,6 +355,7 @@ export class FakeFirmware {
       case Cmd.FactoryReset:
         setTimeout(() => {
           this.config = { ...DEFAULT_CONFIG }
+          this.gesture = { ...DEFAULT_GESTURE }
           this.colors = []
           this.names.clear()
           this.reply(f, new Uint8Array(0))
@@ -327,6 +364,17 @@ export class FakeFirmware {
       default:
         return this.reply(f, { error: ErrorCode.UnknownCmd })
     }
+  }
+
+  private hasFuncConfig(fn: number): boolean {
+    return fn === GESTURE_FN && this.functionIds.includes(GESTURE_FN)
+  }
+  private hasGestureNames(fn: number): boolean {
+    return fn === GESTURE_FN && this.functionIds.includes(GESTURE_FN)
+  }
+  private gesturePayload(): Uint8Array {
+    const g = this.gesture
+    return new Uint8Array([GESTURE_FN, 1, g.handThreshold, g.gestureThreshold, g.maxHands, 0, 0, 0, 0, 0])
   }
 
   private configPayload(): Uint8Array {
