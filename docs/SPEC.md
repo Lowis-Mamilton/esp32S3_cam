@@ -124,7 +124,7 @@ USB、UART、I2C 三種傳輸用同一套封包。
 
 ### 辨識結果
 
-- 共同欄位：`id`、`x`、`y`（中心）、`width`、`height`、`confidence`；座標以 **320×240** 為準
+- 共同欄位：`id`、`x`、`y`（中心）、`width`、`height`、`confidence`（255 = 不適用）；座標以 **320×240** 為準
 - AprilTag 另帶：旋轉角度、四個角座標
 - 一次最多 **8 筆**，依面積或信心度排序
 
@@ -138,13 +138,13 @@ USB、UART、I2C 三種傳輸用同一套封包。
 ### 6.1 韌體 `firmware/`
 
 - ESP-IDF v5.x（見 ADR-0002）
-- 鏡頭用 `esp32-camera` 元件，人臉偵測用 `esp-dl` / `esp-who`，螢幕用 `esp_lcd`（ILI9341）
+- 鏡頭用 `esp32-camera` 元件，人臉偵測用 `espressif/human_face_detect`（esp-dl），螢幕用 `esp_lcd`（ILI9341）
 - 設定與學習資料存在 NVS
 - USB 連線先用 USB-Serial-JTAG（網頁燒錄最省事），在 M1 實測頻寬；不夠再改用 TinyUSB CDC
 - 鏡頭輸出 **RGB565**（辨識和螢幕直接用）；傳給網頁時才用軟體壓 JPEG，預覽上限每秒 10 張，M1 實測約 6 張（目標 ≥ 5，見 `docs/measurements/m1.md`），把 CPU 留給辨識
 - 效能設定：CPU 240 MHz、PSRAM 80 MHz、flash QIO 80 MHz（M1 起固定，作為量測基準）
-- 人臉模型放在 app 的 flash rodata（不改分割表），映像檔約 2.1 MiB（4 MB factory 分割區剩 47%）；開機時在其他 task 啟動前載入（約 80 ms、PSRAM 約 425 KB），失敗時功能 3 不列在 GET_INFO
-- 人臉偵測每張 44–62 ms（0–1 張臉，M3 Task 2 實測），**每張畫面都偵測**（不降頻）：TFT 不串流時 10–11 fps、Studio 串流時 7 fps，都高於 ≥ 5 fps 的目標（降頻的門檻：不串流時 TFT < 7 fps 才改成每 2 張偵測一次，`pipeline.c` 的 `FACE_EVERY`）
+- 人臉模型放在 app 的 flash rodata（不改分割表），映像檔約 2.1 MiB（4 MB factory 分割區剩 47%）；開機時在其他 task 啟動前載入（約 80 ms、PSRAM 約 425 KB），失敗時功能 3 不列在 GET_INFO（見 ADR-0011）
+- 人臉偵測無串流 44–58 ms（0–2 張臉），串流時最多約 62 ms（M3 實測），**每張畫面都偵測**（不降頻）：TFT 不串流時 10–11 fps、Studio 串流時 7 fps，都高於 ≥ 5 fps 的目標（降頻的門檻：不串流時 TFT < 7 fps 才改成每 2 張偵測一次，`pipeline.c` 的 `FACE_EVERY`）
 
 ### 6.2 電腦軟體 `pc-app/`：MXCam Studio
 
@@ -172,7 +172,7 @@ cam.setAlgorithm(MXCAM_ALGO_COLOR);
 if (cam.request()) {
   while (cam.available()) {
     MXCamResult r = cam.read();
-    // r.id, r.x, r.y, r.width, r.height
+    // r.id, r.x, r.y, r.width, r.height, r.confidence（255 = 此功能不適用）
   }
 }
 ```
@@ -233,7 +233,15 @@ docs/          規格、協定、ADR
 - [x] 協定 C 程式碼的位置（ADR-0006）
 - [ ] M4：Arduino 函式庫的發佈方式（把 `arduino-lib/` 打包成 release ZIP）
 - [ ] M4 開工前（M2 總審查建議）：service/link 改成與傳輸介面無關（`mxs_handle` 帶傳輸別、各傳輸自己的解碼器／outbox／回應路徑、state mutex 移出 USB 元件；UART/I2C 上 STREAM_START 回 NOT_SUPPORTED；R4 輪詢不能讓 USB 串流維持或點亮連線圖示）；Arduino 函式庫需要的 C 端 GET_LEARNED／FORGET 解析；outbox 以 seq 確認；AprilTag 信心度改用 decision_margin 縮放；顯示器故障時辨識仍可運作（R4 無螢幕使用）
-- [x] M3：人臉不支援取名（無身分辨識）；模型放 flash rodata（映像 2.13 MiB）、PSRAM 約 425 KB；每張 44–58 ms，每張都偵測，TFT 10–11 fps（`docs/measurements/m3.md`）
+- [x] M3：人臉不支援取名（無身分辨識）；模型放 flash rodata（映像 2.13 MiB）、PSRAM 約 425 KB；無串流 44–58 ms（0–2 張臉），串流時最多約 62 ms，每張都偵測，TFT 10–11 fps（`docs/measurements/m3.md`）
+- [ ] M4（M3 總審查建議）：
+  - 辨識不再需要螢幕時，`mxf_init` 的條件改成只看鏡頭，並仍須放在建立 task 之前
+  - 內部 RAM 預算：最低剩餘約 105 KB（底線 60 KB）；esp-dl 即使不用人臉也靜態佔約 24 KB，留給 UART／I2C 的餘裕約 45 KB；重新檢查 `mxf_detect` 的 heap guard（32 KB／256 KB）餘裕
+  - Arduino `MXCamResult` 要加 `confidence`、`width`、`height` 欄位，與 Studio 的程式範例一致
+  - heap guard 跳過偵測時要回報為「跳過」，不可快取或推送成「0 張臉」（也不計入 face_ms）
+  - Studio 的「需要更新韌體」分不出舊韌體與人臉初始化失敗（改用韌體版本判斷）
+  - store 的 `name_key_ok` 接受人臉的 key：要拒絕，或讓 FORGET 3 清掉人臉名字
+  - `FACE_EVERY` > 1 的路徑未測試（不會用到就刪掉，要用就補測試）
 - [x] M2 開工前（M1 總審查建議）——已在 M2 處理：
   - `mxcam_link` 改成非阻塞的推送佇列（`mxcam_link_push`），推送序號集中在 link；RESULTS 不可以讓 TFT 卡住
   - 需要 pipeline 資料才能回答的指令（例如 LEARN）：先決定用 BUSY＋輪詢，還是延後回應

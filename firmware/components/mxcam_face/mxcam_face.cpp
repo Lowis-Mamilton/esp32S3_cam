@@ -41,7 +41,7 @@ static int s_stage2_thr = -1; /* threshold (0..100) last applied to stage 2 */
 /* Stage 2 (MNP) score threshold, slightly below the user threshold so the
  * rounding in mxf_confidence (pure C, host-tested) is the only filter that
  * decides. Stage 1 (MSR) keeps its default 0.5: it only proposes candidates,
- * and lowering it multiplies the stage-2 runs (~7 ms each). */
+ * and lowering it multiplies the stage-2 runs (~5 ms each, measured). */
 static void apply_threshold(uint8_t threshold)
 {
     if (s_stage2_thr == threshold) return;

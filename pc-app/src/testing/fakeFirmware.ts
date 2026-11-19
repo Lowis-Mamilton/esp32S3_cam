@@ -290,9 +290,10 @@ export class FakeFirmware {
         const id = v.getUint16(1, true)
         // face (3) has nothing to forget: answers OK like firmware (protocol.md 0x31)
         if (fn !== 1 && fn !== 2 && fn !== 3) return this.reply(f, { error: ErrorCode.BadParam })
+        const before = this.colors.length + this.names.size // like firmware: dirty only if something was removed
         if (fn === 1) this.colors = id === 0xffff ? [] : this.colors.filter((c) => c.id !== id)
         for (const k of [...this.names.keys()]) if (k.startsWith(`${fn}:`) && (id === 0xffff || k === `${fn}:${id}`)) this.names.delete(k)
-        this.config.dirty = true
+        if (this.colors.length + this.names.size !== before) this.config.dirty = true
         return this.reply(f, new Uint8Array(0))
       }
       case Cmd.SetName: {

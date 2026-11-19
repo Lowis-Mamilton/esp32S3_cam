@@ -144,7 +144,10 @@ static void bench_frame_end(uint32_t proc_us)
  * results, internal heap free / lowest during the call / min, PSRAM free,
  * stack high-water mark). With -DMXCAM_FACE_BENCH_IMAGE=<file> it also runs on
  * each embedded 320x240 RGB565BE test frame. Used for the M3 Task 1
- * measurements; it stalls the TFT on those frames, so never ship it enabled. */
+ * measurements; it stalls the TFT on those frames, so never ship it enabled.
+ * Note: app_main already calls mxf_init (idempotent), so the init time and
+ * memory numbers logged here are only meaningful if that main.c call is
+ * disabled. */
 #include "mxcam_face.h"
 #define FB_FRAME_BYTES ((size_t)MXCAM_LCD_W * MXCAM_LCD_H * 2)
 #define FB_MAX_IMAGES 4

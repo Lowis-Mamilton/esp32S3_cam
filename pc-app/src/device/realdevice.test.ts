@@ -439,7 +439,7 @@ test('face: threshold and max results go out through SET_CONFIG, and the device 
   expect([c.faceThreshold, c.faceMaxResults]).toEqual([75, 2])
   expect(d.snapshot().params.face).toEqual({ threshold: 75, maxResults: 2 })
   expect(d.snapshot().dirty).toBe(true)
-  // out-of-range values are clamped by the device like the firmware does
+  // in-range values go through unchanged
   await d.setParams({ face: { threshold: 100, maxResults: 8 } })
   expect(fw.config.faceThreshold).toBe(100)
 })
@@ -453,4 +453,5 @@ test('face: the fake firmware answers BAD_PARAM to LEARN and SET_NAME for 3 and 
   await expect(d.learnColor({ x: 0, y: 0, width: 8, height: 8 })).rejects.toBeInstanceOf(LearnError) // LEARN is colour-only
   await expect(d.setName(3, 0, 'x')).rejects.toBeInstanceOf(Error)
   await expect(d.forget(3, 0)).resolves.toBeUndefined()
+  expect(fw.config.dirty).toBe(false) // nothing was removed: firmware leaves dirty unchanged
 })

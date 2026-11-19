@@ -95,7 +95,9 @@ void app_main(void)
     if (!tag_ok) ESP_LOGE(TAG, "AprilTag init failed (no memory?): function 2 disabled");
     /* Face models (~80 ms, ~425 KB PSRAM). Must run HERE, before the encoder,
      * link, pipeline and store tasks are created: while the models load,
-     * mxf_init steers every plain malloc (all tasks) to PSRAM. Only when the
+     * mxf_init steers every plain malloc to PSRAM, for any task that
+     * allocates during that ~80 ms window, including IDF system and driver
+     * tasks that are already running (e.g. the camera driver). Only when the
      * pipeline can run; a failure just leaves function 3 out of GET_INFO. */
     bool face_ok = false;
     if (display_ok && camera_ok) {
