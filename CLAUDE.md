@@ -19,6 +19,8 @@ MXCam：ESP32-S3 視覺感測器，搭配 MATRIX Mini R4 使用，設定由電�
 
 **鏡像規則（ADR-0010）**：鏡頭輸出真實影像，所有辨識與協定座標都是真實影像座標；只有 TFT（面板翻轉＋鏡像文字）和 Studio（「鏡像顯示」開關）顯示鏡像。不要在辨識路徑上做任何翻轉。
 
+**人臉模型載入**：`mxf_init` 載入時會全域把 malloc 導到 PSRAM（約 80 ms），所以必須在 `app_main` 建立其他 task 之前呼叫；esp-dl 配置失敗會 abort（C++ 例外關閉），`mxf_detect` 前有記憶體檢查。
+
 pc-app（MXCam Studio）程式依用途分：
 - `src/i18n`：多語系（繁中 / English）
 - `src/device`：Device 抽象（`RealDevice` 接 Web Serial、`DemoDevice` 展示模式）；`config.ts` 驗證設定；`src/device/demo`（scene / recognize）是展示模式的模擬畫面與辨識
