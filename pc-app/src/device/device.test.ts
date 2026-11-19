@@ -4,6 +4,7 @@ import { Decoder, encodeFrame } from '../protocol/codec'
 import { Cmd, responseOf } from '../protocol/messages'
 import { DemoDevice } from './DemoDevice'
 import { RealDevice } from './RealDevice'
+import { sceneAt } from './demo/scene'
 import { NotSupportedError, type Device, type FrameSource } from './types'
 import { useDevice } from './useDevice'
 
@@ -51,7 +52,7 @@ function serialWithInfo(info: Uint8Array): Serial {
 }
 
 test('DemoDevice starts connected with all three functions and DEMO firmware', () => {
-  const d = new DemoDevice()
+  const d = new DemoDevice(() => 0)
   const s = d.snapshot()
   expect(s.mode).toBe('demo')
   expect(s.status).toBe('connected')
@@ -65,7 +66,7 @@ const FULL = { x: 0, y: 0, width: 320, height: 240 }
 
 test('DemoDevice emits canvas frames every 100 ms and stops after dispose', () => {
   vi.useFakeTimers()
-  const d = new DemoDevice()
+  const d = new DemoDevice(() => 0)
   const frames: FrameSource[] = []
   d.onFrame((f) => frames.push(f))
   vi.advanceTimersByTime(350)
@@ -77,7 +78,7 @@ test('DemoDevice emits canvas frames every 100 ms and stops after dispose', () =
 })
 
 test('DemoDevice dirty flag: edits set it, save and factoryReset clear it', async () => {
-  const d = new DemoDevice()
+  const d = new DemoDevice(() => 0)
   const notified = vi.fn()
   d.subscribe(notified)
   await d.setParams({ color: { tolerance: 50, minArea: 100, maxResults: 4, showNames: true } })
@@ -101,12 +102,12 @@ test('DemoDevice dirty flag: edits set it, save and factoryReset clear it', asyn
 })
 
 test('DemoDevice export/import round-trips; malformed input is rejected and leaves state unchanged', async () => {
-  const a = new DemoDevice()
+  const a = new DemoDevice(() => 0)
   const id = await a.learnColor(FULL)
   await a.setName(1, id, 'x')
   const json = a.exportConfig()
   expect(JSON.parse(json).version).toBe(1)
-  const b = new DemoDevice()
+  const b = new DemoDevice(() => 0)
   await b.importConfig(json)
   expect(b.snapshot().learned).toEqual(a.snapshot().learned)
   const before = b.exportConfig()
@@ -179,6 +180,7 @@ test('useDevice: demo toggle persists, disposes the old device, and demo -> real
     vi.advanceTimersByTime(300)
   })
   expect(batches.length).toBeGreaterThanOrEqual(2)
+  expect(batches.some((b) => b.length > 0)).toBe(true)
   expect(batches.every((b) => (b as { kind: string }[]).every((r) => r.kind === 'color'))).toBe(true)
   expect(result.current.snapshot.learned).toEqual({ 1: [], 2: [], 3: [] })
   expect(result.current.snapshot.dirty).toBe(false)
@@ -186,7 +188,7 @@ test('useDevice: demo toggle persists, disposes the old device, and demo -> real
 })
 
 test('failed import leaves learned, params, system and dirty exactly unchanged', async () => {
-  const d = new DemoDevice()
+  const d = new DemoDevice(() => 0)
   await d.learnColor(FULL)
   await d.save()
   const before = d.snapshot()
@@ -257,5 +259,27 @@ test('DemoDevice defaults to colour function and emits results for it', () => {
   expect(batches).toHaveLength(2)
   expect(batches[0].length).toBeGreaterThan(0)
   expect(batches[0].every((r) => r.kind === 'color')).toBe(true)
+  d.dispose()
+})
+
+test('DemoDevice.learnColor samples the frame last shown, not the current clock', async () => {
+  vi.useFakeTimers()
+  let clock = 0
+  const d = new DemoDevice(() => clock)
+  vi.advanceTimersByTime(100) // one tick at clock 0
+  const shown = sceneAt(0).find((o) => o.kind === 'blob')!
+  clock = 7000 // time moves on, no new frame
+  await expect(
+    d.learnColor({ x: Math.round(shown.x) - 2, y: Math.round(shown.y) - 2, width: 4, height: 4 }),
+  ).resolves.toBe(1)
+  d.dispose()
+})
+
+test('DemoDevice: re-learning an unchanged colour does not set dirty', async () => {
+  const d = new DemoDevice(() => 0)
+  await d.learnColor(FULL)
+  await d.save()
+  await d.learnColor(FULL)
+  expect(d.snapshot().dirty).toBe(false)
   d.dispose()
 })

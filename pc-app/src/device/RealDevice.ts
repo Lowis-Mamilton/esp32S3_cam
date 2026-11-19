@@ -32,12 +32,14 @@ export class RealDevice implements Device {
     this.status = serial ? 'disconnected' : 'unsupported'
     this.conn = new MxcamConnection(serial, {
       status: (s) => {
+        const wasConnected = this.status === 'connected'
         this.status = s
         if (s === 'connecting') {
           this.userClosed = false
           this.lost = false
         } else if (s === 'disconnected') {
-          this.lost = !this.userClosed
+          // lost only when an established connection dropped; a failed open/auto-connect is not a loss
+          this.lost = wasConnected && !this.userClosed
           this.info = undefined
         }
         this.changed()

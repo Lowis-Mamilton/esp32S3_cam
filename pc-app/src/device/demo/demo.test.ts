@@ -18,12 +18,25 @@ test('sceneAt is deterministic and has 4 blobs, 1 tag (id 3) and 1 face', () => 
   expect(s.filter((o) => o.kind === 'face')).toHaveLength(1)
 })
 
-test('some objects leave the frame sometimes, and are all inside at t=0', () => {
+test('some objects leave the frame sometimes, and every centre is inside at t=0', () => {
   const inside = (o: SceneObject) => o.x - o.r >= 0 && o.x + o.r <= 320 && o.y - o.r >= 0 && o.y + o.r <= 240
-  expect(sceneAt(0).every(inside)).toBe(true)
+  expect(sceneAt(0).every((o) => o.x > 0 && o.x < 320 && o.y > 0 && o.y < 240)).toBe(true)
   let sawOut = false
   for (let t = 0; t < 120000; t += 250) if (sceneAt(t).some((o) => !inside(o))) sawOut = true
   expect(sawOut).toBe(true)
+})
+
+test('objects are spread out: at t=0 no two centres within 40 px; face and tag boxes never intersect', () => {
+  const s0 = sceneAt(0)
+  for (let i = 0; i < s0.length; i++)
+    for (let j = i + 1; j < s0.length; j++) expect(Math.hypot(s0[i].x - s0[j].x, s0[i].y - s0[j].y)).toBeGreaterThanOrEqual(40)
+  for (let t = 0; t <= 20000; t += 50) {
+    const o = sceneAt(t)
+    const tag = o.find((x) => x.kind === 'tag')!
+    const face = o.find((x) => x.kind === 'face')!
+    const apart = Math.abs(tag.x - face.x) >= tag.r + face.r || Math.abs(tag.y - face.y) >= tag.r + face.r
+    expect(apart, `t=${t}`).toBe(true)
+  }
 })
 
 test('a learned colour reports its id, other blobs report 0', () => {
@@ -107,4 +120,24 @@ test('DemoLearnError carries an i18n-friendly code', () => {
   expect(e).toBeInstanceOf(Error)
   expect(e.code).toBe('full')
   expect(e.message).toBe('full')
+})
+
+test('hue wraparound: red near 0 degrees matches red near 350 degrees', () => {
+  const learned: LearnedId[] = [{ id: 1, name: '', color: [230, 40, 36] }] // hue ~2
+  expect(matchLearned([230, 40, 70], learned, 30)?.id).toBe(1) // hue ~350
+  expect(matchLearned([230, 40, 120], learned, 30)).toBeNull() // hue ~337, outside +-18
+})
+
+test('low-saturation colours never match', () => {
+  const grey: LearnedId[] = [{ id: 1, name: '', color: [128, 128, 128] }]
+  expect(matchLearned([130, 126, 128], grey, 100)).toBeNull()
+  expect(matchLearned([128, 128, 128], [{ id: 1, name: '', color: RED }], 100)).toBeNull()
+})
+
+test('minArea uses the visible area of a partially visible blob', () => {
+  const p = params()
+  p.color.minArea = 800
+  const half = blob(0, 120, 20, RED) // half of a 1256 px^2 disc is visible (~628)
+  expect(recognize(1, [half], [], p)).toHaveLength(0)
+  expect(recognize(1, [blob(20, 120, 20, RED)], [], p)).toHaveLength(1)
 })

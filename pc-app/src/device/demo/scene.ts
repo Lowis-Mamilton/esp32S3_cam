@@ -18,24 +18,28 @@ interface Path {
   ay: number
   px: number // period in ms
   py: number
+  phx: number // phase in radians
+  phy: number
 }
 
-// x = cx + ax*sin(2*pi*t/px), y = cy + ay*sin(2*pi*t/py): a Lissajous curve. Every object starts at
-// its path centre (inside the frame) at t=0; amplitudes larger than the distance to the frame edge
-// make objects periodically leave the frame partially or fully.
+// x = cx + ax*sin(2*pi*t/px + phx), y = cy + ay*sin(2*pi*t/py + phy): a Lissajous curve.
+// Each object roams its own region so the scene stays readable: the tag stays in the upper-left
+// (x 30..110, y 35..85), the face in the upper-right (x 210..290, y 35..85), so their bounding boxes
+// can never intersect; blobs use the lower half (centre y >= 130). Blob x amplitudes reach past the
+// frame edge so blobs periodically leave it partially or fully. Phases spread the start positions.
 const at = (p: Path, t: number): [number, number] => [
-  p.cx + p.ax * Math.sin((2 * Math.PI * t) / p.px),
-  p.cy + p.ay * Math.sin((2 * Math.PI * t) / p.py),
+  p.cx + p.ax * Math.sin((2 * Math.PI * t) / p.px + p.phx),
+  p.cy + p.ay * Math.sin((2 * Math.PI * t) / p.py + p.phy),
 ]
 
 const BLOBS: { r: number; rgb: [number, number, number]; path: Path }[] = [
-  { r: 24, rgb: [230, 40, 40], path: { cx: 160, cy: 120, ax: 175, ay: 70, px: 14000, py: 9000 } }, // red
-  { r: 18, rgb: [40, 200, 70], path: { cx: 160, cy: 120, ax: 125, ay: 115, px: 11000, py: 7000 } }, // green
-  { r: 30, rgb: [50, 90, 230], path: { cx: 160, cy: 120, ax: 150, ay: 60, px: 16000, py: 10000 } }, // blue
-  { r: 14, rgb: [240, 210, 40], path: { cx: 160, cy: 120, ax: 180, ay: 100, px: 9000, py: 13000 } }, // yellow
+  { r: 24, rgb: [230, 40, 40], path: { cx: 70, cy: 180, ax: 85, ay: 30, px: 14000, py: 9000, phx: 0.5, phy: 0 } }, // red
+  { r: 18, rgb: [40, 200, 70], path: { cx: 160, cy: 200, ax: 60, ay: 40, px: 11000, py: 7000, phx: 2, phy: 1 } }, // green
+  { r: 30, rgb: [50, 90, 230], path: { cx: 250, cy: 170, ax: 95, ay: 25, px: 16000, py: 10000, phx: 4, phy: 2 } }, // blue
+  { r: 14, rgb: [240, 210, 40], path: { cx: 160, cy: 150, ax: 170, ay: 20, px: 9000, py: 13000, phx: 1.2, phy: 3 } }, // yellow
 ]
-const TAG = { half: 20, id: 3, path: { cx: 160, cy: 120, ax: 90, ay: 60, px: 30000, py: 40000 } }
-const FACE = { r: 26, path: { cx: 160, cy: 120, ax: 100, ay: 55, px: 36000, py: 28000 } }
+const TAG = { half: 20, id: 3, path: { cx: 70, cy: 60, ax: 40, ay: 25, px: 30000, py: 40000, phx: 0.8, phy: 0 } }
+const FACE = { r: 26, path: { cx: 250, cy: 60, ax: 40, ay: 25, px: 36000, py: 28000, phx: 3, phy: 1.5 } }
 
 const round1 = (n: number) => Math.round(n * 10) / 10
 
@@ -52,7 +56,7 @@ export function sceneAt(timeMs: number): SceneObject[] {
   return objs
 }
 
-// 5x5 pattern inside a black border (1 = white cell). Looks like a tag; not a decodable one.
+// 5x5 pattern drawn in white on the black inner square (1 = white cell). Looks like a tag; not a decodable one.
 const TAG_CELLS = ['10110', '01001', '11010', '00111', '10101']
 
 export function drawScene(ctx: CanvasRenderingContext2D, objs: SceneObject[]): void {

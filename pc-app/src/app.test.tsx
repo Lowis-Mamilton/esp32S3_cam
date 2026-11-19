@@ -213,3 +213,39 @@ test('the error is cleared when a new connection attempt starts', async () => {
   expect(screen.queryByRole('alert')).not.toBeInTheDocument()
   release?.()
 })
+
+test('StrictMode fresh load with no granted ports shows 未連線, not 已斷線', async () => {
+  const { StrictMode } = await import('react')
+  render(
+    <StrictMode>
+      <I18nProvider>
+        <App serial={idleSerial} />
+      </I18nProvider>
+    </StrictMode>,
+  )
+  await new Promise((r) => setTimeout(r, 50))
+  expect(screen.getByText('未連線')).toBeInTheDocument()
+  expect(screen.queryByText('已斷線')).not.toBeInTheDocument()
+})
+
+test('StrictMode fresh load where the granted port fails to open shows 未連線, not 已斷線', async () => {
+  const { StrictMode } = await import('react')
+  const port = {
+    getInfo: () => ({ usbVendorId: 0x303a, usbProductId: 0x1001 }),
+    open: async () => {
+      throw new DOMException('Failed to open serial port.', 'NetworkError')
+    },
+    close: async () => {},
+  }
+  const serial = { ...idleSerial, getPorts: async () => [port] } as unknown as Serial
+  render(
+    <StrictMode>
+      <I18nProvider>
+        <App serial={serial} />
+      </I18nProvider>
+    </StrictMode>,
+  )
+  await new Promise((r) => setTimeout(r, 50))
+  expect(screen.getByText('未連線')).toBeInTheDocument()
+  expect(screen.queryByText('已斷線')).not.toBeInTheDocument()
+})

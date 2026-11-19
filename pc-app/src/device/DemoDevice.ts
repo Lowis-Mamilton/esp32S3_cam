@@ -1,6 +1,6 @@
 import { parseConfig } from './config'
 import { DemoLearnError, colorAt, matchLearned, recognize } from './demo/recognize'
-import { drawScene, sceneAt } from './demo/scene'
+import { drawScene, sceneAt, type SceneObject } from './demo/scene'
 import {
   Emitter,
   defaultParams,
@@ -44,6 +44,8 @@ export class DemoDevice implements Device {
   private timer: ReturnType<typeof setInterval> | null
   private tick = 0
   private readonly t0: number
+  /** The scene of the last emitted frame: what the user saw, and what learnColor samples. */
+  private lastObjs: SceneObject[] = sceneAt(0)
   private readonly now: () => number
 
   constructor(now: () => number = () => performance.now()) {
@@ -55,6 +57,7 @@ export class DemoDevice implements Device {
   private onTick() {
     const n = this.tick++
     const objs = sceneAt(this.now() - this.t0)
+    this.lastObjs = objs
     this.frames.emit({ kind: 'canvas', draw: (ctx) => drawScene(ctx, objs) })
     this.results.emit(this.active === 0 ? [] : recognize(this.active, objs, this.learned[this.active], this.params))
     if (n % 10 === 0) this.stats.emit({ fps: 1000 / FRAME_INTERVAL_MS, kbps: 0 })
@@ -106,11 +109,13 @@ export class DemoDevice implements Device {
   }
 
   async learnColor(region: { x: number; y: number; width: number; height: number }): Promise<number> {
-    const rgb = colorAt(sceneAt(this.now() - this.t0), region)
+    const rgb = colorAt(this.lastObjs, region)
     if (!rgb) throw new DemoLearnError('no-color')
     const list = this.learned[1]
     const same = matchLearned(rgb, list, this.params.color.tolerance)
     if (same) {
+      const c = same.color
+      if (c && c[0] === rgb[0] && c[1] === rgb[1] && c[2] === rgb[2]) return same.id // nothing changed
       this.learned = { ...this.learned, 1: list.map((e) => (e.id === same.id ? { ...e, color: rgb } : e)) }
       this.touch()
       return same.id

@@ -38,6 +38,8 @@ const hueDiff = (a: number, b: number) => Math.min(Math.abs(a - b), 360 - Math.a
  *   hue window   = +-(tolerance * 0.6) degrees  (30 -> +-18, 100 -> +-60)
  *   saturation / value must each differ by <= 0.25 + tolerance/200  (30 -> 0.4)
  * Colours with saturation < 0.15 have no meaningful hue and never match.
+ * Note: a high tolerance widens the window enough that two learned colours (e.g. red and orange)
+ * both match one blob; the nearest hue wins, so close colours can be merged into one ID.
  */
 export function colorMatches(a: RGB, b: RGB, tolerance: number): boolean {
   const [ha, sa, va] = rgbToHsv(a)
