@@ -61,6 +61,8 @@ test('DemoDevice starts connected with all three functions and DEMO firmware', (
   d.dispose()
 })
 
+const FULL = { x: 0, y: 0, width: 320, height: 240 }
+
 test('DemoDevice emits canvas frames every 100 ms and stops after dispose', () => {
   vi.useFakeTimers()
   const d = new DemoDevice()
@@ -84,7 +86,7 @@ test('DemoDevice dirty flag: edits set it, save and factoryReset clear it', asyn
   expect(notified).toHaveBeenCalled()
   await d.save()
   expect(d.snapshot().dirty).toBe(false)
-  const id = await d.learnColor({ x: 0, y: 0, width: 10, height: 10 })
+  const id = await d.learnColor(FULL)
   await d.setName(1, id, 'red')
   expect(d.snapshot().learned[1][0].name).toBe('red')
   expect(d.snapshot().dirty).toBe(true)
@@ -100,7 +102,7 @@ test('DemoDevice dirty flag: edits set it, save and factoryReset clear it', asyn
 
 test('DemoDevice export/import round-trips; malformed input is rejected and leaves state unchanged', async () => {
   const a = new DemoDevice()
-  const id = await a.learnColor({ x: 0, y: 0, width: 4, height: 4 })
+  const id = await a.learnColor(FULL)
   await a.setName(1, id, 'x')
   const json = a.exportConfig()
   expect(JSON.parse(json).version).toBe(1)
@@ -157,7 +159,7 @@ test('useDevice: demo toggle persists, disposes the old device, and demo -> real
   const first = result.current.device!
   const spy = vi.spyOn(first, 'dispose')
   await act(async () => {
-    await first.learnColor({ x: 0, y: 0, width: 5, height: 5 })
+    await first.learnColor(FULL)
   })
   expect(result.current.snapshot.learned[1]).toHaveLength(1)
   expect(result.current.snapshot.dirty).toBe(true)
@@ -177,7 +179,7 @@ test('useDevice: demo toggle persists, disposes the old device, and demo -> real
     vi.advanceTimersByTime(300)
   })
   expect(batches.length).toBeGreaterThanOrEqual(2)
-  expect(batches.every((b) => b.length === 0)).toBe(true)
+  expect(batches.every((b) => (b as { kind: string }[]).every((r) => r.kind === 'color'))).toBe(true)
   expect(result.current.snapshot.learned).toEqual({ 1: [], 2: [], 3: [] })
   expect(result.current.snapshot.dirty).toBe(false)
   expect(result.current.snapshot.status).toBe('connected')
@@ -185,7 +187,7 @@ test('useDevice: demo toggle persists, disposes the old device, and demo -> real
 
 test('failed import leaves learned, params, system and dirty exactly unchanged', async () => {
   const d = new DemoDevice()
-  await d.learnColor({ x: 0, y: 0, width: 4, height: 4 })
+  await d.learnColor(FULL)
   await d.save()
   const before = d.snapshot()
   const beforeJson = d.exportConfig()
@@ -213,4 +215,47 @@ test('useDevice restores the saved demo mode', async () => {
   localStorage.setItem('mxcam.demo', '1')
   const { result } = renderHook(() => useDevice(idleSerial))
   await waitFor(() => expect(result.current.snapshot.mode).toBe('demo'))
+})
+
+// ---- Task 3: DemoDevice learning on the demo scene ----
+test('DemoDevice.learnColor: lowest free id, same colour updates, background rejects, 8th rejects', async () => {
+  const d = new DemoDevice(() => 0)
+  await expect(d.learnColor({ x: 0, y: 0, width: 2, height: 2 })).rejects.toMatchObject({ code: 'no-color' })
+  const id1 = await d.learnColor(FULL)
+  expect(id1).toBe(1)
+  expect(d.snapshot().learned[1][0].name).toBe('')
+  expect(await d.learnColor(FULL)).toBe(1) // same colour -> same id
+  expect(d.snapshot().learned[1]).toHaveLength(1)
+  d.dispose()
+})
+
+test('DemoDevice: full table rejects with code full; freed id is reused', async () => {
+  const d = new DemoDevice(() => 0)
+  const colors = [[255, 0, 0], [0, 255, 0], [0, 0, 255], [255, 255, 0], [0, 255, 255], [255, 0, 255], [255, 128, 0]] as const
+  await d.importConfig(
+    JSON.stringify({
+      version: 1,
+      learned: { 1: colors.map((c, i) => ({ id: i + 1, name: '', color: c })), 2: [], 3: [] },
+      params: d.snapshot().params,
+      system: d.snapshot().system,
+    }),
+  )
+  await d.setParams({ color: { ...d.snapshot().params.color, tolerance: 0 } }) // no existing colour matches exactly
+  await expect(d.learnColor(FULL)).rejects.toMatchObject({ code: 'full' })
+  await d.forget(1, 3)
+  expect(await d.learnColor(FULL)).toBe(3)
+  d.dispose()
+})
+
+test('DemoDevice defaults to colour function and emits results for it', () => {
+  vi.useFakeTimers()
+  const d = new DemoDevice(() => 0)
+  expect(d.snapshot().activeFunction).toBe(1)
+  const batches: { kind: string }[][] = []
+  d.onResults((r) => batches.push(r))
+  vi.advanceTimersByTime(200)
+  expect(batches).toHaveLength(2)
+  expect(batches[0].length).toBeGreaterThan(0)
+  expect(batches[0].every((r) => r.kind === 'color')).toBe(true)
+  d.dispose()
 })

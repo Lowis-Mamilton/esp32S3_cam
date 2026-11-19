@@ -1,4 +1,6 @@
 import { parseConfig } from './config'
+import { DemoLearnError, colorAt, matchLearned, recognize } from './demo/recognize'
+import { drawScene, sceneAt } from './demo/scene'
 import {
   Emitter,
   defaultParams,
@@ -27,7 +29,7 @@ export const DEMO_INFO: DeviceInfo = {
 
 const FRAME_INTERVAL_MS = 100
 
-/** Browser-only device: draws a placeholder scene, keeps config in memory. Task 3 adds the real scene. */
+/** Browser-only device: simulated scene and recognition, config kept in memory. `now` is injectable for tests. */
 export class DemoDevice implements Device {
   private readonly changes = new Emitter<[]>()
   private readonly frames = new Emitter<[FrameSource]>()
@@ -36,37 +38,25 @@ export class DemoDevice implements Device {
   private learned = emptyLearned()
   private params = defaultParams()
   private system = defaultSystem()
-  private active: FunctionId | 0 = 0
+  private active: FunctionId | 0 = 1
   private dirty = false
   private snap: DeviceSnapshot | null = null
   private timer: ReturnType<typeof setInterval> | null
   private tick = 0
+  private readonly t0: number
+  private readonly now: () => number
 
-  constructor() {
+  constructor(now: () => number = () => performance.now()) {
+    this.now = now
+    this.t0 = now()
     this.timer = setInterval(() => this.onTick(), FRAME_INTERVAL_MS)
   }
 
   private onTick() {
     const n = this.tick++
-    const w = DEMO_INFO.frameWidth
-    const h = DEMO_INFO.frameHeight
-    this.frames.emit({
-      kind: 'canvas',
-      draw: (ctx) => {
-        const g = ctx.createLinearGradient(0, 0, w, h)
-        g.addColorStop(0, '#1f2937')
-        g.addColorStop(1, '#374151')
-        ctx.fillStyle = g
-        ctx.fillRect(0, 0, w, h)
-        ctx.fillStyle = '#f59e0b'
-        ctx.font = 'bold 20px sans-serif'
-        ctx.fillText('DEMO', 12, 28)
-        ctx.beginPath()
-        ctx.arc(60 + ((n * 4) % (w - 120)), h / 2, 16, 0, Math.PI * 2)
-        ctx.fill()
-      },
-    })
-    this.results.emit([])
+    const objs = sceneAt(this.now() - this.t0)
+    this.frames.emit({ kind: 'canvas', draw: (ctx) => drawScene(ctx, objs) })
+    this.results.emit(this.active === 0 ? [] : recognize(this.active, objs, this.learned[this.active], this.params))
     if (n % 10 === 0) this.stats.emit({ fps: 1000 / FRAME_INTERVAL_MS, kbps: 0 })
   }
 
@@ -115,11 +105,20 @@ export class DemoDevice implements Device {
     this.changed()
   }
 
-  // Placeholder: Task 3 samples the demo scene colour instead of using a fixed grey.
-  async learnColor(_region: { x: number; y: number; width: number; height: number }): Promise<number> {
+  async learnColor(region: { x: number; y: number; width: number; height: number }): Promise<number> {
+    const rgb = colorAt(sceneAt(this.now() - this.t0), region)
+    if (!rgb) throw new DemoLearnError('no-color')
     const list = this.learned[1]
-    const id = list.reduce((m, e) => Math.max(m, e.id), 0) + 1
-    this.learned = { ...this.learned, 1: [...list, { id, name: `ID ${id}`, color: [128, 128, 128] }] }
+    const same = matchLearned(rgb, list, this.params.color.tolerance)
+    if (same) {
+      this.learned = { ...this.learned, 1: list.map((e) => (e.id === same.id ? { ...e, color: rgb } : e)) }
+      this.touch()
+      return same.id
+    }
+    let id = 1
+    while (list.some((e) => e.id === id)) id++
+    if (id > 7) throw new DemoLearnError('full')
+    this.learned = { ...this.learned, 1: [...list, { id, name: '', color: rgb }].sort((a, b) => a.id - b.id) }
     this.touch()
     return id
   }
