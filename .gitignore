@@ -8,3 +8,4 @@ pc-app/dist/
 __pycache__/
 build/
 .superpowers/cvenv/
+.superpowers/tools/
