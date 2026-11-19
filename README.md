@@ -8,4 +8,6 @@
 - `pc-app/`：MXCam Studio（Web Serial PWA）
 - `arduino-lib/`：給 MATRIX Mini R4 的 Arduino 函式庫
 
+線上版：https://lowis-mamilton.github.io/esp32S3_cam/ （沒有板子也能用「展示模式」體驗完整介面）
+
 詳細規格見 [docs/SPEC.md](docs/SPEC.md)。
