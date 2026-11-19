@@ -15,7 +15,7 @@ MXCam：ESP32-S3 視覺感測器，搭配 MATRIX Mini R4 使用，設定由電�
 - C（正本，韌體和 Arduino 函式庫共用，ADR-0006）：`arduino-lib/src/protocol/`；韌體元件 `firmware/components/mxcam_protocol/` 直接引用
 - TypeScript：`pc-app/src/protocol/`
 
-韌體裡純 C、可在電腦上測的元件（各有 `host-test/`，CI 的 host-tests job 全部跑）：`mxcam_overlay`（畫框寫字，含鏡像文字）、`mxcam_service`（指令處理、延後回應佇列）、`mxcam_color`（顏色辨識）、`mxcam_tag`（包裝 vendored `apriltag`，單精度、PSRAM）、`mxcam_store`（NVS 存檔格式）、`mxcam_link/pushq`（推送佇列策略）。碰硬體的：`mxcam_camera`、`mxcam_display`、`mxcam_link`（USB-Serial-JTAG RX/TX task）。流程在 `firmware/main/pipeline.c`（core 1 辨識＋TFT）、`encoder.c`（core 0 esp_new_jpeg）。
+韌體裡純 C、可在電腦上測的元件（各有 `host-test/`，CI 的 host-tests job 全部跑）：`mxcam_overlay`（畫框寫字，含鏡像文字）、`mxcam_service`（指令處理、延後回應佇列）、`mxcam_color`（顏色辨識）、`mxcam_tag`（包裝 vendored `apriltag`，單精度、PSRAM）、`mxcam_store`（NVS 存檔格式）、`mxcam_link/pushq`（推送佇列策略）、`mxcam_face` 的 `mxcam_face_post.c`（人臉框換算、排序；偵測本體 `mxcam_face.cpp` 包裝 Espressif `human_face_detect`／esp-dl，只能在板子上跑，基準量測用 `idf.py -DMXCAM_FACE_BENCH=ON build`）。碰硬體的：`mxcam_camera`、`mxcam_display`、`mxcam_link`（USB-Serial-JTAG RX/TX task）。流程在 `firmware/main/pipeline.c`（core 1 辨識＋TFT）、`encoder.c`（core 0 esp_new_jpeg）。
 
 **鏡像規則（ADR-0010）**：鏡頭輸出真實影像，所有辨識與協定座標都是真實影像座標；只有 TFT（面板翻轉＋鏡像文字）和 Studio（「鏡像顯示」開關）顯示鏡像。不要在辨識路徑上做任何翻轉。
 

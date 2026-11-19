@@ -1,0 +1,5 @@
+## Espressif face detection (MSR+MNP s8 models) on esp-dl 3.3.x.
+## human_face_detect 0.5.2 requires esp-dl ~3.3.14, which supports ESP-IDF
+## >= 5.3 on the ESP32-S3 (we build with v5.5.6).
+dependencies:
+  espressif/human_face_detect: "~0.5.2"

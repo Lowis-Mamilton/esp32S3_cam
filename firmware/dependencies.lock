@@ -9,6 +9,44 @@ dependencies:
       registry_url: https://components.espressif.com
       type: service
     version: 0.5.3
+  espressif/dl_fft:
+    component_hash: 965be7152132b365061abf5fc5fc7b85e525f73b94a204cdda61cfe9572c0d77
+    dependencies:
+    - name: idf
+      require: private
+      version: '>=5.0'
+    source:
+      registry_url: https://components.espressif.com
+      type: service
+    version: 0.8.0
+  espressif/esp-dl:
+    component_hash: bec531351a359de9f49f7bad90038e5328a24d004da56d0a27731f9448ce7af8
+    dependencies:
+    - name: espressif/dl_fft
+      registry_url: https://components.espressif.com
+      require: private
+      version: '>=0.8.0'
+    - name: espressif/esp_new_jpeg
+      registry_url: https://components.espressif.com
+      require: private
+      version: ^1
+    - name: idf
+      require: private
+      version: '*'
+    source:
+      registry_url: https://components.espressif.com
+      type: service
+    targets:
+    - esp32
+    - esp32c2
+    - esp32c3
+    - esp32c5
+    - esp32c6
+    - esp32p4
+    - esp32s2
+    - esp32s3
+    - esp32s31
+    version: 3.3.15
   espressif/esp32-camera:
     component_hash: f14a6a9a5c223e49ea7ce6387a2124fc4f8a2239d5f6a1de1850217244f774fe
     dependencies:
@@ -66,6 +104,17 @@ dependencies:
     - esp32c61
     - esp32h4
     version: 1.0.2
+  espressif/human_face_detect:
+    component_hash: 78e59910d978521b75402062adb6496deb8f03b45581c39c748fa15000bf3e28
+    dependencies:
+    - name: espressif/esp-dl
+      registry_url: https://components.espressif.com
+      require: private
+      version: ~3.3.14
+    source:
+      registry_url: https://components.espressif.com/
+      type: service
+    version: 0.5.2
   espressif/led_strip:
     component_hash: 027f68f2b57b0dca1d68dff6cc1139d9093825aa808c2bc3ca42bb2ce530fce9
     dependencies:
@@ -84,7 +133,8 @@ direct_dependencies:
 - espressif/esp32-camera
 - espressif/esp_lcd_ili9341
 - espressif/esp_new_jpeg
+- espressif/human_face_detect
 - espressif/led_strip
-manifest_hash: 68c3590d686d0402e37bfb6de32615b85038983d64a5e08a87ba9cb0053f89c8
+manifest_hash: e72095d92e27d04c8986f2eac48da3172d07c0461cf26b567a360ff8b4b920fc
 target: esp32s3
 version: 2.0.0

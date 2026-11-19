@@ -123,6 +123,101 @@ static void bench_frame_end(uint32_t proc_us)
 }
 #endif
 
+#ifdef MXCAM_FACE_BENCH
+/* Optional on-board face detection benchmark (off by default; local builds
+ * only: idf.py -DMXCAM_FACE_BENCH=ON build, see main/CMakeLists.txt). Loads
+ * the face models on the pipeline task (logging the time, memory and stack
+ * that takes), then once per second runs mxf_detect on the live frame,
+ * whatever the current function, and logs one "face_bench" line (time,
+ * results, internal heap free / lowest during the call / min, PSRAM free,
+ * stack high-water mark). With -DMXCAM_FACE_BENCH_IMAGE=<file> it also runs on
+ * each embedded 320x240 RGB565BE test frame. Used for the M3 Task 1
+ * measurements; it stalls the TFT on those frames, so never ship it enabled. */
+#include "mxcam_face.h"
+#define FB_FRAME_BYTES ((size_t)MXCAM_LCD_W * MXCAM_LCD_H * 2)
+#define FB_MAX_IMAGES 4
+#ifdef MXCAM_FACE_BENCH_IMAGE
+extern const uint8_t face_bench_img_start[] asm("_binary_face_bench_img_start");
+extern const uint8_t face_bench_img_end[] asm("_binary_face_bench_img_end");
+#endif
+typedef struct {
+    unsigned runs;
+    uint64_t sum_us;
+    uint32_t max_us;
+} fb_stats_t;
+
+static void face_bench_run(const char *label, const uint16_t *frame, const mxp_config_t *cfg, fb_stats_t *st)
+{
+    mxp_result_t r[MXP_MAX_RESULTS];
+    uint32_t us = 0;
+    heap_caps_monitor_local_minimum_free_size_start();
+    uint8_t n = mxf_detect(frame, cfg->face_threshold, cfg->face_max, r, MXP_MAX_RESULTS, &us);
+    size_t lmin = heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL);
+    heap_caps_monitor_local_minimum_free_size_stop();
+    st->runs++;
+    st->sum_us += us;
+    if (us > st->max_us) st->max_us = us;
+    char faces[96] = "";
+    int len = 0;
+    for (int i = 0; i < n && i < 3 && len < (int)sizeof(faces); i++)
+        len += snprintf(faces + len, sizeof(faces) - (size_t)len, " [%u %d,%d %ux%u]", r[i].confidence, r[i].x,
+                        r[i].y, r[i].w, r[i].h);
+    ESP_LOGI("face_bench",
+             "%s ms=%u avg=%u max=%u n=%u thr=%u max_res=%u%s | internal %u (lowest in call %u) min %u | psram %u | "
+             "stack_hw %u",
+             label, (unsigned)(us / 1000), (unsigned)(st->sum_us / st->runs / 1000), (unsigned)(st->max_us / 1000), n,
+             cfg->face_threshold, cfg->face_max, faces, (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+             (unsigned)lmin, (unsigned)heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL),
+             (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM), (unsigned)uxTaskGetStackHighWaterMark(NULL));
+}
+
+static void face_bench(const uint16_t *frame, const mxp_config_t *cfg)
+{
+    static bool tried, ok;
+    static int64_t next_us;
+    static fb_stats_t st[1 + FB_MAX_IMAGES];
+    static uint16_t *imgs; /* test frames copied to PSRAM, like camera buffers */
+    static int n_imgs;
+    int64_t now = esp_timer_get_time();
+    if (!tried) {
+        tried = true;
+        size_t i0 = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
+        size_t p0 = heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
+        unsigned s0 = (unsigned)uxTaskGetStackHighWaterMark(NULL);
+        size_t gmin0 = heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL);
+        heap_caps_monitor_local_minimum_free_size_start();
+        ok = mxf_init();
+        size_t lmin = heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL);
+        heap_caps_monitor_local_minimum_free_size_stop();
+        ESP_LOGI("face_bench",
+                 "init=%d %u ms | internal %u -> %u (lowest during init %u, min before %u) | psram %u -> %u | "
+                 "stack_hw %u -> %u",
+                 ok ? 1 : 0, (unsigned)((esp_timer_get_time() - now) / 1000), (unsigned)i0,
+                 (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL), (unsigned)lmin, (unsigned)gmin0, (unsigned)p0,
+                 (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM), s0, (unsigned)uxTaskGetStackHighWaterMark(NULL));
+#ifdef MXCAM_FACE_BENCH_IMAGE
+        size_t bytes = (size_t)(face_bench_img_end - face_bench_img_start);
+        n_imgs = (int)(bytes / FB_FRAME_BYTES);
+        if (n_imgs > FB_MAX_IMAGES) n_imgs = FB_MAX_IMAGES;
+        if (n_imgs > 0) imgs = heap_caps_malloc(n_imgs * FB_FRAME_BYTES, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        if (imgs) memcpy(imgs, face_bench_img_start, n_imgs * FB_FRAME_BYTES);
+        else n_imgs = 0;
+        ESP_LOGI("face_bench", "%d test frame(s) from %u bytes", n_imgs, (unsigned)bytes);
+#endif
+        next_us = now + 1000000;
+        return;
+    }
+    if (!ok || now < next_us) return;
+    next_us = now + 1000000;
+    face_bench_run("live", frame, cfg, &st[0]);
+    for (int i = 0; i < n_imgs; i++) {
+        char label[16];
+        snprintf(label, sizeof(label), "img%d", i);
+        face_bench_run(label, imgs + (size_t)i * MXCAM_LCD_W * MXCAM_LCD_H, cfg, &st[1 + i]);
+    }
+}
+#endif
+
 #ifdef MXCAM_JPEG_SELFTEST
 /* Colour self-test (debug builds only, -DMXCAM_JPEG_SELFTEST): FRAME pushes
  * with frame_id % 4 == 0 or 1 carry a synthetic pattern instead of the camera
@@ -320,6 +415,9 @@ static void pipeline_task(void *arg)
             if (proc_us > proc_max_us) proc_max_us = proc_us;
             last_count = res.count;
             last_fn = ctx.fn;
+#ifdef MXCAM_FACE_BENCH
+            face_bench(frame, &ctx.cfg); /* frame is still clean (no overlay yet) */
+#endif
 
             size_t plen = mxp_pack_results(&res, packed, sizeof(packed));
             if (plen > 0) {

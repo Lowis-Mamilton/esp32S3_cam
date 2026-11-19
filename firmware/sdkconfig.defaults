@@ -23,3 +23,9 @@ CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=4096
 CONFIG_ESP_MAIN_TASK_STACK_SIZE=8192
 # Colour / AprilTag detection run per frame on core 1: build with -O2.
 CONFIG_COMPILER_OPTIMIZATION_PERF=y
+# Face detection (mxcam_face, human_face_detect): only the MSR+MNP s8 models
+# (~190 KB), embedded in the app as flash rodata (with esp-dl the image is
+# ~2.1 MB of the 4 MB factory partition). Weights are copied to PSRAM on load.
+CONFIG_FLASH_HUMAN_FACE_DETECT_MSRMNP_S8_V1=y
+CONFIG_HUMAN_FACE_DETECT_MSRMNP_S8_V1=y
+CONFIG_HUMAN_FACE_DETECT_MODEL_IN_FLASH_RODATA=y

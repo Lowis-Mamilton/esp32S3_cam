@@ -78,6 +78,9 @@ jobs:
       - run: cmake -S firmware/components/mxcam_tag/host-test -B build/tag-host-test
       - run: cmake --build build/tag-host-test
       - run: ctest --test-dir build/tag-host-test --output-on-failure
+      - run: cmake -S firmware/components/mxcam_face/host-test -B build/face-host-test
+      - run: cmake --build build/face-host-test
+      - run: ctest --test-dir build/face-host-test --output-on-failure
       - run: cmake -S firmware/components/mxcam_store/host-test -B build/store-host-test
       - run: cmake --build build/store-host-test
       - run: ctest --test-dir build/store-host-test --output-on-failure
