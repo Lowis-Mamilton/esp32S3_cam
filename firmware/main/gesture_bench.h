@@ -11,6 +11,15 @@
  * embedded test frame and logs one "gesture_bench" line per run. Pipeline
  * task only. */
 void gesture_bench_frame(const uint16_t *frame);
+
+#ifdef MXCAM_GESTURE_BENCH_FEED
+/* Feed mode (-DMXCAM_GESTURE_BENCH_FEED=ON, needs the test frames): call
+ * right after grabbing a camera frame; on a fixed schedule it overwrites the
+ * frame with a test frame (logged as "feed: imgN" / "feed: live"), so the
+ * normal pipeline (TFT, RESULTS, FRAME) runs on known hands. Replaces
+ * gesture_bench_frame (no stalling benchmark runs). */
+void gesture_bench_feed(uint16_t *frame);
+#endif
 #endif
 
 #endif

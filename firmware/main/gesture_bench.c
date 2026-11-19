@@ -39,12 +39,14 @@ typedef struct {
     uint32_t max_total, max_detect, max_classify;
 } gb_stats_t;
 
-static void run_one(const char *label, const uint16_t *frame, gb_stats_t *st)
+/* trk NULL: full detection (mxh_detect); otherwise mxh_detect_tracked with
+ * that tracker (detection skipping, ADR-0019 addendum). */
+static void run_one(const char *label, const uint16_t *frame, uint8_t max_hands, mxh_track_t *trk, gb_stats_t *st)
 {
     mxp_result_t r[MXP_MAX_RESULTS];
     mxh_stats_t s;
     heap_caps_monitor_local_minimum_free_size_start();
-    int n = mxh_detect(frame, GB_HAND_THR, GB_GESTURE_THR, GB_MAX_HANDS, r, MXP_MAX_RESULTS, &s);
+    int n = mxh_detect_tracked(frame, GB_HAND_THR, GB_GESTURE_THR, max_hands, trk, r, MXP_MAX_RESULTS, &s);
     size_t lmin = heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL);
     heap_caps_monitor_local_minimum_free_size_stop();
     if (n == MXH_SKIPPED) {
@@ -65,9 +67,9 @@ static void run_one(const char *label, const uint16_t *frame, gb_stats_t *st)
         len += snprintf(hands + len, sizeof(hands) - (size_t)len, " [%u %u %u %d,%d %ux%u]", r[i].id,
                         r[i].confidence, s.hand_conf[i], r[i].x, r[i].y, r[i].w, r[i].h);
     ESP_LOGI(TAG,
-             "%s total=%u/%u/%u det=%u/%u/%u cls=%u/%u/%u ms (now/avg/max) raw=%u n=%d%s | internal %u (lowest in "
-             "call %u) min %u | psram %u block %u | stack_hw %u",
-             label, (unsigned)(s.total_us / 1000), (unsigned)(st->sum_total / st->runs / 1000),
+             "%s%s total=%u/%u/%u det=%u/%u/%u cls=%u/%u/%u ms (now/avg/max) raw=%u n=%d%s | internal %u (lowest "
+             "in call %u) min %u | psram %u block %u | stack_hw %u",
+             label, trk ? (s.detected ? (s.lost ? ".L" : ".D") : ".R") : "", (unsigned)(s.total_us / 1000), (unsigned)(st->sum_total / st->runs / 1000),
              (unsigned)(st->max_total / 1000), (unsigned)(s.detect_us / 1000),
              (unsigned)(st->sum_detect / st->runs / 1000), (unsigned)(st->max_detect / 1000),
              (unsigned)(s.classify_us / 1000), (unsigned)(st->sum_classify / st->runs / 1000),
@@ -84,6 +86,11 @@ void gesture_bench_frame(const uint16_t *frame)
     static bool started;
     static int64_t next_us;
     static gb_stats_t st[1 + GB_MAX_IMAGES];
+    /* Tracked runs on the test frames with max_hands 1 and 2 ("imgN/1",
+     * "imgN/2"): reuse frames (.R) and detection frames (.D, .L = a reuse
+     * crop lost the hand) averaged separately. */
+    static gb_stats_t st_reuse[2][GB_MAX_IMAGES], st_det[2][GB_MAX_IMAGES];
+    static mxh_track_t trk[2][GB_MAX_IMAGES];
     static uint16_t *imgs; /* test frames copied to PSRAM, like camera buffers */
     static int n_imgs;
     int64_t now = esp_timer_get_time();
@@ -111,11 +118,50 @@ void gesture_bench_frame(const uint16_t *frame)
     }
     if (now < next_us) return;
     next_us = now + 1000000;
-    run_one("live", frame, &st[0]);
+    run_one("live", frame, GB_MAX_HANDS, NULL, &st[0]);
     for (int i = 0; i < n_imgs; i++) {
         char label[16];
+        const uint16_t *img = imgs + (size_t)i * GB_W * GB_H;
         snprintf(label, sizeof(label), "img%d", i);
-        run_one(label, imgs + (size_t)i * GB_W * GB_H, &st[1 + i]);
+        run_one(label, img, GB_MAX_HANDS, NULL, &st[1 + i]);
+        /* MXH_DETECT_EVERY tracked frames: one detection + the reuses. */
+        for (int m = 0; m < 2; m++) {
+            uint8_t mh = (uint8_t)(m + 1);
+            snprintf(label, sizeof(label), "img%d/%u", i, mh);
+            for (int k = 0; k < MXH_DETECT_EVERY; k++)
+                run_one(label, img, mh, &trk[m][i],
+                        mxh_track_need_detect(&trk[m][i], GB_HAND_THR, GB_GESTURE_THR, mh, MXH_DETECT_EVERY)
+                            ? &st_det[m][i]
+                            : &st_reuse[m][i]);
+        }
     }
 }
+#ifdef MXCAM_GESTURE_BENCH_FEED
+/* Feed schedule: GB_FEED_SLOT_S seconds per slot, cycling test frame 0,
+ * live camera, test frame 1, live, ... */
+#define GB_FEED_SLOT_S 10
+
+void gesture_bench_feed(uint16_t *frame)
+{
+    static const uint8_t *src;
+    static int n_imgs = -1, last_slot = -1;
+    if (n_imgs < 0) {
+        size_t bytes = (size_t)(gesture_bench_img_end - gesture_bench_img_start);
+        n_imgs = (int)(bytes / GB_FRAME_BYTES);
+        if (n_imgs > GB_MAX_IMAGES) n_imgs = GB_MAX_IMAGES;
+        src = gesture_bench_img_start;
+        ESP_LOGI(TAG, "feed: %d test frame(s), %d s per slot", n_imgs, GB_FEED_SLOT_S);
+    }
+    if (n_imgs == 0) return;
+    int slot = (int)((esp_timer_get_time() / 1000000 / GB_FEED_SLOT_S) % (2 * n_imgs));
+    if (slot != last_slot) {
+        last_slot = slot;
+        if (slot % 2 == 0)
+            ESP_LOGI(TAG, "feed: img%d", slot / 2);
+        else
+            ESP_LOGI(TAG, "feed: live");
+    }
+    if (slot % 2 == 0) memcpy(frame, src + (size_t)(slot / 2) * GB_FRAME_BYTES, GB_FRAME_BYTES);
+}
+#endif
 #endif

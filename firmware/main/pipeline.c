@@ -344,10 +344,12 @@ static void pipeline_task(void *arg)
     unsigned face_runs = 0, face_phase = 0;
     static mxp_result_t face_last[MXP_MAX_RESULTS];
     uint8_t face_last_n = 0;
-    /* Gesture: per-second recognition stats (every frame, ADR-0019). */
+    /* Gesture: per-second recognition stats (every frame, ADR-0019); the
+     * tracked hand boxes reused between detections (ADR-0019 addendum). */
     uint64_t gest_sum_us = 0, gest_det_us = 0, gest_cls_us = 0;
     uint32_t gest_max_us = 0;
-    unsigned gest_runs = 0, gest_skip = 0;
+    unsigned gest_runs = 0, gest_skip = 0, gest_dets = 0, gest_lost = 0;
+    static mxh_track_t gest_trk;
     uint8_t last_count = 0, last_fn = 0;
     uint32_t frame_id = 1; /* 0 means "no frame processed yet" in GET_RESULTS */
     /* Streaming schedule: next_due_ms advances by one interval per submitted
@@ -359,8 +361,18 @@ static void pipeline_task(void *arg)
     static mxp_results_t res;
     static uint8_t packed[MXS_RESULTS_MAX];
 
+#ifdef MXCAM_GESTURE_BENCH
+    /* Where a frame's time goes besides recognition (gesture bench builds). */
+    uint64_t bench_grab_us = 0, bench_lcd_us = 0, bench_feed_us = 0;
+#endif
     for (;;) {
+#ifdef MXCAM_GESTURE_BENCH
+        int64_t bench_t = esp_timer_get_time();
+#endif
         camera_fb_t *fb = mxcam_camera_grab();
+#ifdef MXCAM_GESTURE_BENCH
+        bench_grab_us += (uint64_t)(esp_timer_get_time() - bench_t);
+#endif
         if (!fb || fb->width != MXCAM_LCD_W || fb->height != MXCAM_LCD_H ||
             fb->len < (size_t)MXCAM_LCD_W * MXCAM_LCD_H * 2) {
             /* mxcam_display_draw and the detectors assume a full 320x240 RGB565 buffer. */
@@ -373,6 +385,11 @@ static void pipeline_task(void *arg)
             mxcam_link_state_unlock();
             vTaskDelay(pdMS_TO_TICKS(10));
         } else {
+#ifdef MXCAM_GESTURE_BENCH_FEED
+            bench_t = esp_timer_get_time();
+            gesture_bench_feed((uint16_t *)fb->buf); /* test frames instead of the camera, on a schedule */
+            bench_feed_us += (uint64_t)(esp_timer_get_time() - bench_t);
+#endif
             const uint16_t *frame = (const uint16_t *)fb->buf;
             uint8_t lseq = 0;
             mxp_learn_req_t lreq;
@@ -462,8 +479,8 @@ static void pipeline_task(void *arg)
                 face_phase = (face_phase + 1) % FACE_EVERY;
             } else if (ctx.fn == MXP_FUNC_GESTURE) {
                 mxh_stats_t gs;
-                int n = mxh_detect(frame, ctx.gesture.hand_threshold, ctx.gesture.gesture_threshold,
-                                   ctx.gesture.max_hands, res.r, MXP_MAX_RESULTS, &gs);
+                int n = mxh_detect_tracked(frame, ctx.gesture.hand_threshold, ctx.gesture.gesture_threshold,
+                                           ctx.gesture.max_hands, &gest_trk, res.r, MXP_MAX_RESULTS, &gs);
                 if (n == MXH_SKIPPED) {
                     /* Heap guard tripped: no new result, not "no hands". */
                     res.count = 0;
@@ -476,12 +493,15 @@ static void pipeline_task(void *arg)
                     gest_cls_us += gs.classify_us;
                     if (gs.total_us > gest_max_us) gest_max_us = gs.total_us;
                     gest_runs++;
+                    gest_dets += gs.detected;
+                    gest_lost += gs.lost;
                 }
             }
             if (ctx.fn != MXP_FUNC_FACE) {
                 face_phase = 0;
                 face_last_n = 0;
             }
+            if (ctx.fn != MXP_FUNC_GESTURE) mxh_track_reset(&gest_trk); /* function switch: detect first */
             uint32_t proc_us = (uint32_t)(esp_timer_get_time() - tp);
 #ifdef MXCAM_TAG_BENCH
             if (ctx.fn == MXP_FUNC_APRILTAG) bench_frame_end(proc_us);
@@ -503,7 +523,7 @@ static void pipeline_task(void *arg)
 #ifdef MXCAM_FACE_BENCH
             face_bench(frame, &ctx.cfg); /* frame is still clean (no overlay yet) */
 #endif
-#ifdef MXCAM_GESTURE_BENCH
+#if defined(MXCAM_GESTURE_BENCH) && !defined(MXCAM_GESTURE_BENCH_FEED)
             gesture_bench_frame(frame); /* frame is still clean (no overlay yet) */
 #endif
 
@@ -517,6 +537,7 @@ static void pipeline_task(void *arg)
                     res.count = 0;
                     face_last_n = 0;
                     face_phase = 0;
+                    mxh_track_reset(&gest_trk);
                 }
                 mxcam_link_state_unlock();
             } else if (plen > 0) {
@@ -534,6 +555,7 @@ static void pipeline_task(void *arg)
                     res.count = 0; /* stale: not cached, pushed or drawn */
                     face_last_n = 0;
                     face_phase = 0;
+                    mxh_track_reset(&gest_trk);
                     stale_drop++;
                 }
                 mxcam_link_state_unlock();
@@ -559,7 +581,13 @@ static void pipeline_task(void *arg)
             else
                 mxo_draw_rect(&canvas, ix, ICON_MARGIN, ICON_SIZE, ICON_SIZE, 2, MXO_WHITE);
 
+#ifdef MXCAM_GESTURE_BENCH
+            bench_t = esp_timer_get_time();
+#endif
             if (mxcam_display_draw((const uint16_t *)fb->buf) != ESP_OK) lcd_err++;
+#ifdef MXCAM_GESTURE_BENCH
+            bench_lcd_us += (uint64_t)(esp_timer_get_time() - bench_t);
+#endif
             mxcam_camera_release(fb);
             status_led_set(res.count > 0 ? STATUS_LED_RESULT : STATUS_LED_IDLE, ctx.cfg.led);
             frames++;
@@ -600,16 +628,29 @@ static void pipeline_task(void *arg)
                 tag_frames = 0;
             }
             if (gest_runs || gest_skip) {
-                /* Gesture recognition (ms): total avg/max/runs, detect and
-                 * classify averages, heap-guard skips this second. */
-                unsigned g = gest_runs ? gest_runs : 1;
-                ESP_LOGI(TAG, "gest_ms=%u/%u/%u det=%u cls=%u skip=%u", (unsigned)(gest_sum_us / g / 1000u),
-                         (unsigned)(gest_max_us / 1000u), gest_runs, (unsigned)(gest_det_us / g / 1000u),
-                         (unsigned)(gest_cls_us / g / 1000u), gest_skip);
+                /* Gesture recognition (ms): total avg/max/runs, detection
+                 * average per detection and frames that detected (dets; the
+                 * rest reused the boxes), classify average per frame, reuse
+                 * frames that lost a hand and detected again, heap-guard
+                 * skips this second. */
+                unsigned g = gest_runs ? gest_runs : 1, d = gest_dets ? gest_dets : 1;
+                ESP_LOGI(TAG, "gest_ms=%u/%u/%u det=%u dets=%u cls=%u lost=%u skip=%u",
+                         (unsigned)(gest_sum_us / g / 1000u), (unsigned)(gest_max_us / 1000u), gest_runs,
+                         (unsigned)(gest_det_us / d / 1000u), gest_dets, (unsigned)(gest_cls_us / g / 1000u),
+                         gest_lost, gest_skip);
                 gest_sum_us = gest_det_us = gest_cls_us = 0;
                 gest_max_us = 0;
-                gest_runs = gest_skip = 0;
+                gest_runs = gest_skip = gest_dets = gest_lost = 0;
             }
+#ifdef MXCAM_GESTURE_BENCH
+            if (frames)
+                ESP_LOGI(TAG, "bench frame_ms=%u grab_ms=%u lcd_ms=%u proc_ms=%u feed_ms=%u",
+                         (unsigned)((now - t0) / frames / 1000), (unsigned)(bench_grab_us / (unsigned)frames / 1000u),
+                         (unsigned)(bench_lcd_us / (unsigned)frames / 1000u),
+                         (unsigned)(proc_sum_us / (unsigned)frames / 1000u),
+                         (unsigned)(bench_feed_us / (unsigned)frames / 1000u));
+            bench_grab_us = bench_lcd_us = bench_feed_us = 0;
+#endif
             frames = 0;
             proc_sum_us = 0;
             proc_max_us = 0;

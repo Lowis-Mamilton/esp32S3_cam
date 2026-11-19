@@ -25,13 +25,20 @@ endif()
 #   builds/CI. Optional MXCAM_GESTURE_BENCH_IMAGE: a file of whole 320x240
 #   RGB565 big-endian frames (camera byte order) that the benchmark also runs
 #   on, so it can be checked without a hand in front of the camera.
+#   With -DMXCAM_GESTURE_BENCH_FEED=ON (needs the image) the test frames
+#   replace the camera frame on a schedule instead (pipeline speed with known
+#   hands; gesture_bench.h).
 option(MXCAM_GESTURE_BENCH "Log a gesture recognition benchmark once per second" OFF)
+option(MXCAM_GESTURE_BENCH_FEED "Feed the gesture test frames into the pipeline instead" OFF)
 set(MXCAM_GESTURE_BENCH_IMAGE "" CACHE FILEPATH "Test frames for the gesture benchmark (RGB565BE 320x240)")
 if(MXCAM_GESTURE_BENCH)
     target_compile_definitions(${COMPONENT_LIB} PRIVATE MXCAM_GESTURE_BENCH)
     if(MXCAM_GESTURE_BENCH_IMAGE)
         target_add_binary_data(${COMPONENT_LIB} "${MXCAM_GESTURE_BENCH_IMAGE}" BINARY RENAME_TO gesture_bench_img)
         target_compile_definitions(${COMPONENT_LIB} PRIVATE MXCAM_GESTURE_BENCH_IMAGE)
+        if(MXCAM_GESTURE_BENCH_FEED)
+            target_compile_definitions(${COMPONENT_LIB} PRIVATE MXCAM_GESTURE_BENCH_FEED)
+        endif()
     endif()
 endif()
 

@@ -22,12 +22,15 @@ extern "C" {
  * confidence = gesture score (id >= 1) or hand score (id 0), extra_len 0.
  * Hands below hand_threshold or smaller than MXH_MIN_HAND_PX are dropped; only
  * the best max_hands (1..2) are classified (time bound = 1 detection +
- * max_hands classifications). */
+ * max_hands classifications). With a tracker (mxh_detect_tracked) most
+ * frames skip the detection and only classify the last boxes. */
 
 typedef struct {
   uint32_t total_us, detect_us, classify_us;
   uint8_t raw_hands;                /* boxes the detector returned (before filtering) */
   uint8_t hand_conf[MXH_MAX_HANDS]; /* hand detection score x 100 of each output record (benchmark / stats) */
+  uint8_t detected;                 /* 1: hand detection ran on this frame; 0: boxes reused */
+  uint8_t lost;                     /* 1: a reused crop said no_hand, so this frame detected again */
 } mxh_stats_t;
 
 #define MXH_SKIPPED (-1)
@@ -58,6 +61,16 @@ bool mxh_init(void);
  * Pipeline task only; not reentrant. */
 int mxh_detect(const uint16_t *frame, uint8_t hand_threshold, uint8_t gesture_threshold, uint8_t max_hands,
                mxp_result_t *out, uint8_t cap, mxh_stats_t *stats);
+
+/* As mxh_detect, but with detection skipping (mxcam_gesture_post.h,
+ * "Detection skipping"): when trk says so, the frame only classifies the
+ * tracked boxes (grown by MXH_EXPAND_PCT) and reports them with the last
+ * detection's boxes; a crop classified no_hand makes this same frame detect
+ * again. trk is updated (reset on MXH_SKIPPED). trk NULL = mxh_detect. The
+ * caller resets trk (mxh_track_reset) on function switch and stale frames;
+ * config changes are noticed here. */
+int mxh_detect_tracked(const uint16_t *frame, uint8_t hand_threshold, uint8_t gesture_threshold, uint8_t max_hands,
+                       mxh_track_t *trk, mxp_result_t *out, uint8_t cap, mxh_stats_t *stats);
 
 /* Frees the detector and classifier. Safe to call when not initialised. */
 void mxh_deinit(void);

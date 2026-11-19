@@ -93,6 +93,59 @@ void mxh_to_result(const mxh_raw_box_t *hand, const char *cat_name, float gestur
   out->extra_len = 0;
 }
 
+static uint8_t clamp_hands(uint8_t max_hands) {
+  return max_hands < 1 ? 1 : (max_hands > MXH_MAX_HANDS ? MXH_MAX_HANDS : max_hands);
+}
+
+void mxh_track_reset(mxh_track_t *t) {
+  if (t) memset(t, 0, sizeof(*t));
+}
+
+bool mxh_track_need_detect(const mxh_track_t *t, uint8_t hand_threshold, uint8_t gesture_threshold,
+                           uint8_t max_hands, uint8_t every) {
+  if (!t || t->n == 0 || every <= 1) return true;
+  if (t->hand_threshold != hand_threshold || t->gesture_threshold != gesture_threshold ||
+      t->max_hands != clamp_hands(max_hands))
+    return true;
+  if (t->n < clamp_hands(max_hands)) return true;
+  return (unsigned)t->age + 1u >= every;
+}
+
+void mxh_track_detected(mxh_track_t *t, const mxh_raw_box_t *hands, uint8_t n, bool any_lost,
+                        uint8_t hand_threshold, uint8_t gesture_threshold, uint8_t max_hands) {
+  if (!t) return;
+  mxh_track_reset(t);
+  if (!hands || n == 0 || any_lost) return;
+  if (n > MXH_MAX_HANDS) n = MXH_MAX_HANDS;
+  memcpy(t->hands, hands, n * sizeof(hands[0]));
+  t->n = n;
+  t->hand_threshold = hand_threshold;
+  t->gesture_threshold = gesture_threshold;
+  t->max_hands = clamp_hands(max_hands);
+}
+
+void mxh_track_reused(mxh_track_t *t) {
+  if (t && t->age < 255) t->age++;
+}
+
+bool mxh_expand_box(const mxh_raw_box_t *b, mxh_raw_box_t *out) {
+  if (!b || !out || b->x1 <= b->x0 || b->y1 <= b->y0) return false;
+  int32_t w = b->x1 - b->x0, h = b->y1 - b->y0;
+  int32_t gw = (w * (100 + MXH_EXPAND_PCT) + 50) / 100 - w;
+  int32_t gh = (h * (100 + MXH_EXPAND_PCT) + 50) / 100 - h;
+  mxh_raw_box_t e = *b;
+  e.x0 = b->x0 - gw / 2;
+  e.x1 = b->x1 + (gw - gw / 2);
+  e.y0 = b->y0 - gh / 2;
+  e.y1 = b->y1 + (gh - gh / 2);
+  e = clip_box(&e);
+  if (e.x1 - e.x0 < MXH_MIN_HAND_PX || e.y1 - e.y0 < MXH_MIN_HAND_PX) return false;
+  *out = e;
+  return true;
+}
+
+bool mxh_hand_lost(const char *cat_name) { return !cat_name || strcmp(cat_name, "no_hand") == 0; }
+
 const char *mxh_ascii_name(uint16_t id) { return id <= MXP_GESTURE_MAX ? k_ascii[id] : k_ascii[0]; }
 
 int mxh_label(uint16_t id, uint8_t confidence, char *buf, size_t cap) {

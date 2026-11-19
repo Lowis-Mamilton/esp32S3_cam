@@ -252,7 +252,128 @@ static void test_label(void) {
   CHECK(strcmp(mxh_ascii_name(0xFFFF), "HAND") == 0);
 }
 
+static void test_expand_box(void) {
+  mxh_raw_box_t e;
+  /* 100x80 -> 125x100 around the same centre (odd growth: extra pixel right/bottom). */
+  CHECK(mxh_expand_box(&(mxh_raw_box_t){100, 80, 200, 160, 0.8f}, &e));
+  CHECK(same_box(&e, 88, 70, 213, 170) && e.score == 0.8f);
+  /* 40x40 -> 50x50, clipped at the top-left corner. */
+  CHECK(mxh_expand_box(&(mxh_raw_box_t){0, 0, 40, 40, 0.5f}, &e));
+  CHECK(same_box(&e, 0, 0, 45, 45));
+  /* Clipped at the bottom-right corner. */
+  CHECK(mxh_expand_box(&(mxh_raw_box_t){300, 220, 320, 240, 0.5f}, &e));
+  CHECK(same_box(&e, 298, 218, 320, 240));
+  /* An input already partly outside is clipped after growing. */
+  CHECK(mxh_expand_box(&(mxh_raw_box_t){-20, 10, 40, 70, 0.5f}, &e));
+  CHECK(same_box(&e, 0, 3, 48, 78));
+  /* Whole frame stays the whole frame. */
+  CHECK(mxh_expand_box(&(mxh_raw_box_t){0, 0, 320, 240, 0.5f}, &e));
+  CHECK(same_box(&e, 0, 0, 320, 240));
+  /* Too small after clipping (10x10 -> 13x13 < MXH_MIN_HAND_PX): no crop. */
+  CHECK(!mxh_expand_box(&(mxh_raw_box_t){100, 100, 110, 110, 0.5f}, &e));
+  /* 13x13 -> 16x16 (rounded): just enough. */
+  CHECK(mxh_expand_box(&(mxh_raw_box_t){100, 100, 113, 113, 0.5f}, &e));
+  CHECK(e.x1 - e.x0 == 16 && e.y1 - e.y0 == 16);
+  /* Empty, inverted or off-frame boxes. */
+  CHECK(!mxh_expand_box(&(mxh_raw_box_t){50, 50, 50, 90, 0.5f}, &e));
+  CHECK(!mxh_expand_box(&(mxh_raw_box_t){90, 50, 50, 90, 0.5f}, &e));
+  CHECK(!mxh_expand_box(&(mxh_raw_box_t){-100, -100, -60, -60, 0.5f}, &e));
+  CHECK(!mxh_expand_box(&(mxh_raw_box_t){400, 10, 450, 60, 0.5f}, &e));
+  CHECK(!mxh_expand_box(NULL, &e));
+  CHECK(!mxh_expand_box(&(mxh_raw_box_t){100, 80, 200, 160, 0.8f}, NULL));
+}
+
+static void test_hand_lost(void) {
+  CHECK(mxh_hand_lost(NULL));
+  CHECK(mxh_hand_lost("no_hand"));
+  CHECK(!mxh_hand_lost("no_gesture")); /* still a hand */
+  CHECK(!mxh_hand_lost("one"));
+  CHECK(!mxh_hand_lost("dislike"));
+  CHECK(!mxh_hand_lost("palm"));
+}
+
+static void test_track_schedule(void) {
+  mxh_track_t t;
+  mxh_raw_box_t hands[MXH_MAX_HANDS] = {box(10, 20, 110, 140, 0.82f), box(200, 30, 280, 130, 0.7f)};
+  mxh_track_reset(&t);
+  CHECK(t.n == 0);
+  CHECK(mxh_track_need_detect(&t, 40, 60, 1, 3)); /* nothing tracked yet */
+  CHECK(mxh_track_need_detect(NULL, 40, 60, 1, 3));
+
+  mxh_track_detected(&t, hands, 1, false, 40, 60, 1);
+  CHECK(t.n == 1 && t.age == 0 && same_box(&t.hands[0], 10, 20, 110, 140) && t.hands[0].score == 0.82f);
+  /* Every 3 frames: D R R D R R ... */
+  CHECK(!mxh_track_need_detect(&t, 40, 60, 1, 3));
+  mxh_track_reused(&t);
+  CHECK(t.age == 1);
+  CHECK(!mxh_track_need_detect(&t, 40, 60, 1, 3));
+  mxh_track_reused(&t);
+  CHECK(mxh_track_need_detect(&t, 40, 60, 1, 3));
+  CHECK(!mxh_track_need_detect(&t, 40, 60, 1, 4)); /* N = 4 allows one more reuse */
+  mxh_track_detected(&t, hands, 1, false, 40, 60, 1);
+  CHECK(!mxh_track_need_detect(&t, 40, 60, 1, 3));
+
+  /* N <= 1: detect on every frame (no reuse). */
+  CHECK(mxh_track_need_detect(&t, 40, 60, 1, 1));
+  CHECK(mxh_track_need_detect(&t, 40, 60, 1, 0));
+
+  /* Age saturates instead of wrapping back to "fresh". */
+  for (int i = 0; i < 300; i++) mxh_track_reused(&t);
+  CHECK(t.age == 255);
+  CHECK(mxh_track_need_detect(&t, 40, 60, 1, 255));
+}
+
+static void test_track_config_and_hands(void) {
+  mxh_track_t t;
+  mxh_raw_box_t hands[MXH_MAX_HANDS] = {box(10, 20, 110, 140, 0.82f), box(200, 30, 280, 130, 0.7f)};
+  mxh_track_reset(&t);
+  mxh_track_detected(&t, hands, 1, false, 40, 60, 1);
+  /* Any config change: detect. */
+  CHECK(mxh_track_need_detect(&t, 41, 60, 1, 3));
+  CHECK(mxh_track_need_detect(&t, 40, 59, 1, 3));
+  CHECK(mxh_track_need_detect(&t, 40, 60, 2, 3));
+  /* max_hands 2 with one hand tracked: keep looking for the second one. */
+  mxh_track_detected(&t, hands, 1, false, 40, 60, 2);
+  CHECK(mxh_track_need_detect(&t, 40, 60, 2, 3));
+  mxh_track_detected(&t, hands, 2, false, 40, 60, 2);
+  CHECK(t.n == 2 && same_box(&t.hands[1], 200, 30, 280, 130));
+  CHECK(!mxh_track_need_detect(&t, 40, 60, 2, 3));
+  /* max_hands is compared clamped (0 and 1 are the same, 2 and 9 too). */
+  mxh_track_detected(&t, hands, 2, false, 40, 60, 9);
+  CHECK(!mxh_track_need_detect(&t, 40, 60, 2, 3));
+  mxh_track_detected(&t, hands, 1, false, 40, 60, 0);
+  CHECK(!mxh_track_need_detect(&t, 40, 60, 1, 3));
+  /* More hands than MXH_MAX_HANDS: only the first ones are kept. */
+  mxh_track_detected(&t, hands, 7, false, 40, 60, 2);
+  CHECK(t.n == MXH_MAX_HANDS);
+
+  /* A crop the classifier calls no_hand on the detection frame: nothing to reuse. */
+  mxh_track_detected(&t, hands, 1, true, 40, 60, 1);
+  CHECK(t.n == 0);
+  CHECK(mxh_track_need_detect(&t, 40, 60, 1, 3));
+  /* No hands found: detect on the next frame too. */
+  mxh_track_detected(&t, hands, 0, false, 40, 60, 1);
+  CHECK(t.n == 0);
+  CHECK(mxh_track_need_detect(&t, 40, 60, 1, 3));
+  mxh_track_detected(&t, NULL, 1, false, 40, 60, 1);
+  CHECK(t.n == 0);
+
+  /* Reset (function switch, heap-guard skip, stale frame): detect. */
+  mxh_track_detected(&t, hands, 1, false, 40, 60, 1);
+  mxh_track_reset(&t);
+  CHECK(t.n == 0 && mxh_track_need_detect(&t, 40, 60, 1, 3));
+
+  /* NULL tracker: the calls are no-ops. */
+  mxh_track_reset(NULL);
+  mxh_track_reused(NULL);
+  mxh_track_detected(NULL, hands, 1, false, 40, 60, 1);
+}
+
 int main(void) {
+  test_expand_box();
+  test_hand_lost();
+  test_track_schedule();
+  test_track_config_and_hands();
   test_gesture_ids();
   test_confidence();
   test_pick_hands_threshold_sort();
