@@ -6,7 +6,7 @@ export type { ConnectionStatus, DeviceInfo, FunctionId }
 
 export interface Result {
   id: number // 0 = not learned
-  kind: 'color' | 'tag' | 'face' | 'gesture'
+  kind: 'color' | 'tag' | 'face' | 'gesture' | 'line' | 'track'
   /** Box centre in 320x240 frame coordinates (not the top-left corner). */
   x: number
   y: number
@@ -16,7 +16,21 @@ export interface Result {
   /** AprilTag only: rotation in degrees and the four corners (not clipped to the frame). */
   rotationDeg?: number
   corners?: [number, number][]
+  /** Line tracking only (function 4). */
+  line?: LineResult
 }
+export interface LineResult {
+  /** 0 = straight up, clockwise positive. */
+  angleDeg: number
+  /** Bottom end x - 160. */
+  offsetX: number
+  start: [number, number]
+  end: [number, number]
+  branch: boolean
+  cross: boolean
+}
+/** Functions that learn from a region of the picture (colour, line colour, tracked object). */
+export type LearnableFn = 1 | 4 | 5
 /** Where a batch of results came from (real device only; the demo has no frame ids). */
 export interface ResultsMeta {
   frameId: number
@@ -32,6 +46,16 @@ export interface FunctionParams {
   tag: { showNames: boolean }
   face: { threshold: number /* 0-100 */; maxResults: number /* 1-8 */ }
   gesture: { handThreshold: number /* 10-95 */; gestureThreshold: number /* 0-100 */; maxHands: 1 | 2 }
+  line: {
+    mode: 'dark' | 'light' | 'learned'
+    threshold: number /* 0 = automatic, 1-255 */
+    roiPercent: number /* 20-100 */
+    bands: number /* 4-12 */
+    minWidth: number /* 1-100 */
+    maxWidth: number /* minWidth-255 */
+    colorTolerance: number /* 0-100 */
+  }
+  track: { threshold: number /* 10-95 */; adapt: number /* 0-50 */; reacquire: boolean; multiScale: boolean }
 }
 export interface SystemConfig {
   uartBaud: 115200 | 9600
@@ -76,7 +100,8 @@ export interface Device {
   connect(): Promise<void>
   disconnect(): Promise<void>
   setFunction(id: FunctionId): Promise<void>
-  learnColor(region: { x: number; y: number; width: number; height: number }): Promise<number>
+  /** Learn from a picture region: colour (1), line colour (4) or the object to track (5). Resolves to the learned ID. */
+  learn(fn: LearnableFn, region: { x: number; y: number; width: number; height: number }): Promise<number>
   forget(fn: FunctionId, id: number): Promise<void>
   forgetAll(fn: FunctionId): Promise<void>
   setName(fn: FunctionId, id: number, name: string): Promise<void>
@@ -110,8 +135,8 @@ export class NotConnectedError extends Error {
   }
 }
 
-/** learnColor rejection, shared by both backends; `code` selects the message. */
-export type LearnErrorCode = 'no-color' | 'full' | 'busy' | 'cancelled'
+/** learn rejection, shared by both backends; `code` selects the message ('no-target': nothing to track in the region). */
+export type LearnErrorCode = 'no-color' | 'no-target' | 'full' | 'busy' | 'cancelled'
 export class LearnError extends Error {
   readonly code: LearnErrorCode
   constructor(code: LearnErrorCode) {
@@ -146,17 +171,41 @@ export function truncateBytes(s: string, max = NAME_MAX_BYTES): string {
   return out
 }
 
+const clampN = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, Math.round(v)))
+/** Line config limits, like the clamp in the firmware (docs/protocol.md section 9). */
+export function clampLineParams(l: FunctionParams['line']): FunctionParams['line'] {
+  const minWidth = clampN(l.minWidth, 1, 100)
+  return {
+    mode: l.mode === 'light' || l.mode === 'learned' ? l.mode : 'dark',
+    threshold: clampN(l.threshold, 0, 255),
+    roiPercent: clampN(l.roiPercent, 20, 100),
+    bands: clampN(l.bands, 4, 12),
+    minWidth,
+    maxWidth: Math.max(minWidth, clampN(l.maxWidth, 0, 255)),
+    colorTolerance: clampN(l.colorTolerance, 0, 100),
+  }
+}
+/** Track config limits, like the clamp in the firmware. */
+export const clampTrackParams = (t: FunctionParams['track']): FunctionParams['track'] => ({
+  threshold: clampN(t.threshold, 10, 95),
+  adapt: clampN(t.adapt, 0, 50),
+  reacquire: !!t.reacquire,
+  multiScale: !!t.multiScale,
+})
+
 export const defaultParams = (): FunctionParams => ({
   color: { tolerance: 30, minArea: 100, maxResults: 4, showNames: true },
   tag: { showNames: true },
   face: { threshold: 60, maxResults: 4 },
   gesture: { handThreshold: 40, gestureThreshold: 60, maxHands: 1 },
+  line: { mode: 'dark', threshold: 0, roiPercent: 60, bands: 8, minWidth: 4, maxWidth: 80, colorTolerance: 30 },
+  track: { threshold: 50, adapt: 10, reacquire: true, multiScale: true },
 })
 export const defaultSystem = (): SystemConfig => ({ uartBaud: 115200, i2cAddress: 0x5a, ledBrightness: 50 })
-export const emptyLearned = (): Record<FunctionId, LearnedId[]> => ({ 1: [], 2: [], 3: [], 8: [] })
+export const emptyLearned = (): Record<FunctionId, LearnedId[]> => ({ 1: [], 2: [], 3: [], 4: [], 5: [], 8: [] })
 
 export function toFunctionIds(ids: number[]): FunctionId[] {
-  return ids.filter((i): i is FunctionId => i === 1 || i === 2 || i === 3 || i === 8)
+  return ids.filter((i): i is FunctionId => i === 1 || i === 2 || i === 3 || i === 4 || i === 5 || i === 8)
 }
 
 /** Tiny listener set shared by both backends. */

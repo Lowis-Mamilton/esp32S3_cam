@@ -50,7 +50,7 @@ test('operations before connecting reject with NotConnectedError', async () => {
   const d = new RealDevice(undefined)
   devices.push(d)
   await expect(d.setFunction(1)).rejects.toBeInstanceOf(NotConnectedError)
-  await expect(d.learnColor({ x: 0, y: 0, width: 4, height: 4 })).rejects.toBeInstanceOf(NotConnectedError)
+  await expect(d.learn(1, { x: 0, y: 0, width: 4, height: 4 })).rejects.toBeInstanceOf(NotConnectedError)
   await expect(d.save()).rejects.toBeInstanceOf(NotConnectedError)
   expect(() => d.exportConfig()).toThrow(NotConnectedError)
 })
@@ -60,7 +60,7 @@ test('LEARN is answered late (deferred) and still resolves; the region is rounde
   fw.learnDelayMs = 1500 // longer than the default 1 s request timeout
   const d = await connected(fw)
   await d.setFunction(1) // LEARN needs the colour function (like the firmware)
-  const id = await d.learnColor({ x: 300.4, y: -3, width: 40.6, height: 10.2 })
+  const id = await d.learn(1, { x: 300.4, y: -3, width: 40.6, height: 10.2 })
   expect(id).toBe(1)
   const p = sent(fw, Cmd.Learn)[0].payload
   const v = new DataView(p.buffer, p.byteOffset)
@@ -75,12 +75,12 @@ test('LEARN errors: FULL -> LearnError full, BAD_PARAM -> LearnError no-color, U
   fw.colors = [1, 2, 3, 4, 5, 6, 7].map((id) => ({ id, rgb: [id, 0, 0] as [number, number, number] }))
   const d = await connected(fw)
   await d.setFunction(1) // LEARN needs the colour function (like the firmware)
-  await expect(d.learnColor({ x: 0, y: 0, width: 8, height: 8 })).rejects.toEqual(expect.objectContaining({ code: 'full' }))
-  await expect(d.learnColor({ x: 0, y: 0, width: 8, height: 8 })).rejects.toBeInstanceOf(LearnError)
+  await expect(d.learn(1, { x: 0, y: 0, width: 8, height: 8 })).rejects.toEqual(expect.objectContaining({ code: 'full' }))
+  await expect(d.learn(1, { x: 0, y: 0, width: 8, height: 8 })).rejects.toBeInstanceOf(LearnError)
   fw.learnRgb = null
-  await expect(d.learnColor({ x: 0, y: 0, width: 8, height: 8 })).rejects.toEqual(expect.objectContaining({ code: 'no-color' }))
+  await expect(d.learn(1, { x: 0, y: 0, width: 8, height: 8 })).rejects.toEqual(expect.objectContaining({ code: 'no-color' }))
   fw.unknown.add(Cmd.Learn)
-  await expect(d.learnColor({ x: 0, y: 0, width: 8, height: 8 })).rejects.toBeInstanceOf(NotSupportedError)
+  await expect(d.learn(1, { x: 0, y: 0, width: 8, height: 8 })).rejects.toBeInstanceOf(NotSupportedError)
 })
 
 test('forget, forgetAll and setName go over the protocol and refresh the learned list', async () => {
@@ -340,8 +340,8 @@ test('a second LEARN while one is pending is BUSY -> LearnError busy; the first 
   fw.learnDelayMs = 300
   const d = await connected(fw)
   await d.setFunction(1) // LEARN needs the colour function (like the firmware)
-  const first = d.learnColor({ x: 0, y: 0, width: 8, height: 8 })
-  await expect(d.learnColor({ x: 0, y: 0, width: 8, height: 8 })).rejects.toEqual(expect.objectContaining({ code: 'busy' }))
+  const first = d.learn(1, { x: 0, y: 0, width: 8, height: 8 })
+  await expect(d.learn(1, { x: 0, y: 0, width: 8, height: 8 })).rejects.toEqual(expect.objectContaining({ code: 'busy' }))
   await expect(first).resolves.toBe(1)
 })
 
@@ -350,7 +350,7 @@ test('a LEARN cancelled by our own function switch rejects as cancelled, not as 
   fw.learnDelayMs = 300
   const d = await connected(fw)
   await d.setFunction(1)
-  const learning = d.learnColor({ x: 0, y: 0, width: 8, height: 8 })
+  const learning = d.learn(1, { x: 0, y: 0, width: 8, height: 8 })
   await d.setFunction(2)
   await expect(learning).rejects.toEqual(expect.objectContaining({ code: 'cancelled' }))
 })
@@ -361,7 +361,7 @@ test('a malformed LEARN reply is an error, not a made-up id', async () => {
   fw.learnReply = new Uint8Array([1, 2])
   const d = await connected(fw)
   await d.setFunction(1) // LEARN needs the colour function (like the firmware)
-  await expect(d.learnColor({ x: 0, y: 0, width: 8, height: 8 })).rejects.toThrow(/length/)
+  await expect(d.learn(1, { x: 0, y: 0, width: 8, height: 8 })).rejects.toThrow(/length/)
 })
 
 test('out-of-order replies settle the right operations', async () => {
@@ -450,7 +450,7 @@ test('face: the fake firmware answers BAD_PARAM to LEARN and SET_NAME for 3 and 
   fw.learnDelayMs = 0
   const d = await connected(fw)
   await d.setFunction(3)
-  await expect(d.learnColor({ x: 0, y: 0, width: 8, height: 8 })).rejects.toBeInstanceOf(LearnError) // LEARN is colour-only
+  await expect(d.learn(1, { x: 0, y: 0, width: 8, height: 8 })).rejects.toBeInstanceOf(LearnError) // LEARN is colour-only
   await expect(d.setName(3, 0, 'x')).rejects.toBeInstanceOf(Error)
   await expect(d.forget(3, 0)).resolves.toBeUndefined()
   expect(fw.config.dirty).toBe(false) // nothing was removed: firmware leaves dirty unchanged
@@ -641,4 +641,168 @@ test('pause preview: a failed STREAM_START restores the previous paused state', 
   fw.unknown.add(Cmd.StreamStart)
   await expect(d.setPreviewPaused(true)).rejects.toBeDefined()
   expect(d.snapshot().previewPaused).toBe(false)
+})
+
+// ---- M6: line tracking (function 4) and object tracking (function 5) ----
+
+const trackFw = () => {
+  const fw = new FakeFirmware()
+  fw.functionIds = [1, 2, 3, 4, 5]
+  return fw
+}
+
+test('connect loads func config for 4 and 5', async () => {
+  const fw = trackFw()
+  fw.line = { mode: 1, threshold: 90, roiPct: 40, bands: 6, minWidth: 3, maxWidth: 60, colorTolerance: 20 }
+  fw.track = { threshold: 70, adapt: 5, reacquire: 0, scale: 0 }
+  const d = await connected(fw)
+  expect(sent(fw, Cmd.GetFuncConfig).map((r) => [...r.payload])).toEqual([[4], [5]])
+  expect(d.snapshot().supported).toEqual([1, 2, 3, 4, 5])
+  expect(d.snapshot().params.line).toEqual({ mode: 'light', threshold: 90, roiPercent: 40, bands: 6, minWidth: 3, maxWidth: 60, colorTolerance: 20 })
+  expect(d.snapshot().params.track).toEqual({ threshold: 70, adapt: 5, reacquire: false, multiScale: false })
+})
+
+test('line: setParams sends SET_FUNC_CONFIG and applies the clamped reply', async () => {
+  const fw = trackFw()
+  const d = await connected(fw)
+  await d.setParams({ line: { ...d.snapshot().params.line, mode: 'light', roiPercent: 10, bands: 30, minWidth: 20, maxWidth: 5 } })
+  expect([...sent(fw, Cmd.SetFuncConfig)[0].payload]).toEqual([4, 1, 1, 0, 20, 12, 20, 20, 30, 0]) // clamped on our side too
+  expect(d.snapshot().params.line).toMatchObject({ mode: 'light', roiPercent: 20, bands: 12, minWidth: 20, maxWidth: 20 })
+  expect(d.snapshot().dirty).toBe(true)
+  expect(fw.config.dirty).toBe(true)
+})
+
+test('track: setParams sends SET_FUNC_CONFIG 5; the current value sends nothing', async () => {
+  const fw = trackFw()
+  const d = await connected(fw)
+  await d.setParams({ track: { ...d.snapshot().params.track } })
+  expect(sent(fw, Cmd.SetFuncConfig)).toHaveLength(0)
+  expect(d.snapshot().dirty).toBe(false)
+  await d.setParams({ track: { threshold: 99, adapt: 60, reacquire: false, multiScale: true } })
+  expect([...sent(fw, Cmd.SetFuncConfig)[0].payload]).toEqual([5, 1, 95, 50, 0, 1, 0, 0, 0, 0])
+  expect(d.snapshot().params.track).toEqual({ threshold: 95, adapt: 50, reacquire: false, multiScale: true })
+})
+
+test('learn(4) learns the line colour, switches mode to learned and maps BAD_PARAM to no-color', async () => {
+  const fw = trackFw()
+  const d = await connected(fw)
+  await d.setFunction(4)
+  expect(await d.learn(4, { x: 10, y: 10, width: 40, height: 40 })).toBe(1)
+  expect(sent(fw, Cmd.Learn)[0].payload[0]).toBe(4)
+  expect(sent(fw, Cmd.Learn)[0].payload).toHaveLength(9) // never the 11-byte form
+  expect(d.snapshot().learned[4]).toEqual([{ id: 1, name: '', color: [230, 40, 36] }])
+  expect(d.snapshot().params.line.mode).toBe('learned') // re-read after the learn
+  fw.learnRgb = null
+  await expect(d.learn(4, { x: 10, y: 10, width: 40, height: 40 })).rejects.toMatchObject({ code: 'no-color' })
+  await d.forget(4, 1)
+  expect(d.snapshot().learned[4]).toEqual([])
+  expect(d.snapshot().params.line.mode).toBe('dark')
+})
+
+test('learn(5) maps BAD_PARAM to no-target and refreshes learned[5]', async () => {
+  const fw = trackFw()
+  const d = await connected(fw)
+  await d.setFunction(5)
+  fw.learnObjectOk = false
+  const err = await d.learn(5, { x: 10, y: 10, width: 8, height: 8 }).catch((e: unknown) => e)
+  expect(err).toBeInstanceOf(LearnError)
+  expect((err as LearnError).code).toBe('no-target')
+  fw.learnObjectOk = true
+  expect(await d.learn(5, { x: 10, y: 10, width: 40, height: 40 })).toBe(1)
+  expect(d.snapshot().learned[5]).toHaveLength(1)
+  expect(d.snapshot().learned[5][0].id).toBe(1)
+  await d.setName(5, 1, 'ball')
+  expect(d.snapshot().learned[5][0].name).toBe('ball')
+  await d.learn(5, { x: 10, y: 10, width: 40, height: 40 }) // learning again replaces the object and its name
+  expect(d.snapshot().learned[5][0].name).toBe('')
+  await d.forgetAll(5)
+  expect(d.snapshot().learned[5]).toEqual([])
+})
+
+test('line cannot be named (SET_NAME 4 is rejected)', async () => {
+  const fw = trackFw()
+  const d = await connected(fw)
+  await expect(d.setName(4, 1, 'x')).rejects.toThrow()
+})
+
+test('line results carry the line extra', async () => {
+  const fw = trackFw()
+  const d = await connected(fw)
+  await d.setFunction(4)
+  let got: Result[] = []
+  d.onResults((r) => (got = r))
+  fw.pushResults(9, 4, [
+    { id: 1, x: 170, y: 190, width: 21, height: 100, confidence: 100, line: { angleDeg: -12.5, offsetX: 10, start: [170, 240], end: [190, 140], flags: 3 } },
+  ])
+  await waitFor(() => expect(got).toHaveLength(1))
+  expect(got[0].kind).toBe('line')
+  expect(got[0].line).toEqual({ angleDeg: -12.5, offsetX: 10, start: [170, 240], end: [190, 140], branch: true, cross: true })
+})
+
+test('track results are kind track', async () => {
+  const fw = trackFw()
+  const d = await connected(fw)
+  await d.setFunction(5)
+  let got: Result[] = []
+  d.onResults((r) => (got = r))
+  fw.pushResults(9, 5, [{ id: 1, x: 100, y: 90, width: 40, height: 40, confidence: 88 }])
+  await waitFor(() => expect(got).toHaveLength(1))
+  expect(got[0]).toMatchObject({ id: 1, kind: 'track', confidence: 88 })
+})
+
+test('old firmware: no func config requests for 4 and 5', async () => {
+  const fw = new FakeFirmware()
+  fw.functionIds = [1, 2, 3]
+  const d = await connected(fw)
+  expect(sent(fw, Cmd.GetFuncConfig)).toHaveLength(0)
+  expect(d.snapshot().supported).not.toContain(4)
+  expect(d.snapshot().supported).not.toContain(5)
+  await expect(d.learn(4, { x: 0, y: 0, width: 10, height: 10 })).rejects.toBeInstanceOf(NotSupportedError)
+  await expect(d.setParams({ track: { threshold: 50, adapt: 10, reacquire: true, multiScale: true } })).rejects.toBeInstanceOf(NotSupportedError)
+})
+
+test('4 and 5 listed but 0x44 unknown: they are dropped without failing the connect', async () => {
+  const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+  const fw = trackFw()
+  fw.unknown.add(Cmd.GetFuncConfig)
+  const d = await connected(fw)
+  expect(d.snapshot().status).toBe('connected')
+  expect(d.snapshot().supported).toEqual([1, 2, 3])
+  expect(warn).toHaveBeenCalled()
+  warn.mockRestore()
+})
+
+test('an unknown line layout_version drops only the line', async () => {
+  const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+  const fw = trackFw()
+  fw.lineLayoutVersion = 2
+  const d = await connected(fw)
+  expect(d.snapshot().status).toBe('connected')
+  expect(d.snapshot().supported).toEqual([1, 2, 3, 5])
+  warn.mockRestore()
+})
+
+test('importConfig applies track params and the track name; absent keys leave the board alone', async () => {
+  const fw = trackFw()
+  fw.line = { ...fw.line, bands: 10 }
+  const d = await connected(fw)
+  await d.setFunction(5)
+  await d.learn(5, { x: 10, y: 10, width: 40, height: 40 })
+  const file = JSON.parse(d.exportConfig())
+  expect(file.params.line.bands).toBe(10)
+  file.params.track = { threshold: 80, adapt: 0, reacquire: false, multiScale: false }
+  file.learned[5] = [{ id: 1, name: 'ball' }]
+  delete file.params.line
+  await d.importConfig(JSON.stringify(file))
+  expect(fw.track).toEqual({ threshold: 80, adapt: 0, reacquire: 0, scale: 0 })
+  expect(fw.line.bands).toBe(10)
+  expect(fw.names.get('5:1')).toBe('ball')
+})
+
+test('importConfig reports a learned line colour that cannot be restored', async () => {
+  const fw = trackFw()
+  const d = await connected(fw)
+  const file = JSON.parse(d.exportConfig())
+  file.learned[4] = [{ id: 1, name: '', color: [1, 2, 3] }]
+  expect((await d.importConfig(JSON.stringify(file))).colorsNeedRelearn).toBe(true)
 })

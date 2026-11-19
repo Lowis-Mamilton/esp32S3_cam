@@ -64,7 +64,7 @@ test('initially there is no 未儲存 badge and save is disabled', () => {
 test('learning a colour shows 未儲存; saving clears it', async () => {
   const { device } = setup()
   await act(async () => {
-    await device.learnColor(FULL)
+    await device.learn(1, FULL)
   })
   expect(screen.getByText('未儲存')).toBeInTheDocument()
   expect(save()).toBeEnabled()
@@ -91,7 +91,7 @@ test('slider change is applied to the device after a short debounce and marks di
 test('failed save is shown inline', async () => {
   const { device } = setup()
   await act(async () => {
-    await device.learnColor(FULL)
+    await device.learn(1, FULL)
   })
   vi.spyOn(device, 'save').mockRejectedValue(new Error('flash busy'))
   fireEvent.click(save())
@@ -129,7 +129,7 @@ test('face results show a confidence column', () => {
 test('renaming a learned colour shows the new name in the results tab', async () => {
   const { device } = setup(1, [{ id: 1, kind: 'color', x: 1, y: 2, width: 3, height: 4 }])
   await act(async () => {
-    await device.learnColor(FULL)
+    await device.learn(1, FULL)
   })
   tab('學習')
   const input = screen.getByRole('textbox', { name: 'ID1 名稱' })
@@ -143,7 +143,7 @@ test('renaming a learned colour shows the new name in the results tab', async ()
 test('name input caps characters at 48 (bytes are checked separately) and Enter commits', async () => {
   const { device } = setup()
   await act(async () => {
-    await device.learnColor(FULL)
+    await device.learn(1, FULL)
   })
   tab('學習')
   const input = screen.getByRole('textbox', { name: 'ID1 名稱' })
@@ -156,7 +156,7 @@ test('name input caps characters at 48 (bytes are checked separately) and Enter 
 test('delete forgets a single ID', async () => {
   const { device } = setup()
   await act(async () => {
-    await device.learnColor(FULL)
+    await device.learn(1, FULL)
   })
   tab('學習')
   fireEvent.click(screen.getByRole('button', { name: '刪除 ID1' }))
@@ -166,7 +166,7 @@ test('delete forgets a single ID', async () => {
 test('全部忘記 needs an inline confirmation; cancel does nothing', async () => {
   const { device } = setup()
   await act(async () => {
-    await device.learnColor(FULL)
+    await device.learn(1, FULL)
   })
   tab('學習')
   fireEvent.click(screen.getByRole('button', { name: '全部忘記' }))
@@ -277,7 +277,7 @@ test('NotSupportedError from the device is caught and shown as a firmware hint',
 test('SaveBar keeps its DOM node when dirty changes, and a failed save error clears when dirty changes', async () => {
   const { device, container } = setup()
   await act(async () => {
-    await device.learnColor(FULL)
+    await device.learn(1, FULL)
   })
   const bar = container.querySelector('.rp-savebar')!
   vi.spyOn(device, 'save').mockRejectedValueOnce(new Error('disk full'))
@@ -305,7 +305,7 @@ test('a slider change is flushed when the tab is left within the debounce window
 test('Enter that confirms an IME composition does not commit the name', async () => {
   const { device } = setup()
   await act(async () => {
-    await device.learnColor(FULL)
+    await device.learn(1, FULL)
   })
   tab('學習')
   const input = screen.getByRole('textbox', { name: 'ID1 名稱' })
@@ -321,7 +321,7 @@ test('Enter that confirms an IME composition does not commit the name', async ()
 test('name input shows a placeholder', async () => {
   const { device } = setup()
   await act(async () => {
-    await device.learnColor(FULL)
+    await device.learn(1, FULL)
   })
   tab('學習')
   expect(screen.getByRole('textbox', { name: 'ID1 名稱' })).toHaveAttribute('placeholder', '未命名')
@@ -357,7 +357,7 @@ test('panel errors are localized, carry a small detail, and clear on tab change'
 test('save error is localized and cleared by the next attempt', async () => {
   const { device } = setup()
   await act(async () => {
-    await device.learnColor(FULL)
+    await device.learn(1, FULL)
   })
   const spy = vi.spyOn(device, 'save').mockRejectedValueOnce(new Error('flash busy'))
   fireEvent.click(save())
@@ -372,7 +372,7 @@ test('save error is localized and cleared by the next attempt', async () => {
 test('save error disappears when the dirty state changes', async () => {
   const { device } = setup()
   await act(async () => {
-    await device.learnColor(FULL)
+    await device.learn(1, FULL)
   })
   vi.spyOn(device, 'save').mockRejectedValueOnce(new Error('x'))
   fireEvent.click(save())
@@ -411,7 +411,7 @@ test('copy without clipboard also reports failure', async () => {
 test('opening the forget-all confirm moves focus to Cancel', async () => {
   const { device } = setup()
   await act(async () => {
-    await device.learnColor(FULL)
+    await device.learn(1, FULL)
   })
   tab('學習')
   fireEvent.click(screen.getByRole('button', { name: '全部忘記' }))
@@ -422,7 +422,7 @@ test('opening the forget-all confirm moves focus to Cancel', async () => {
 test('name inputs limit names to 48 UTF-8 bytes, not characters, and say so', async () => {
   const { device } = setup()
   await act(async () => {
-    await device.learnColor(FULL)
+    await device.learn(1, FULL)
   })
   tab('學習')
   const input = screen.getByRole('textbox', { name: 'ID1 名稱' })

@@ -1,6 +1,8 @@
 import { expect, test } from 'vitest'
 import { defaultParams, type FunctionParams, type LearnedId } from '../types'
 import { createBoundsRecorder, drawGestureScene, gestureSceneAt, recognizeGestures, type DemoHand } from './gesture'
+import { detectLine, drawLineScene, lineSceneAt } from './line'
+import { pickTarget, trackResult } from './track'
 import { DemoLearnError, colorAt, matchLearned, recognize } from './recognize'
 import { sceneAt, type SceneObject } from './scene'
 
@@ -229,4 +231,84 @@ test('the gesture box encloses the drawn hand, for every pose and size', () => {
       expect([gesture, b.minX >= l, b.maxX <= r, b.minY >= t, b.maxY <= bt]).toEqual([gesture, true, true, true, true])
     }
   }
+})
+
+// ---- M6: line scene, line detection, target picking ----
+
+const lineParams = () => defaultParams().line
+const straight = (slope: number, crossY: number | null = null) => ({ path: (y: number) => 120 + slope * y, crossY, width: 14 })
+
+test('lineSceneAt is deterministic and the line stays inside the frame', () => {
+  const a = lineSceneAt(1234)
+  const b = lineSceneAt(1234)
+  expect([a.crossY, a.width, a.path(100), a.path(200)]).toEqual([b.crossY, b.width, b.path(100), b.path(200)])
+  let sawCross = false
+  let sawNoCross = false
+  for (let t = 0; t < 60000; t += 250) {
+    const s = lineSceneAt(t)
+    for (let y = 0; y <= 240; y += 8) expect(s.path(y)).toBeGreaterThan(s.width)
+    for (let y = 0; y <= 240; y += 8) expect(s.path(y)).toBeLessThan(320 - s.width)
+    if (s.crossY === null) sawNoCross = true
+    else sawCross = true
+  }
+  expect(sawCross && sawNoCross).toBe(true)
+})
+
+test('detectLine on a straight path matches the analytic offset and angle', () => {
+  const r = detectLine(straight(0.25), lineParams())
+  expect(r).toHaveLength(1)
+  const l = r[0].line!
+  // default ROI 60% of 240 -> y 96..240, 8 bands of 18 px; the bottom band centre is y = 231
+  expect(r[0]).toMatchObject({ id: 1, kind: 'line', confidence: 100 })
+  expect(Math.abs(l.angleDeg - -Math.atan(0.25) * (180 / Math.PI))).toBeLessThanOrEqual(1)
+  expect(Math.abs(l.offsetX - (120 + 0.25 * 231 - 160))).toBeLessThanOrEqual(1)
+  expect(l.start[1]).toBeGreaterThan(l.end[1]) // start is the bottom end
+  expect(l.branch).toBe(false)
+  expect(l.cross).toBe(false)
+  expect(r[0].width).toBe(Math.abs(l.end[0] - l.start[0]) + 1)
+  expect(r[0].height).toBe(Math.abs(l.start[1] - l.end[1]) + 1)
+})
+
+test('a vertical line right of centre gives angle 0 and a positive offset', () => {
+  const l = detectLine({ path: () => 200, crossY: null, width: 14 }, lineParams())[0].line!
+  expect(l.angleDeg).toBeCloseTo(0, 1)
+  expect(l.offsetX).toBe(40)
+})
+
+test('a crossing bar sets cross and drops the bands it covers', () => {
+  const r = detectLine(straight(0, 150), lineParams())
+  expect(r[0].line!.cross).toBe(true)
+  expect(r[0].confidence).toBeLessThan(100)
+})
+
+test('detectLine returns nothing for a light line on a dark mode board, too few bands, or too wide a line', () => {
+  expect(detectLine(straight(0), { ...lineParams(), mode: 'light' })).toEqual([])
+  expect(detectLine(straight(0), { ...lineParams(), roiPercent: 20, bands: 4, minWidth: 30 })).toEqual([]) // line is 14 wide
+  expect(detectLine({ path: () => 160, crossY: null, width: 100 }, lineParams())).toEqual([]) // wider than max_width
+})
+
+test('drawLineScene paints without throwing', () => {
+  const calls: string[] = []
+  const ctx = new Proxy({}, { get: (_t, k) => (k === 'createLinearGradient' ? () => ({ addColorStop() {} }) : () => void calls.push(String(k))), set: () => true })
+  drawLineScene(ctx as unknown as CanvasRenderingContext2D, 1000)
+  expect(calls.length).toBeGreaterThan(0)
+})
+
+test('pickTarget picks the object that overlaps the region at least 30%, else null', () => {
+  const objs = [blob(60, 60, 20, RED), blob(160, 60, 20, GREEN)]
+  expect(pickTarget(objs, { x: 50, y: 50, width: 20, height: 20 })).toBe(0)
+  expect(pickTarget(objs, { x: 140, y: 40, width: 40, height: 40 })).toBe(1)
+  expect(pickTarget(objs, { x: 220, y: 150, width: 40, height: 40 })).toBeNull()
+  expect(pickTarget(objs, { x: 79, y: 79, width: 30, height: 30 })).toBeNull() // only a corner touches
+})
+
+test('trackResult: tracked blob off-frame yields no result; a partly hidden one matches worse; below threshold is lost', () => {
+  const p = defaultParams().track
+  expect(trackResult(blob(-40, 100, 20, RED), p)).toEqual([])
+  expect(trackResult(blob(100, 300, 20, RED), p)).toEqual([])
+  const full = trackResult(blob(100, 100, 20, RED), p)[0]
+  expect(full).toMatchObject({ id: 1, kind: 'track', x: 100, y: 100, width: 40, height: 40 })
+  const half = trackResult(blob(0, 100, 20, RED), p)[0]
+  expect(half.confidence!).toBeLessThan(full.confidence!)
+  expect(trackResult(blob(0, 100, 20, RED), { ...p, threshold: 90 })).toEqual([])
 })

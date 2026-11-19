@@ -1,11 +1,15 @@
 import { parseConfig } from './config'
 import { drawGestureScene, gestureSceneAt, recognizeGestures } from './demo/gesture'
+import { detectLine, drawLineScene, lineSceneAt } from './demo/line'
 import { colorAt, matchLearned, recognize } from './demo/recognize'
 import { drawScene, sceneAt, type SceneObject } from './demo/scene'
+import { objectColor, pickTarget, trackResult } from './demo/track'
 import {
   Emitter,
   LearnError,
   NAME_MAX_BYTES,
+  clampLineParams,
+  clampTrackParams,
   defaultParams,
   defaultSystem,
   emptyLearned,
@@ -17,6 +21,7 @@ import {
   type FunctionId,
   type FunctionParams,
   type ImportOutcome,
+  type LearnableFn,
   type Result,
   type SystemConfig,
 } from './types'
@@ -29,7 +34,7 @@ export const DEMO_INFO: DeviceInfo = {
   frameWidth: 320,
   frameHeight: 240,
   maxResults: 8,
-  functionIds: [1, 2, 3, 8],
+  functionIds: [1, 2, 3, 4, 5, 8],
 }
 
 const FRAME_INTERVAL_MS = 100
@@ -53,12 +58,14 @@ export class DemoDevice implements Device {
   private system = defaultSystem()
   private active: FunctionId | 0 = 1
   private dirty = false
+  /** Scene object (index in sceneAt) the tracker follows after learn(5); null = nothing learned. */
+  private trackIdx: number | null = null
   private previewPaused = false
   private snap: DeviceSnapshot | null = null
   private timer: ReturnType<typeof setInterval> | null
   private tick = 0
   private readonly t0: number
-  /** The scene of the last emitted frame: what the user saw, and what learnColor samples. */
+  /** The scene of the last emitted frame: what the user saw, and what learn samples. */
   private lastObjs: SceneObject[] = sceneAt(0)
   private readonly now: () => number
 
@@ -73,7 +80,13 @@ export class DemoDevice implements Device {
     const t = this.now() - this.t0
     const objs = sceneAt(t)
     this.lastObjs = objs
-    if (this.active === 8) {
+    if (this.active === 4) {
+      if (!this.previewPaused) this.frames.emit({ kind: 'canvas', draw: (ctx) => drawLineScene(ctx, t) })
+      this.results.emit(detectLine(lineSceneAt(t), this.params.line))
+    } else if (this.active === 5) {
+      if (!this.previewPaused) this.frames.emit({ kind: 'canvas', draw: (ctx) => drawScene(ctx, objs) })
+      this.results.emit(this.trackIdx === null ? [] : trackResult(objs[this.trackIdx], this.params.track))
+    } else if (this.active === 8) {
       const hands = gestureSceneAt(t)
       if (!this.previewPaused) this.frames.emit({ kind: 'canvas', draw: (ctx) => drawGestureScene(ctx, hands) })
       this.results.emit(recognizeGestures(hands, this.params.gesture))
@@ -98,7 +111,7 @@ export class DemoDevice implements Device {
       mode: 'demo',
       status: 'connected',
       info: DEMO_INFO,
-      supported: [1, 2, 3, 8],
+      supported: [1, 2, 3, 4, 5, 8],
       activeFunction: this.active,
       learned: this.learned,
       params: this.params,
@@ -141,7 +154,9 @@ export class DemoDevice implements Device {
     this.changed()
   }
 
-  async learnColor(region: { x: number; y: number; width: number; height: number }): Promise<number> {
+  async learn(fn: LearnableFn, region: { x: number; y: number; width: number; height: number }): Promise<number> {
+    if (fn === 4) throw new LearnError('no-color') // the demo line is black tape: no colour to learn (use the dark mode)
+    if (fn === 5) return this.learnTarget(region)
     if (this.active === 8) throw new LearnError('no-color') // gestures are fixed: nothing to learn
     const rgb = colorAt(this.lastObjs, region)
     if (!rgb) throw new LearnError('no-color')
@@ -161,18 +176,30 @@ export class DemoDevice implements Device {
     this.touch()
     return id
   }
+  /** Learn 5: the object under the selection becomes the one tracked target (id 1); learning again replaces it and its name. */
+  private learnTarget(region: { x: number; y: number; width: number; height: number }): number {
+    const idx = pickTarget(this.lastObjs, region)
+    if (idx === null) throw new LearnError('no-target')
+    this.trackIdx = idx
+    this.learned = { ...this.learned, 5: [{ id: 1, name: '', color: objectColor(this.lastObjs[idx]) }] }
+    this.touch()
+    return 1
+  }
   async forget(fn: FunctionId, id: number) {
     this.learned = { ...this.learned, [fn]: this.learned[fn].filter((e) => e.id !== id) }
+    if (fn === 5 && this.learned[5].length === 0) this.trackIdx = null
     this.touch()
   }
   async forgetAll(fn: FunctionId) {
     this.learned = { ...this.learned, [fn]: [] }
+    if (fn === 5) this.trackIdx = null
     this.touch()
   }
   async setName(fn: FunctionId, id: number, name: string) {
     if (nameBytes(name) > NAME_MAX_BYTES) throw new Error(`name longer than ${NAME_MAX_BYTES} bytes`)
     if (fn === 2 && !(Number.isInteger(id) && id >= 0 && id <= 586)) throw new Error('invalid tag id')
     if (fn === 8 && !(Number.isInteger(id) && id >= 1 && id <= 9)) throw new Error('invalid gesture id')
+    if (fn === 4) throw new Error('the line cannot be named')
     const list = this.learned[fn]
     const cur = list.find((e) => e.id === id)
     // Colours and faces must already be learned; tags and gestures need no learning, so naming an unseen one creates it.
@@ -188,6 +215,8 @@ export class DemoDevice implements Device {
       tag: { ...this.params.tag, ...p.tag },
       face: { ...this.params.face, ...p.face },
       gesture: p.gesture ? clampGesture({ ...this.params.gesture, ...p.gesture }) : this.params.gesture,
+      line: p.line ? clampLineParams({ ...this.params.line, ...p.line }) : this.params.line,
+      track: p.track ? clampTrackParams({ ...this.params.track, ...p.track }) : this.params.track,
     }
     if (JSON.stringify(next) === JSON.stringify(this.params)) return // nothing changed: stay clean
     this.params = next
@@ -205,6 +234,7 @@ export class DemoDevice implements Device {
   }
   async factoryReset() {
     this.learned = emptyLearned()
+    this.trackIdx = null
     this.params = defaultParams()
     this.system = defaultSystem()
     this.dirty = false
@@ -216,11 +246,19 @@ export class DemoDevice implements Device {
   }
   async importConfig(json: string): Promise<ImportOutcome> {
     const c = parseConfig(json) // throws before any state is touched
-    this.learned = c.learned
-    this.params = { ...c.params, gesture: c.params.gesture ?? this.params.gesture }
+    // A tracked object is a template from the camera: a file cannot bring it back, so it has to be learned again.
+    const hadTarget = c.learned[5].length > 0
+    this.learned = { ...c.learned, 5: [] }
+    this.trackIdx = null
+    this.params = {
+      ...c.params,
+      gesture: c.params.gesture ?? this.params.gesture,
+      line: c.params.line ?? this.params.line,
+      track: c.params.track ?? this.params.track,
+    }
     this.system = c.system
     this.touch()
-    return { colorsNeedRelearn: false }
+    return { colorsNeedRelearn: hadTarget }
   }
 
   dispose() {

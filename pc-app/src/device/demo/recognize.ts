@@ -58,7 +58,7 @@ export function matchLearned(rgb: RGB, learned: LearnedId[], tolerance: number):
   return best
 }
 
-interface Clipped {
+export interface Clipped {
   x: number
   y: number
   width: number
@@ -67,7 +67,7 @@ interface Clipped {
 }
 
 /** Bounding box clipped to the frame (integers); null when fully outside. */
-function clip(o: SceneObject): Clipped | null {
+export function clipObject(o: SceneObject): Clipped | null {
   const x0 = Math.max(0, o.x - o.r)
   const x1 = Math.min(FRAME_W, o.x + o.r)
   const y0 = Math.max(0, o.y - o.r)
@@ -88,7 +88,7 @@ const faceConfidence = (o: SceneObject) => Math.round(84 + 14 * Math.sin(o.x * 0
 export function recognize(fn: FunctionId, objs: SceneObject[], learned: LearnedId[], params: FunctionParams): Result[] {
   const out: { area: number; result: Result }[] = []
   for (const o of objs) {
-    const b = clip(o)
+    const b = clipObject(o)
     if (!b) continue
     const box = { x: b.x, y: b.y, width: b.width, height: b.height }
     if (fn === 1 && o.kind === 'blob' && o.rgb) {

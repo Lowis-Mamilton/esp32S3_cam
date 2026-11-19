@@ -113,3 +113,59 @@ test('gesture params and names round-trip; limits are enforced', () => {
   expect(() => parseConfig(make((c) => void (c.learned[8] = [{ id: 10, name: 'x' }])))).toThrow(ConfigFileError)
   expect(() => parseConfig(make((c) => void (c.learned[8] = [{ id: 1, name: 'a' }, { id: 1, name: 'b' }])))).toThrow(ConfigFileError)
 })
+
+// ---- M6: line / track in the config file ----
+
+test('an old file without params.line / params.track / learned[4] / learned[5] imports with none of them', () => {
+  const raw = JSON.parse(JSON.stringify(base()))
+  delete raw.params.line
+  delete raw.params.track
+  delete raw.learned[4]
+  delete raw.learned[5]
+  const c = parseConfig(JSON.stringify(raw))
+  expect(c.params.line).toBeUndefined()
+  expect(c.params.track).toBeUndefined()
+  expect(c.learned[4]).toEqual([])
+  expect(c.learned[5]).toEqual([])
+})
+
+test('line and track params round-trip; limits are enforced', () => {
+  const c = parseConfig(
+    make((c) => {
+      c.params.line = { mode: 'learned', threshold: 255, roiPercent: 20, bands: 12, minWidth: 100, maxWidth: 255, colorTolerance: 100 }
+      c.params.track = { threshold: 95, adapt: 50, reacquire: false, multiScale: false }
+      c.learned[4] = [{ id: 1, name: '', color: [1, 2, 3] }]
+      c.learned[5] = [{ id: 1, name: 'ball', color: [9, 9, 9] }]
+    }),
+  )
+  expect(c.params.line).toEqual({ mode: 'learned', threshold: 255, roiPercent: 20, bands: 12, minWidth: 100, maxWidth: 255, colorTolerance: 100 })
+  expect(c.params.track).toEqual({ threshold: 95, adapt: 50, reacquire: false, multiScale: false })
+  expect(c.learned[5][0].name).toBe('ball')
+  const badLine: [string, (l: Cfg['params']['line']) => void][] = [
+    ['roiPercent 10', (l) => void (l.roiPercent = 10)],
+    ['roiPercent 101', (l) => void (l.roiPercent = 101)],
+    ['bands 3', (l) => void (l.bands = 3)],
+    ['bands 13', (l) => void (l.bands = 13)],
+    ['minWidth 0', (l) => void (l.minWidth = 0)],
+    ['maxWidth below minWidth', (l) => void (l.maxWidth = 3)],
+    ['threshold 256', (l) => void (l.threshold = 256)],
+    ['tolerance 101', (l) => void (l.colorTolerance = 101)],
+    ['mode bogus', (l) => void ((l as { mode: string }).mode = 'x')],
+  ]
+  for (const [, m] of badLine) expect(() => parseConfig(make((c) => m(c.params.line)))).toThrow(ConfigFileError)
+  const badTrack: ((t: Cfg['params']['track']) => void)[] = [
+    (t) => void (t.threshold = 9),
+    (t) => void (t.threshold = 96),
+    (t) => void (t.adapt = 51),
+    (t) => void ((t as { reacquire: unknown }).reacquire = 1),
+  ]
+  for (const m of badTrack) expect(() => parseConfig(make((c) => m(c.params.track)))).toThrow(ConfigFileError)
+})
+
+test('learned[4] and learned[5] only accept id 1', () => {
+  for (const fn of [4, 5] as const) {
+    expect(() => parseConfig(make((c) => void (c.learned[fn] = [{ id: 2, name: '' }])))).toThrow(ConfigFileError)
+    expect(() => parseConfig(make((c) => void (c.learned[fn] = [{ id: 0, name: '' }])))).toThrow(ConfigFileError)
+    expect(() => parseConfig(make((c) => void (c.learned[fn] = [{ id: 1, name: '' }])))).not.toThrow()
+  }
+})

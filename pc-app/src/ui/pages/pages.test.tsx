@@ -241,7 +241,7 @@ const upload = (text: string) =>
 test('export downloads mxcam-config.json via a temporary link and revokes the URL', async () => {
   const d = mount((x) => <PanelHarness device={x} fn={1} />)
   await act(async () => {
-    await d.learnColor(FULL)
+    await d.learn(1, FULL)
   })
   const blobs: Blob[] = []
   URL.createObjectURL = vi.fn((b: Blob) => (blobs.push(b), 'blob:cfg'))
@@ -265,7 +265,7 @@ test('export downloads mxcam-config.json via a temporary link and revokes the UR
 test('export then import restores the same config and marks dirty', async () => {
   const d = mount((x) => <PanelHarness device={x} fn={1} />)
   await act(async () => {
-    await d.learnColor(FULL)
+    await d.learn(1, FULL)
     await d.setSystem({ uartBaud: 9600, i2cAddress: 0x30 })
     await d.save()
   })

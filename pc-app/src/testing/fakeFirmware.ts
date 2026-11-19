@@ -10,6 +10,27 @@ export interface FakeGestureConfig {
 }
 export const DEFAULT_GESTURE: FakeGestureConfig = { handThreshold: 40, gestureThreshold: 60, maxHands: 1 }
 const GESTURE_FN = 8
+const LINE_FN = 4
+const TRACK_FN = 5
+
+/** Line config v1 / Track config v1 values (docs/protocol.md section 9). */
+export interface FakeLineConfig {
+  mode: number
+  threshold: number
+  roiPct: number
+  bands: number
+  minWidth: number
+  maxWidth: number
+  colorTolerance: number
+}
+export const DEFAULT_LINE: FakeLineConfig = { mode: 0, threshold: 0, roiPct: 60, bands: 8, minWidth: 4, maxWidth: 80, colorTolerance: 30 }
+export interface FakeTrackConfig {
+  threshold: number
+  adapt: number
+  reacquire: number
+  scale: number
+}
+export const DEFAULT_TRACK: FakeTrackConfig = { threshold: 50, adapt: 10, reacquire: 1, scale: 1 }
 const clampN = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v))
 
 export const DEFAULT_CONFIG: DeviceConfig = {
@@ -34,10 +55,12 @@ export interface FakeRecord {
   height: number
   confidence?: number
   tag?: { rotationDeg: number; corners: [number, number][] }
+  /** Line extra (function 4): 14 bytes. */
+  line?: { angleDeg: number; offsetX: number; start: [number, number]; end: [number, number]; flags?: number }
 }
 
 export function encodeResults(frameId: number, functionId: number, records: FakeRecord[]): Uint8Array {
-  const size = 6 + records.reduce((n, r) => n + 12 + (r.tag ? 18 : 0), 0)
+  const size = 6 + records.reduce((n, r) => n + 12 + (r.tag ? 18 : 0) + (r.line ? 14 : 0), 0)
   const out = new Uint8Array(size)
   const v = new DataView(out.buffer)
   v.setUint32(0, frameId, true)
@@ -51,8 +74,18 @@ export function encodeResults(frameId: number, functionId: number, records: Fake
     v.setUint16(o + 6, r.width, true)
     v.setUint16(o + 8, r.height, true)
     out[o + 10] = r.confidence ?? 255
-    out[o + 11] = r.tag ? 18 : 0
+    out[o + 11] = r.tag ? 18 : r.line ? 14 : 0
     o += 12
+    if (r.line) {
+      v.setInt16(o, Math.round(r.line.angleDeg * 100), true)
+      v.setInt16(o + 2, r.line.offsetX, true)
+      v.setInt16(o + 4, r.line.start[0], true)
+      v.setInt16(o + 6, r.line.start[1], true)
+      v.setInt16(o + 8, r.line.end[0], true)
+      v.setInt16(o + 10, r.line.end[1], true)
+      out[o + 12] = r.line.flags ?? 0
+      o += 14
+    }
     if (r.tag) {
       v.setInt16(o, Math.round(r.tag.rotationDeg * 100), true)
       r.tag.corners.forEach(([x, y], k) => {
@@ -91,6 +124,18 @@ export class FakeFirmware {
   gesture: FakeGestureConfig = { ...DEFAULT_GESTURE }
   /** layout_version byte of the gesture func config replies. */
   gestureLayoutVersion = 1
+  /** Line config v1 (function 4; GET/SET_FUNC_CONFIG). Add 4 to functionIds to enable it. */
+  line: FakeLineConfig = { ...DEFAULT_LINE }
+  lineLayoutVersion = 1
+  /** Track config v1 (function 5). Add 5 to functionIds to enable it. */
+  track: FakeTrackConfig = { ...DEFAULT_TRACK }
+  trackLayoutVersion = 1
+  /** Learned line colour (LEARN 4); null = none. */
+  lineColor: [number, number, number] | null = null
+  /** Learned tracking object (LEARN 5, id 1); null = none. Its name lives in `names` ("5:1"). */
+  trackObject: { rgb: [number, number, number] } | null = null
+  /** LEARN 5 succeeds; false = region too small or without texture (BAD_PARAM). */
+  learnObjectOk = true
   /** flags byte of the last STREAM_START (bit0 FRAME, bit1 RESULTS); pushFrame sends nothing when bit0 is 0, like the firmware. */
   streamFlags = 0
   colors: { id: number; rgb: [number, number, number] }[] = []
@@ -205,8 +250,12 @@ export class FakeFirmware {
   private learnedPayload(fn: number): Uint8Array {
     const items: { id: number; rgb: number[]; name: Uint8Array }[] = []
     const enc = new TextEncoder()
-    if (fn === 1) {
+    if (fn === LINE_FN) {
+      if (this.lineColor) items.push({ id: 1, rgb: this.lineColor, name: enc.encode('') })
+    } else if (fn === 1) {
       for (const c of this.colors) items.push({ id: c.id, rgb: c.rgb, name: enc.encode(this.names.get(`1:${c.id}`) ?? '') })
+    } else if (fn === TRACK_FN) {
+      if (this.trackObject) items.push({ id: 1, rgb: this.trackObject.rgb, name: enc.encode(this.names.get(`${TRACK_FN}:1`) ?? '') })
     } else {
       for (const [k, n] of this.names) {
         const [f, id] = k.split(':').map(Number)
@@ -251,19 +300,14 @@ export class FakeFirmware {
       case Cmd.GetFuncConfig:
         if (p.length !== 1) return this.reply(f, { error: ErrorCode.BadLength })
         if (!this.hasFuncConfig(p[0])) return this.reply(f, { error: ErrorCode.BadParam })
-        return this.reply(f, this.gesturePayload())
+        return this.reply(f, this.funcPayload(p[0]))
       case Cmd.SetFuncConfig: {
         if (p.length !== 10) return this.reply(f, { error: ErrorCode.BadLength })
-        if (!this.hasFuncConfig(p[0]) || p[1] !== 1) return this.reply(f, { error: ErrorCode.BadParam })
-        const g = this.gesture
-        const next = {
-          handThreshold: clampN(p[2], 10, 95),
-          gestureThreshold: Math.min(100, p[3]),
-          maxHands: clampN(p[4], 1, 2),
-        }
-        if (JSON.stringify(next) !== JSON.stringify(g)) this.config.dirty = true
-        this.gesture = next
-        return this.reply(f, this.gesturePayload())
+        if (!this.hasFuncConfig(p[0]) || p[1] !== this.layoutVersion(p[0])) return this.reply(f, { error: ErrorCode.BadParam })
+        const before = JSON.stringify(this.funcState(p[0]))
+        this.applyFuncConfig(p)
+        if (JSON.stringify(this.funcState(p[0])) !== before) this.config.dirty = true
+        return this.reply(f, this.funcPayload(p[0]))
       }
       case Cmd.SetFunction:
         if (this.failSetFunction > 0) {
@@ -297,18 +341,31 @@ export class FakeFirmware {
         return this.reply(f, this.configPayload())
       }
       case Cmd.GetLearned:
-        if (p[0] !== 1 && p[0] !== 2 && !(p[0] === GESTURE_FN && this.functionIds.includes(GESTURE_FN)))
-          return this.reply(f, { error: ErrorCode.BadParam })
+        if (p[0] !== 1 && p[0] !== 2 && !this.hasFuncFn(p[0])) return this.reply(f, { error: ErrorCode.BadParam })
         return this.reply(f, this.learnedPayload(p[0]))
       case Cmd.Learn: {
         // like the firmware: only the colour function learns, and only while it is the active one
-        if (p[0] !== 1 || this.active !== 1) return this.reply(f, { error: ErrorCode.BadParam })
+        const learnable = p[0] === 1 || (this.hasFuncFn(p[0]) && (p[0] === LINE_FN || p[0] === TRACK_FN))
+        if (!learnable || this.active !== p[0] || p.length !== 9) return this.reply(f, { error: ErrorCode.BadParam })
         if (this.pendingLearn) return this.reply(f, { error: ErrorCode.Busy })
         const timer = setTimeout(() => {
           this.pendingLearn = null
           if (this.learnReply) return this.reply(f, this.learnReply)
           const rgb = this.learnRgb
+          if (p[0] === TRACK_FN) {
+            if (!this.learnObjectOk) return this.reply(f, { error: ErrorCode.BadParam })
+            this.trackObject = { rgb: rgb ?? [128, 128, 128] }
+            this.names.delete(`${TRACK_FN}:1`)
+            this.config.dirty = true
+            return this.reply(f, new Uint8Array([1]))
+          }
           if (!rgb) return this.reply(f, { error: ErrorCode.BadParam })
+          if (p[0] === LINE_FN) {
+            this.lineColor = rgb
+            this.line.mode = 2
+            this.config.dirty = true
+            return this.reply(f, new Uint8Array([1]))
+          }
           const same = this.colors.find((c) => c.rgb.join() === rgb.join())
           if (same) return this.reply(f, new Uint8Array([same.id]))
           let id = 1
@@ -326,18 +383,26 @@ export class FakeFirmware {
         const fn = p[0]
         const id = v.getUint16(1, true)
         // face (3) has nothing to forget: answers OK like firmware (protocol.md 0x31)
-        if (fn !== 1 && fn !== 2 && fn !== 3 && !this.hasGestureNames(fn)) return this.reply(f, { error: ErrorCode.BadParam })
-        const before = this.colors.length + this.names.size // like firmware: dirty only if something was removed
+        if (fn !== 1 && fn !== 2 && fn !== 3 && !this.hasFuncFn(fn)) return this.reply(f, { error: ErrorCode.BadParam })
+        const count = () => this.colors.length + this.names.size + (this.lineColor ? 1 : 0) + (this.trackObject ? 1 : 0)
+        const before = count() // like firmware: dirty only if something was removed
+        if (fn === LINE_FN && (id === 1 || id === 0xffff)) {
+          this.lineColor = null
+          this.line.mode = 0
+        }
+        if (fn === TRACK_FN && (id === 1 || id === 0xffff)) this.trackObject = null
         if (fn === 1) this.colors = id === 0xffff ? [] : this.colors.filter((c) => c.id !== id)
         for (const k of [...this.names.keys()]) if (k.startsWith(`${fn}:`) && (id === 0xffff || k === `${fn}:${id}`)) this.names.delete(k)
-        if (this.colors.length + this.names.size !== before) this.config.dirty = true
+        if (count() !== before) this.config.dirty = true
         return this.reply(f, new Uint8Array(0))
       }
       case Cmd.SetName: {
         const fn = p[0]
         const id = v.getUint16(1, true)
         const name = new TextDecoder().decode(p.subarray(4, 4 + p[3]))
-        if (fn !== 1 && fn !== 2 && !this.hasGestureNames(fn)) return this.reply(f, { error: ErrorCode.BadParam }) // face has no names
+        if (fn !== 1 && fn !== 2 && !this.hasFuncFn(fn)) return this.reply(f, { error: ErrorCode.BadParam }) // face has no names
+        if (fn === LINE_FN) return this.reply(f, { error: ErrorCode.BadParam }) // the line cannot be named
+        if (fn === TRACK_FN && !(id === 1 && this.trackObject)) return this.reply(f, { error: ErrorCode.BadParam })
         if (fn === GESTURE_FN && (id < 1 || id > 9)) return this.reply(f, { error: ErrorCode.BadParam }) // 9 fixed gestures
         if (fn === 1 && !this.colors.some((c) => c.id === id)) return this.reply(f, { error: ErrorCode.BadParam })
         if (name === '') this.names.delete(`${fn}:${id}`)
@@ -358,6 +423,10 @@ export class FakeFirmware {
         setTimeout(() => {
           this.config = { ...DEFAULT_CONFIG }
           this.gesture = { ...DEFAULT_GESTURE }
+          this.line = { ...DEFAULT_LINE }
+          this.track = { ...DEFAULT_TRACK }
+          this.lineColor = null
+          this.trackObject = null
           this.colors = []
           this.names.clear()
           this.reply(f, new Uint8Array(0))
@@ -368,13 +437,46 @@ export class FakeFirmware {
     }
   }
 
+  /** Functions with a func config and learned data beyond colour/tag/face, as listed by GET_INFO. */
+  private hasFuncFn(fn: number): boolean {
+    return (fn === GESTURE_FN || fn === LINE_FN || fn === TRACK_FN) && this.functionIds.includes(fn)
+  }
   private hasFuncConfig(fn: number): boolean {
-    return fn === GESTURE_FN && this.functionIds.includes(GESTURE_FN)
+    return this.hasFuncFn(fn)
   }
-  private hasGestureNames(fn: number): boolean {
-    return fn === GESTURE_FN && this.functionIds.includes(GESTURE_FN)
+  private layoutVersion(fn: number): number {
+    return fn === GESTURE_FN ? this.gestureLayoutVersion : fn === LINE_FN ? this.lineLayoutVersion : this.trackLayoutVersion
   }
-  private gesturePayload(): Uint8Array {
+  private funcState(fn: number) {
+    return fn === GESTURE_FN ? this.gesture : fn === LINE_FN ? this.line : this.track
+  }
+  private applyFuncConfig(p: Uint8Array) {
+    if (p[0] === GESTURE_FN) {
+      this.gesture = { handThreshold: clampN(p[2], 10, 95), gestureThreshold: Math.min(100, p[3]), maxHands: clampN(p[4], 1, 2) }
+    } else if (p[0] === LINE_FN) {
+      const minWidth = clampN(p[6], 1, 100)
+      this.line = {
+        mode: p[2] > 2 ? 0 : p[2],
+        threshold: p[3],
+        roiPct: clampN(p[4], 20, 100),
+        bands: clampN(p[5], 4, 12),
+        minWidth,
+        maxWidth: Math.max(minWidth, p[7]),
+        colorTolerance: Math.min(100, p[8]),
+      }
+    } else {
+      this.track = { threshold: clampN(p[2], 10, 95), adapt: clampN(p[3], 0, 50), reacquire: p[4] ? 1 : 0, scale: p[5] ? 1 : 0 }
+    }
+  }
+  private funcPayload(fn: number): Uint8Array {
+    if (fn === LINE_FN) {
+      const l = this.line
+      return new Uint8Array([fn, this.lineLayoutVersion, l.mode, l.threshold, l.roiPct, l.bands, l.minWidth, l.maxWidth, l.colorTolerance, 0])
+    }
+    if (fn === TRACK_FN) {
+      const t = this.track
+      return new Uint8Array([fn, this.trackLayoutVersion, t.threshold, t.adapt, t.reacquire, t.scale, 0, 0, 0, 0])
+    }
     const g = this.gesture
     return new Uint8Array([GESTURE_FN, this.gestureLayoutVersion, g.handThreshold, g.gestureThreshold, g.maxHands, 0, 0, 0, 0, 0])
   }

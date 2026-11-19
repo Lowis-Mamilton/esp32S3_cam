@@ -61,7 +61,7 @@ test('DemoDevice starts connected with all three functions and DEMO firmware', (
   const s = d.snapshot()
   expect(s.mode).toBe('demo')
   expect(s.status).toBe('connected')
-  expect(s.supported).toEqual([1, 2, 3, 8])
+  expect(s.supported).toEqual([1, 2, 3, 4, 5, 8])
   expect(s.info?.firmwareVersion).toBe('DEMO')
   expect(s.dirty).toBe(false)
   d.dispose()
@@ -107,7 +107,7 @@ test('DemoDevice dirty flag: edits set it, save and factoryReset clear it', asyn
   expect(notified).toHaveBeenCalled()
   await d.save()
   expect(d.snapshot().dirty).toBe(false)
-  const id = await d.learnColor(FULL)
+  const id = await d.learn(1, FULL)
   await d.setName(1, id, 'red')
   expect(d.snapshot().learned[1][0].name).toBe('red')
   expect(d.snapshot().dirty).toBe(true)
@@ -123,7 +123,7 @@ test('DemoDevice dirty flag: edits set it, save and factoryReset clear it', asyn
 
 test('DemoDevice export/import round-trips; malformed input is rejected and leaves state unchanged', async () => {
   const a = new DemoDevice(() => 0)
-  const id = await a.learnColor(FULL)
+  const id = await a.learn(1, FULL)
   await a.setName(1, id, 'x')
   const json = a.exportConfig()
   expect(JSON.parse(json).version).toBe(1)
@@ -144,7 +144,7 @@ test('RealDevice with empty functionIds supports nothing and rejects mutations',
   await waitFor(() => expect(d.snapshot().status).toBe('connected'))
   expect(d.snapshot().mode).toBe('real')
   expect(d.snapshot().supported).toEqual([])
-  await expect(d.learnColor({ x: 0, y: 0, width: 1, height: 1 })).rejects.toBeInstanceOf(NotSupportedError)
+  await expect(d.learn(1, { x: 0, y: 0, width: 1, height: 1 })).rejects.toBeInstanceOf(NotSupportedError)
   await expect(d.setParams({})).rejects.toBeInstanceOf(NotSupportedError)
   await expect(d.save()).rejects.toBeInstanceOf(NotSupportedError)
   expect(() => d.exportConfig()).toThrow(NotSupportedError)
@@ -180,7 +180,7 @@ test('useDevice: demo toggle persists, disposes the old device, and demo -> real
   const first = result.current.device!
   const spy = vi.spyOn(first, 'dispose')
   await act(async () => {
-    await first.learnColor(FULL)
+    await first.learn(1, FULL)
   })
   expect(result.current.snapshot.learned[1]).toHaveLength(1)
   expect(result.current.snapshot.dirty).toBe(true)
@@ -202,14 +202,14 @@ test('useDevice: demo toggle persists, disposes the old device, and demo -> real
   expect(batches.length).toBeGreaterThanOrEqual(2)
   expect(batches.some((b) => b.length > 0)).toBe(true)
   expect(batches.every((b) => (b as { kind: string }[]).every((r) => r.kind === 'color'))).toBe(true)
-  expect(result.current.snapshot.learned).toEqual({ 1: [], 2: [], 3: [], 8: [] })
+  expect(result.current.snapshot.learned).toEqual({ 1: [], 2: [], 3: [], 4: [], 5: [], 8: [] })
   expect(result.current.snapshot.dirty).toBe(false)
   expect(result.current.snapshot.status).toBe('connected')
 })
 
 test('failed import leaves learned, params, system and dirty exactly unchanged', async () => {
   const d = new DemoDevice(() => 0)
-  await d.learnColor(FULL)
+  await d.learn(1, FULL)
   await d.save()
   const before = d.snapshot()
   const beforeJson = d.exportConfig()
@@ -242,11 +242,11 @@ test('useDevice restores the saved demo mode', async () => {
 // ---- Task 3: DemoDevice learning on the demo scene ----
 test('DemoDevice.learnColor: lowest free id, same colour updates, background rejects, 8th rejects', async () => {
   const d = new DemoDevice(() => 0)
-  await expect(d.learnColor({ x: 0, y: 0, width: 2, height: 2 })).rejects.toMatchObject({ code: 'no-color' })
-  const id1 = await d.learnColor(FULL)
+  await expect(d.learn(1, { x: 0, y: 0, width: 2, height: 2 })).rejects.toMatchObject({ code: 'no-color' })
+  const id1 = await d.learn(1, FULL)
   expect(id1).toBe(1)
   expect(d.snapshot().learned[1][0].name).toBe('')
-  expect(await d.learnColor(FULL)).toBe(1) // same colour -> same id
+  expect(await d.learn(1, FULL)).toBe(1) // same colour -> same id
   expect(d.snapshot().learned[1]).toHaveLength(1)
   d.dispose()
 })
@@ -263,9 +263,9 @@ test('DemoDevice: full table rejects with code full; freed id is reused', async 
     }),
   )
   await d.setParams({ color: { ...d.snapshot().params.color, tolerance: 0 } }) // no existing colour matches exactly
-  await expect(d.learnColor(FULL)).rejects.toMatchObject({ code: 'full' })
+  await expect(d.learn(1, FULL)).rejects.toMatchObject({ code: 'full' })
   await d.forget(1, 3)
-  expect(await d.learnColor(FULL)).toBe(3)
+  expect(await d.learn(1, FULL)).toBe(3)
   d.dispose()
 })
 
@@ -290,16 +290,16 @@ test('DemoDevice.learnColor samples the frame last shown, not the current clock'
   const shown = sceneAt(0).find((o) => o.kind === 'blob')!
   clock = 7000 // time moves on, no new frame
   await expect(
-    d.learnColor({ x: Math.round(shown.x) - 2, y: Math.round(shown.y) - 2, width: 4, height: 4 }),
+    d.learn(1, { x: Math.round(shown.x) - 2, y: Math.round(shown.y) - 2, width: 4, height: 4 }),
   ).resolves.toBe(1)
   d.dispose()
 })
 
 test('DemoDevice: re-learning an unchanged colour does not set dirty', async () => {
   const d = new DemoDevice(() => 0)
-  await d.learnColor(FULL)
+  await d.learn(1, FULL)
   await d.save()
-  await d.learnColor(FULL)
+  await d.learn(1, FULL)
   expect(d.snapshot().dirty).toBe(false)
   d.dispose()
 })
@@ -308,7 +308,7 @@ test('DemoDevice.setName: no-ops do not dirty; ids and names are validated', asy
   const d = new DemoDevice(() => 0)
   await d.setName(1, 3, 'ghost') // colour id that was never learned
   expect(d.snapshot().dirty).toBe(false)
-  const id = await d.learnColor(FULL)
+  const id = await d.learn(1, FULL)
   await d.save()
   await d.setName(1, id, '') // unchanged
   expect(d.snapshot().dirty).toBe(false)
@@ -333,13 +333,13 @@ test('DemoDevice.setName: no-ops do not dirty; ids and names are validated', asy
 test('demo learn on gesture is rejected', async () => {
   const d = new DemoDevice(() => 0)
   await d.setFunction(8)
-  await expect(d.learnColor({ x: 0, y: 0, width: 320, height: 240 })).rejects.toBeInstanceOf(LearnError)
+  await expect(d.learn(1, { x: 0, y: 0, width: 320, height: 240 })).rejects.toBeInstanceOf(LearnError)
   d.dispose()
 })
 
 test('demo names gesture ids 1-9 only, and supports function 8', async () => {
   const d = new DemoDevice(() => 0)
-  expect(d.snapshot().supported).toEqual([1, 2, 3, 8])
+  expect(d.snapshot().supported).toEqual([1, 2, 3, 4, 5, 8])
   await d.setName(8, 6, '前進')
   expect(d.snapshot().learned[8]).toEqual([{ id: 6, name: '前進' }])
   await expect(d.setName(8, 0, 'x')).rejects.toThrow()
@@ -379,7 +379,70 @@ test('demo gesture params are clamped like the firmware', async () => {
   d.dispose()
 })
 
-test('emptyLearned has function 8 and toFunctionIds keeps 8', () => {
-  expect(Object.keys(emptyLearned()).sort()).toEqual(['1', '2', '3', '8'])
-  expect(toFunctionIds([1, 4, 8, 9])).toEqual([1, 8])
+test('emptyLearned has functions 4, 5 and 8; toFunctionIds keeps them', () => {
+  expect(Object.keys(emptyLearned()).sort()).toEqual(['1', '2', '3', '4', '5', '8'])
+  expect(toFunctionIds([1, 4, 5, 9])).toEqual([1, 4, 5])
+  expect(toFunctionIds([1, 4, 8, 9])).toEqual([1, 4, 8])
+})
+
+// ---- M6: DemoDevice line (4) and object tracking (5) ----
+
+test('demo supports 4 and 5; line results come from the line scene', async () => {
+  vi.useFakeTimers()
+  let clock = 0
+  const d = new DemoDevice(() => clock)
+  await d.setFunction(4)
+  const got: Result[][] = []
+  d.onResults((r) => got.push(r))
+  clock = 100
+  vi.advanceTimersByTime(100)
+  expect(got.at(-1)).toHaveLength(1)
+  expect(got.at(-1)![0]).toMatchObject({ id: 1, kind: 'line' })
+  expect(got.at(-1)![0].line).toBeDefined()
+  d.dispose()
+})
+
+test('demo learn(4) on the black line is no-color; setName 4 is refused', async () => {
+  const d = new DemoDevice(() => 0)
+  await d.setFunction(4)
+  await expect(d.learn(4, { x: 150, y: 200, width: 20, height: 20 })).rejects.toMatchObject({ code: 'no-color' })
+  await expect(d.setName(4, 1, 'x')).rejects.toThrow()
+  d.dispose()
+})
+
+test('demo learn(5) on the red blob tracks it; empty floor is no-target', async () => {
+  vi.useFakeTimers()
+  let clock = 0
+  const d = new DemoDevice(() => clock)
+  await d.setFunction(5)
+  const red = sceneAt(0)[0]
+  await expect(d.learn(5, { x: 0, y: 0, width: 12, height: 12 })).rejects.toMatchObject({ code: 'no-target' })
+  expect(await d.learn(5, { x: Math.round(red.x) - 10, y: Math.round(red.y) - 10, width: 20, height: 20 })).toBe(1)
+  expect(d.snapshot().learned[5]).toEqual([{ id: 1, name: '', color: red.rgb }])
+  expect(d.snapshot().dirty).toBe(true)
+  const got: Result[][] = []
+  d.onResults((r) => got.push(r))
+  clock = 1000
+  vi.advanceTimersByTime(100)
+  const now = sceneAt(1000)[0]
+  expect(got.at(-1)).toHaveLength(1)
+  expect(got.at(-1)![0]).toMatchObject({ id: 1, kind: 'track' })
+  expect(Math.abs(got.at(-1)![0].x - Math.min(320, Math.max(0, now.x)))).toBeLessThanOrEqual(now.r) // follows that object
+  await d.setName(5, 1, 'ball')
+  expect(d.snapshot().learned[5][0].name).toBe('ball')
+  await d.learn(5, { x: Math.round(now.x) - 10, y: Math.round(now.y) - 10, width: 20, height: 20 })
+  expect(d.snapshot().learned[5][0].name).toBe('') // learning again replaces the object and its name
+  await d.forgetAll(5)
+  clock = 1100
+  vi.advanceTimersByTime(100)
+  expect(got.at(-1)).toEqual([])
+  d.dispose()
+})
+
+test('demo line and track params are clamped like the firmware', async () => {
+  const d = new DemoDevice(() => 0)
+  await d.setParams({ line: { ...d.snapshot().params.line, roiPercent: 5, bands: 99, minWidth: 30, maxWidth: 3 }, track: { threshold: 1, adapt: 99, reacquire: false, multiScale: true } })
+  expect(d.snapshot().params.line).toMatchObject({ roiPercent: 20, bands: 12, minWidth: 30, maxWidth: 30 })
+  expect(d.snapshot().params.track).toEqual({ threshold: 10, adapt: 50, reacquire: false, multiScale: true })
+  d.dispose()
 })

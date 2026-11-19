@@ -10,6 +10,8 @@ const KIND: Record<FunctionId, Result["kind"]> = {
   1: "color",
   2: "tag",
   3: "face",
+  4: "line",
+  5: "track",
   8: "gesture",
 };
 

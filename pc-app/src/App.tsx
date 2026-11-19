@@ -1,7 +1,7 @@
 import { X } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { ResultsStore } from './device/resultsStore'
-import { needsConnection, NotSupportedError, type Device, type FunctionId } from './device/types'
+import { needsConnection, NotSupportedError, type Device, type FunctionId, type LearnableFn } from './device/types'
 import { useDevice } from './device/useDevice'
 import { describeError, type ErrorText } from './i18n/core'
 import { useT, type MessageKey } from './i18n'
@@ -13,7 +13,7 @@ import FirmwarePage from './ui/pages/FirmwarePage'
 import SettingsPage from './ui/pages/SettingsPage'
 import LiveStage, { type LiveStageHandle } from './ui/live/LiveStage'
 
-const FN_KEY: Record<FunctionId, MessageKey> = { 1: 'fnColor', 2: 'fnTag', 3: 'fnFace', 8: 'fnGesture' }
+const FN_KEY: Record<FunctionId, MessageKey> = { 1: 'fnColor', 2: 'fnTag', 3: 'fnFace', 4: 'fnColor' /* TODO M6 Task 7 */, 5: 'fnColor' /* TODO M6 Task 7 */, 8: 'fnGesture' }
 const NOTICE_MS = 4000
 const SET_FUNCTION_RETRY_MS = 500
 
@@ -121,7 +121,8 @@ export default function App({ serial }: Props) {
       if (!userClosed.current) setErrorOf({ device, error: describeError(e) })
     })
   }
-  const onLearn = useCallback((region: Parameters<Device['learnColor']>[0]) => device!.learnColor(region), [device])
+  const learnFn: LearnableFn = lastFn === 4 || lastFn === 5 ? lastFn : 1
+  const onLearn = useCallback((region: Parameters<Device['learn']>[1]) => device!.learn(learnFn, region), [device, learnFn])
   const onPausePreview = useCallback(
     (paused: boolean) => {
       device?.setPreviewPaused(paused).catch((e: unknown) => {

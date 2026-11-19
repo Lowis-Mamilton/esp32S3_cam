@@ -4,6 +4,7 @@ import type { MessageKey, TFn } from '../../i18n'
 /** Message for a LearnError, shared by the live view and the panels. */
 export const LEARN_ERROR_KEY: Record<LearnErrorCode, MessageKey> = {
   'no-color': 'learnNoColor',
+  'no-target': 'learnNoColor', // TODO M6 Task 7: own message (nothing to track in the region)
   full: 'learnFull',
   busy: 'learnBusy',
   cancelled: 'learnCancelled',

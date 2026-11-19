@@ -3,7 +3,12 @@ import { NAME_MAX_BYTES, emptyLearned, nameBytes, type FunctionId, type Function
 /** Versioned device configuration, as exported/imported by Studio. */
 export interface Config {
   learned: Record<FunctionId, LearnedId[]>
-  params: Omit<FunctionParams, 'gesture'> & { gesture?: FunctionParams['gesture'] }
+  /** gesture, line and track are optional: files from before M8a / M6 have none, and absent leaves the board alone. */
+  params: Omit<FunctionParams, 'gesture' | 'line' | 'track'> & {
+    gesture?: FunctionParams['gesture']
+    line?: FunctionParams['line']
+    track?: FunctionParams['track']
+  }
   system: SystemConfig
 }
 
@@ -39,7 +44,8 @@ function parseLearned(fn: FunctionId, list: unknown): LearnedId[] {
   return list.map((e: unknown): LearnedId => {
     if (!isObj(e) || typeof e.name !== 'string' || nameBytes(e.name) > NAME_MAX_BYTES) return bad(`learned.${fn} entry`)
     // color: 1-7, tag: 0-586, face: 1-7 (same slots as colour), gesture: 1-9
-    const ok = fn === 2 ? isInt(e.id, 0, MAX_TAG_ID) : fn === 8 ? isInt(e.id, 1, MAX_GESTURE_ID) : isInt(e.id, 1, 7)
+    // line colour and tracked object: id 1 only
+    const ok = fn === 2 ? isInt(e.id, 0, MAX_TAG_ID) : fn === 8 ? isInt(e.id, 1, MAX_GESTURE_ID) : fn === 4 || fn === 5 ? e.id === 1 : isInt(e.id, 1, 7)
     if (!ok) return bad(`learned.${fn} id`)
     const id = e.id as number
     if (seen.has(id)) return bad(`learned.${fn} duplicate id`)
@@ -65,6 +71,8 @@ export function parseConfig(json: string): Config {
   const out = emptyLearned()
   for (const fn of FNS) out[fn] = parseLearned(fn, learned[fn])
   if (learned[8] !== undefined) out[8] = parseLearned(8, learned[8]) // optional: files from before M8a have none
+  if (learned[4] !== undefined) out[4] = parseLearned(4, learned[4]) // optional: files from before M6 have none
+  if (learned[5] !== undefined) out[5] = parseLearned(5, learned[5])
   if (!isObj(params) || !isObj(params.color) || !isObj(params.tag) || !isObj(params.face)) return bad('params')
   const { color: c, tag: t, face: f } = params
   if (!inRange(c.tolerance, 0, 100) || !isInt(c.minArea, 0) || !isInt(c.maxResults, 1, 8) || !isBool(c.showNames))
@@ -78,6 +86,28 @@ export function parseConfig(json: string): Config {
       return bad('params.gesture')
     gesture = { handThreshold: g.handThreshold, gestureThreshold: g.gestureThreshold, maxHands: g.maxHands }
   }
+  let line: FunctionParams['line'] | undefined
+  if (params.line !== undefined) {
+    const l = params.line
+    if (
+      !isObj(l) ||
+      !(l.mode === 'dark' || l.mode === 'light' || l.mode === 'learned') ||
+      !isInt(l.threshold, 0, 255) ||
+      !isInt(l.roiPercent, 20, 100) ||
+      !isInt(l.bands, 4, 12) ||
+      !isInt(l.minWidth, 1, 100) ||
+      !isInt(l.maxWidth, l.minWidth, 255) ||
+      !isInt(l.colorTolerance, 0, 100)
+    )
+      return bad('params.line')
+    line = { mode: l.mode, threshold: l.threshold, roiPercent: l.roiPercent, bands: l.bands, minWidth: l.minWidth, maxWidth: l.maxWidth, colorTolerance: l.colorTolerance }
+  }
+  let track: FunctionParams['track'] | undefined
+  if (params.track !== undefined) {
+    const k = params.track
+    if (!isObj(k) || !isInt(k.threshold, 10, 95) || !isInt(k.adapt, 0, 50) || !isBool(k.reacquire) || !isBool(k.multiScale)) return bad('params.track')
+    track = { threshold: k.threshold, adapt: k.adapt, reacquire: k.reacquire, multiScale: k.multiScale }
+  }
   if (!isObj(system)) return bad('system')
   const { uartBaud, i2cAddress, ledBrightness } = system
   if ((uartBaud !== 115200 && uartBaud !== 9600) || !isValidI2cAddress(i2cAddress) || !inRange(ledBrightness, 0, 100))
@@ -89,6 +119,8 @@ export function parseConfig(json: string): Config {
       tag: { showNames: t.showNames },
       face: { threshold: f.threshold, maxResults: f.maxResults },
       ...(gesture ? { gesture } : {}),
+      ...(line ? { line } : {}),
+      ...(track ? { track } : {}),
     },
     system: { uartBaud, i2cAddress, ledBrightness },
   }
