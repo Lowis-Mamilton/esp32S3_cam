@@ -62,17 +62,33 @@ size_t mxst_serialize(const mxs_data_t *d, uint8_t *out, size_t cap);
 bool mxst_deserialize(const uint8_t *p, size_t len, mxs_data_t *out);
 
 /* Name table. len 0 removes; an existing (fn,id) is replaced. false when the
- * table is full, fn/id invalid (fn 1/2/3; colour id 1-7; tag id 0-586), or
- * len > MXP_NAME_MAX. */
+ * table is full, fn/id invalid (fn 1/2/3; colour id 1-7; tag id 0-586),
+ * len > MXP_NAME_MAX or the bytes are not valid UTF-8 (mxp_utf8_valid). */
 bool mxst_set_name(mxs_data_t *d, uint8_t fn, uint16_t id, const char *utf8, uint8_t len);
 /* NULL when absent; *len_out (optional) receives the byte length. */
 const char *mxst_get_name(const mxs_data_t *d, uint8_t fn, uint16_t id, uint8_t *len_out);
 /* Forget one learned colour (and its name); id 0xFF forgets all colours and
  * all colour names. */
 void mxst_forget_color(mxs_data_t *d, uint8_t id);
+/* Remove the name of (fn, id); id 0xFFFF removes every name of fn. */
+void mxst_forget_names(mxs_data_t *d, uint8_t fn, uint16_t id);
+
+/* LEARN bookkeeping for a sampled colour. If it matches a learned colour
+ * (mxc_same_color with `tolerance`; the lowest such id wins) that id's rgb is
+ * replaced; otherwise it is added with the lowest free id 1-7 (colours stay
+ * sorted by id). Returns the id, MXST_LEARN_FULL when 7 are learned and none
+ * matches, or MXST_LEARN_NO_COLOR when rgb itself is too grey to ever match. */
+#define MXST_LEARN_NO_COLOR 0
+#define MXST_LEARN_FULL (-1)
+int mxst_learn_color(mxs_data_t *d, const uint8_t rgb[3], uint8_t tolerance);
 
 #ifdef ESP_PLATFORM
-/* NVS (namespace "mxcam", single blob key "data"). Each call initialises NVS
+/* Not reentrant (static 1.7 KB blob buffers): call load/save/erase from one
+ * task at a time (boot code, then the save worker). Stack: load copies an
+ * mxs_data_t (~1.9 KB) on the stack, so give the caller >= 4 KB; save/erase
+ * need ~3 KB (NVS internals).
+ *
+ * NVS (namespace "mxcam", single blob key "data"). Each call initialises NVS
  * lazily (nvs_flash_init, erasing on NO_FREE_PAGES/NEW_VERSION_FOUND), so no
  * prior init is required. The whole data is one nvs_set_blob + nvs_commit; NVS
  * makes a per-key set atomic, so a power cut leaves the old or the new blob,

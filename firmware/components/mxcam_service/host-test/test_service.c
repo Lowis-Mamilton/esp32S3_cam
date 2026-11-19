@@ -3,6 +3,8 @@
 
 #include "mxcam_service.h"
 
+static mxs_data_t g_data; /* store data the service operates on */
+
 static int g_fail = 0, g_checks = 0;
 #define CHECK(c)                                                       \
   do {                                                                 \
@@ -31,7 +33,7 @@ static mxp_info_t make_info(void)
 static size_t call(mxs_state_t *s, uint8_t cmd, uint8_t seq, const uint8_t *pl, uint16_t len,
                    uint32_t now, mxp_frame_t *resp, uint8_t *rbuf, size_t rbuf_cap)
 {
-  uint8_t out[128];
+  static uint8_t out[MXS_RESPONSE_MAX];
   mxp_frame_t req = { cmd, seq, len, pl };
   size_t n = mxs_handle(s, &req, now, out, sizeof(out));
   mxp_decoder_t d;
@@ -46,7 +48,8 @@ static void test_info(void)
 {
   mxp_info_t info = make_info();
   mxs_state_t s;
-  mxs_init(&s, &info);
+  mxst_defaults(&g_data);
+  mxs_init(&s, &info, &g_data);
   uint8_t rb[64], expect[64];
   mxp_frame_t r;
   CHECK(call(&s, MXP_CMD_GET_INFO, 7, NULL, 0, 0, &r, rb, sizeof(rb)) > 0);
@@ -59,7 +62,8 @@ static void test_ping_function(void)
 {
   mxp_info_t info = make_info();
   mxs_state_t s;
-  mxs_init(&s, &info);
+  mxst_defaults(&g_data);
+  mxs_init(&s, &info, &g_data);
   uint8_t rb[64];
   mxp_frame_t r;
   call(&s, MXP_CMD_PING, 42, NULL, 0, 0, &r, rb, sizeof(rb));
@@ -69,8 +73,15 @@ static void test_ping_function(void)
   call(&s, MXP_CMD_SET_FUNCTION, 3, &zero, 1, 0, &r, rb, sizeof(rb));
   CHECK(r.cmd == 0x90 && r.len == 1 && r.payload[0] == 0 && r.seq == 3);
   call(&s, MXP_CMD_SET_FUNCTION, 4, &one, 1, 0, &r, rb, sizeof(rb));
+  CHECK(r.cmd == 0x90 && r.len == 1 && r.payload[0] == 1 && r.seq == 4 && s.function_id == 1);
+  uint8_t two = 2, three = 3;
+  call(&s, MXP_CMD_SET_FUNCTION, 12, &two, 1, 0, &r, rb, sizeof(rb));
+  CHECK(r.cmd == 0x90 && r.payload[0] == 2 && s.function_id == 2);
+  /* face (3) arrives in M3 */
+  call(&s, MXP_CMD_SET_FUNCTION, 13, &three, 1, 0, &r, rb, sizeof(rb));
   CHECK(r.cmd == 0xFF && r.len == 2 && r.payload[0] == MXP_CMD_SET_FUNCTION &&
-        r.payload[1] == MXP_ERR_BAD_PARAM && r.seq == 4);
+        r.payload[1] == MXP_ERR_BAD_PARAM && r.seq == 13 && s.function_id == 2);
+  call(&s, MXP_CMD_SET_FUNCTION, 14, &zero, 1, 0, &r, rb, sizeof(rb));
   call(&s, MXP_CMD_SET_FUNCTION, 5, NULL, 0, 0, &r, rb, sizeof(rb));
   CHECK(r.cmd == 0xFF && r.payload[1] == MXP_ERR_BAD_LENGTH);
   call(&s, MXP_CMD_GET_FUNCTION, 6, NULL, 0, 0, &r, rb, sizeof(rb));
@@ -81,7 +92,8 @@ static void test_errors(void)
 {
   mxp_info_t info = make_info();
   mxs_state_t s;
-  mxs_init(&s, &info);
+  mxst_defaults(&g_data);
+  mxs_init(&s, &info, &g_data);
   uint8_t rb[64];
   mxp_frame_t r;
   call(&s, 0x77, 9, NULL, 0, 0, &r, rb, sizeof(rb));
@@ -111,7 +123,8 @@ static void test_stream(void)
 {
   mxp_info_t info = make_info();
   mxs_state_t s;
-  mxs_init(&s, &info);
+  mxst_defaults(&g_data);
+  mxs_init(&s, &info, &g_data);
   CHECK(!s.streaming);
   start(&s, 1, 0, 0, 0);
   CHECK(s.streaming && mxs_wants_frames(&s));
@@ -137,7 +150,8 @@ static void test_timeout(void)
 {
   mxp_info_t info = make_info();
   mxs_state_t s;
-  mxs_init(&s, &info);
+  mxst_defaults(&g_data);
+  mxs_init(&s, &info, &g_data);
   uint8_t rb[64];
   mxp_frame_t r;
 
@@ -212,7 +226,8 @@ static void test_learn(void)
 {
   mxp_info_t info = make_info();
   mxs_state_t s;
-  mxs_init(&s, &info);
+  mxst_defaults(&g_data);
+  mxs_init(&s, &info, &g_data);
   uint8_t rb[64], out[64];
   mxp_frame_t r;
 
@@ -273,7 +288,8 @@ static void test_learn_cancel(void)
 {
   mxp_info_t info = make_info();
   mxs_state_t s;
-  mxs_init(&s, &info);
+  mxst_defaults(&g_data);
+  mxs_init(&s, &info, &g_data);
   uint8_t rb[64], out[64], seq = 0;
   mxp_frame_t r;
   uint8_t zero = 0;
@@ -326,7 +342,8 @@ static void test_learn_cancel(void)
   CHECK(s.pending_learn.active);
 
   /* two cancels before a flush are both delivered, in order */
-  mxs_init(&s, &info);
+  mxst_defaults(&g_data);
+  mxs_init(&s, &info, &g_data);
   s.function_id = 1;
   CHECK(learn(&s, 1, 40, 0, &r, rb, sizeof(rb)) == MXS_DEFERRED);
   call(&s, MXP_CMD_SET_FUNCTION, 8, &zero, 1, 1, &r, rb, sizeof(rb));
@@ -340,6 +357,398 @@ static void test_learn_cancel(void)
   CHECK(mxs_peek_cancelled(&s, &seq, out, sizeof(out)) == 0);
 }
 
+/* ---- M2 commands ---- */
+static mxs_state_t *fresh(mxs_state_t *s)
+{
+  mxp_info_t info = make_info();
+  mxst_defaults(&g_data);
+  mxs_init(s, &info, &g_data);
+  return s;
+}
+
+static uint8_t g_rb[MXS_RESPONSE_MAX];
+static mxp_frame_t g_r;
+/* call() with the shared response buffer; returns &g_r. */
+static const mxp_frame_t *req(mxs_state_t *s, uint8_t cmd, uint8_t seq, const uint8_t *pl, uint16_t len)
+{
+  memset(&g_r, 0, sizeof(g_r));
+  call(s, cmd, seq, pl, len, 0, &g_r, g_rb, sizeof(g_rb));
+  return &g_r;
+}
+static bool is_err(const mxp_frame_t *r, uint8_t cmd, uint8_t code)
+{
+  return r->cmd == 0xFF && r->len == 2 && r->payload[0] == cmd && r->payload[1] == code;
+}
+static void add_color(uint8_t id, uint8_t r, uint8_t g, uint8_t b)
+{
+  mxc_learned_t *c = &g_data.colors[g_data.n_colors++];
+  c->id = id;
+  c->rgb[0] = r;
+  c->rgb[1] = g;
+  c->rgb[2] = b;
+}
+
+static void test_results(void)
+{
+  mxs_state_t s;
+  fresh(&s);
+  const mxp_frame_t *r;
+  uint8_t two = 2, one = 1;
+  req(&s, MXP_CMD_SET_FUNCTION, 1, &two, 1);
+  /* before any processed frame: frame 0, current function, no records */
+  r = req(&s, MXP_CMD_GET_RESULTS, 5, NULL, 0);
+  CHECK(r->cmd == 0xA0 && r->seq == 5 && r->len == 6);
+  mxp_results_t res;
+  CHECK(mxp_unpack_results(r->payload, r->len, &res) && res.frame_id == 0 && res.function_id == 2 &&
+        res.count == 0);
+  r = req(&s, MXP_CMD_GET_RESULTS, 6, &one, 1);
+  CHECK(is_err(r, MXP_CMD_GET_RESULTS, MXP_ERR_BAD_LENGTH));
+
+  /* latest processed frame, byte for byte */
+  mxp_results_t in;
+  memset(&in, 0, sizeof(in));
+  in.frame_id = 1234;
+  in.function_id = 2;
+  in.count = MXP_MAX_RESULTS;
+  for (int i = 0; i < MXP_MAX_RESULTS; i++) {
+    in.r[i].id = (uint16_t)(100 + i);
+    in.r[i].x = (int16_t)(10 * i);
+    in.r[i].w = 20;
+    in.r[i].confidence = 90;
+    in.r[i].extra_len = MXP_RESULT_EXTRA_MAX;
+    in.r[i].extra[0] = (uint8_t)i;
+  }
+  uint8_t packed[MXS_RESULTS_MAX + 1];
+  size_t n = mxp_pack_results(&in, packed, sizeof(packed));
+  CHECK(n == MXS_RESULTS_MAX); /* the worst case fits exactly */
+  mxs_set_results(&s, packed, (uint16_t)n);
+  r = req(&s, MXP_CMD_GET_RESULTS, 7, NULL, 0);
+  CHECK(r->cmd == 0xA0 && r->len == n && memcmp(r->payload, packed, n) == 0);
+  in.frame_id = 1235;
+  in.count = 1;
+  n = mxp_pack_results(&in, packed, sizeof(packed));
+  mxs_set_results(&s, packed, (uint16_t)n);
+  r = req(&s, MXP_CMD_GET_RESULTS, 8, NULL, 0);
+  CHECK(r->len == n && mxp_unpack_results(r->payload, r->len, &res) && res.frame_id == 1235 && res.count == 1);
+  /* oversized input is ignored (keeps the previous results) */
+  mxs_set_results(&s, packed, MXS_RESULTS_MAX + 1);
+  r = req(&s, MXP_CMD_GET_RESULTS, 9, NULL, 0);
+  CHECK(r->len == n);
+
+  /* RESULTS pushes need streaming + flags bit1 */
+  CHECK(!mxs_wants_results(&s));
+  start(&s, 1, 10, 0, 0);
+  CHECK(!mxs_wants_results(&s));
+  start(&s, 2, 10, 0, 0);
+  CHECK(mxs_wants_results(&s) && !mxs_wants_frames(&s));
+  start(&s, 3, 10, 0, 0);
+  CHECK(mxs_wants_results(&s) && mxs_wants_frames(&s));
+  req(&s, MXP_CMD_STREAM_STOP, 10, NULL, 0);
+  CHECK(!mxs_wants_results(&s));
+}
+
+static void forget(mxs_state_t *s, uint8_t fn, uint16_t id, uint8_t seq)
+{
+  uint8_t p[3] = { fn, (uint8_t)id, (uint8_t)(id >> 8) };
+  req(s, MXP_CMD_FORGET, seq, p, 3);
+}
+
+static void test_forget(void)
+{
+  mxs_state_t s;
+  fresh(&s);
+  add_color(1, 200, 0, 0);
+  add_color(2, 0, 200, 0);
+  add_color(3, 0, 0, 200);
+  mxst_set_name(&g_data, 1, 2, "green", 5);
+  mxst_set_name(&g_data, 2, 7, "door", 4);
+  mxst_set_name(&g_data, 2, 9, "exit", 4);
+
+  uint8_t p[3] = { 1, 2, 0 };
+  CHECK(is_err(req(&s, MXP_CMD_FORGET, 1, p, 2), MXP_CMD_FORGET, MXP_ERR_BAD_LENGTH));
+  CHECK(g_data.cfg.dirty == 0);
+  forget(&s, 1, 2, 2);
+  CHECK(g_r.cmd == 0xB1 && g_r.len == 0 && g_r.seq == 2);
+  CHECK(g_data.n_colors == 2 && g_data.colors[0].id == 1 && g_data.colors[1].id == 3);
+  CHECK(mxst_get_name(&g_data, 1, 2, NULL) == NULL && g_data.cfg.dirty == 1);
+  /* idempotent: absent ids succeed */
+  forget(&s, 1, 2, 3);
+  CHECK(g_r.cmd == 0xB1);
+  forget(&s, 1, 500, 4);
+  CHECK(g_r.cmd == 0xB1 && g_data.n_colors == 2);
+  /* tag names: one, then all */
+  forget(&s, 2, 7, 5);
+  CHECK(g_r.cmd == 0xB1 && mxst_get_name(&g_data, 2, 7, NULL) == NULL &&
+        mxst_get_name(&g_data, 2, 9, NULL) != NULL);
+  forget(&s, 2, 0xFFFF, 6);
+  CHECK(g_r.cmd == 0xB1 && g_data.n_names == 0);
+  /* all colours */
+  forget(&s, 1, 0xFFFF, 7);
+  CHECK(g_r.cmd == 0xB1 && g_data.n_colors == 0);
+  /* unsupported functions */
+  forget(&s, 0, 1, 8);
+  CHECK(is_err(&g_r, MXP_CMD_FORGET, MXP_ERR_BAD_PARAM));
+  forget(&s, 3, 1, 9);
+  CHECK(is_err(&g_r, MXP_CMD_FORGET, MXP_ERR_BAD_PARAM));
+}
+
+static const mxp_frame_t *set_name(mxs_state_t *s, uint8_t fn, uint16_t id, const char *name, uint8_t n)
+{
+  uint8_t p[4 + 64];
+  p[0] = fn;
+  p[1] = (uint8_t)id;
+  p[2] = (uint8_t)(id >> 8);
+  p[3] = n;
+  memcpy(p + 4, name, n);
+  return req(s, MXP_CMD_SET_NAME, 3, p, (uint16_t)(4 + n));
+}
+
+static void test_set_name(void)
+{
+  mxs_state_t s;
+  fresh(&s);
+  add_color(2, 0, 200, 0);
+  /* colour: id must be learned */
+  CHECK(is_err(set_name(&s, 1, 1, "red", 3), MXP_CMD_SET_NAME, MXP_ERR_BAD_PARAM));
+  CHECK(g_data.n_names == 0 && g_data.cfg.dirty == 0);
+  CHECK(set_name(&s, 1, 2, "\xE7\xB6\xA0", 3)->cmd == 0xB2 && g_r.len == 0);
+  uint8_t l = 0;
+  const char *nm = mxst_get_name(&g_data, 1, 2, &l);
+  CHECK(nm && l == 3 && memcmp(nm, "\xE7\xB6\xA0", 3) == 0 && g_data.cfg.dirty == 1);
+  /* AprilTag: any 0..586 id, no learning needed */
+  CHECK(set_name(&s, 2, 0, "zero", 4)->cmd == 0xB2);
+  CHECK(set_name(&s, 2, 586, "last", 4)->cmd == 0xB2);
+  CHECK(is_err(set_name(&s, 2, 587, "x", 1), MXP_CMD_SET_NAME, MXP_ERR_BAD_PARAM));
+  /* other functions */
+  CHECK(is_err(set_name(&s, 0, 1, "x", 1), MXP_CMD_SET_NAME, MXP_ERR_BAD_PARAM));
+  CHECK(is_err(set_name(&s, 3, 1, "x", 1), MXP_CMD_SET_NAME, MXP_ERR_BAD_PARAM));
+  /* name length: 48 ok, 49 BAD_LENGTH; mismatch BAD_LENGTH; bad UTF-8 BAD_PARAM */
+  char big[64];
+  memset(big, 'n', sizeof(big));
+  CHECK(set_name(&s, 2, 5, big, 48)->cmd == 0xB2);
+  CHECK(is_err(set_name(&s, 2, 5, big, 49), MXP_CMD_SET_NAME, MXP_ERR_BAD_LENGTH));
+  uint8_t p[8] = { 2, 5, 0, 3, 'a', 'b' };
+  CHECK(is_err(req(&s, MXP_CMD_SET_NAME, 4, p, 6), MXP_CMD_SET_NAME, MXP_ERR_BAD_LENGTH));
+  CHECK(is_err(req(&s, MXP_CMD_SET_NAME, 4, p, 3), MXP_CMD_SET_NAME, MXP_ERR_BAD_LENGTH));
+  CHECK(is_err(set_name(&s, 2, 5, "\xC3\x28", 2), MXP_CMD_SET_NAME, MXP_ERR_BAD_PARAM));
+  CHECK(is_err(set_name(&s, 2, 5, "\xED\xA0\x80", 3), MXP_CMD_SET_NAME, MXP_ERR_BAD_PARAM));
+  /* name_len 0 clears */
+  CHECK(set_name(&s, 2, 5, "", 0)->cmd == 0xB2 && mxst_get_name(&g_data, 2, 5, NULL) == NULL);
+  /* table full -> FULL */
+  fresh(&s);
+  for (uint16_t i = 0; i < MXST_MAX_NAMES; i++) CHECK(set_name(&s, 2, i, "t", 1)->cmd == 0xB2);
+  CHECK(is_err(set_name(&s, 2, 100, "t", 1), MXP_CMD_SET_NAME, MXP_ERR_FULL));
+  CHECK(set_name(&s, 2, 3, "again", 5)->cmd == 0xB2); /* replacing still works */
+}
+
+static void test_get_learned(void)
+{
+  mxs_state_t s;
+  fresh(&s);
+  uint8_t fn = 1;
+  /* empty */
+  const mxp_frame_t *r = req(&s, MXP_CMD_GET_LEARNED, 1, &fn, 1);
+  CHECK(r->cmd == 0xB3 && r->len == 1 && r->payload[0] == 0);
+  CHECK(is_err(req(&s, MXP_CMD_GET_LEARNED, 2, NULL, 0), MXP_CMD_GET_LEARNED, MXP_ERR_BAD_LENGTH));
+  uint8_t bad = 3;
+  CHECK(is_err(req(&s, MXP_CMD_GET_LEARNED, 2, &bad, 1), MXP_CMD_GET_LEARNED, MXP_ERR_BAD_PARAM));
+  bad = 0;
+  CHECK(is_err(req(&s, MXP_CMD_GET_LEARNED, 2, &bad, 1), MXP_CMD_GET_LEARNED, MXP_ERR_BAD_PARAM));
+
+  /* colours, by id, with rgb and names */
+  add_color(1, 200, 10, 20);
+  add_color(4, 30, 40, 220);
+  mxst_set_name(&g_data, 1, 4, "blue", 4);
+  mxst_set_name(&g_data, 2, 9, "tag9", 4);
+  r = req(&s, MXP_CMD_GET_LEARNED, 3, &fn, 1);
+  static const uint8_t want1[] = { 2, 1, 0, 200, 10, 20, 0, 4, 0, 30, 40, 220, 4, 'b', 'l', 'u', 'e' };
+  CHECK(r->cmd == 0xB3 && r->len == sizeof(want1) && memcmp(r->payload, want1, sizeof(want1)) == 0);
+
+  /* tags: named ids only, sorted, rgb 0 */
+  mxst_set_name(&g_data, 2, 300, "far", 3);
+  mxst_set_name(&g_data, 2, 2, "near", 4);
+  fn = 2;
+  r = req(&s, MXP_CMD_GET_LEARNED, 4, &fn, 1);
+  static const uint8_t want2[] = { 3, 2, 0, 0, 0, 0, 4, 'n', 'e', 'a', 'r', 9, 0, 0, 0, 0, 4, 't', 'a', 'g', '9',
+                                   0x2C, 0x01, 0, 0, 0, 3, 'f', 'a', 'r' };
+  CHECK(r->cmd == 0xB3 && r->len == sizeof(want2) && memcmp(r->payload, want2, sizeof(want2)) == 0);
+
+  /* worst case: 32 tag names of 48 bytes fits in one response */
+  fresh(&s);
+  char big[MXP_NAME_MAX];
+  memset(big, 'x', sizeof(big));
+  for (uint16_t i = 0; i < MXST_MAX_NAMES; i++) mxst_set_name(&g_data, 2, (uint16_t)(586 - i), big, MXP_NAME_MAX);
+  r = req(&s, MXP_CMD_GET_LEARNED, 5, &fn, 1);
+  CHECK(r->cmd == 0xB3 && r->len == 1 + MXST_MAX_NAMES * (6 + MXP_NAME_MAX) && r->payload[0] == MXST_MAX_NAMES);
+  CHECK(r->payload[1] == (uint8_t)(586 - 31) && r->payload[2] == (uint8_t)((586 - 31) >> 8));
+}
+
+static void test_config(void)
+{
+  mxs_state_t s;
+  fresh(&s);
+  const mxp_frame_t *r = req(&s, MXP_CMD_GET_CONFIG, 1, NULL, 0);
+  uint8_t def[MXP_CONFIG_SIZE];
+  mxp_pack_config(&g_data.cfg, def);
+  CHECK(r->cmd == 0xC0 && r->len == MXP_CONFIG_SIZE && memcmp(r->payload, def, MXP_CONFIG_SIZE) == 0);
+  CHECK(r->payload[15] == 0); /* not dirty */
+  uint8_t junk = 0;
+  CHECK(is_err(req(&s, MXP_CMD_GET_CONFIG, 2, &junk, 1), MXP_CMD_GET_CONFIG, MXP_ERR_BAD_LENGTH));
+
+  /* SET_CONFIG clamps / falls back and answers with the applied config */
+  uint8_t c[MXP_CONFIG_SIZE];
+  memcpy(c, def, sizeof(c));
+  c[1] = 200;                                      /* tolerance -> 100 */
+  c[2] = 0x34; c[3] = 0x12;                        /* min_area 0x1234 */
+  c[4] = 0;                                        /* color.max_results -> 1 */
+  c[9] = 0x10; c[10] = 0x27; c[11] = 0; c[12] = 0; /* baud 10000 -> 115200 */
+  c[13] = 0x80;                                    /* i2c -> 0x5A */
+  c[14] = 70;                                      /* led */
+  c[15] = 0;                                       /* dirty is read-only */
+  r = req(&s, MXP_CMD_SET_CONFIG, 3, c, sizeof(c));
+  CHECK(r->cmd == 0xC1 && r->len == MXP_CONFIG_SIZE);
+  CHECK(r->payload[1] == 100 && r->payload[2] == 0x34 && r->payload[3] == 0x12 && r->payload[4] == 1);
+  CHECK(r->payload[9] == 0x00 && r->payload[10] == 0xC2 && r->payload[11] == 0x01); /* 115200 */
+  CHECK(r->payload[13] == 0x5A && r->payload[14] == 70 && r->payload[15] == 1);
+  CHECK(g_data.cfg.tolerance == 100 && g_data.cfg.min_area == 0x1234 && g_data.cfg.led == 70 &&
+        g_data.cfg.dirty == 1);
+  r = req(&s, MXP_CMD_GET_CONFIG, 4, NULL, 0);
+  CHECK(r->cmd == 0xC0 && r->payload[15] == 1 && r->payload[1] == 100);
+
+  /* version != 1 rejects the whole packet; wrong length is BAD_LENGTH */
+  c[0] = 2;
+  c[1] = 5;
+  CHECK(is_err(req(&s, MXP_CMD_SET_CONFIG, 5, c, sizeof(c)), MXP_CMD_SET_CONFIG, MXP_ERR_BAD_PARAM));
+  CHECK(g_data.cfg.tolerance == 100);
+  c[0] = 1;
+  CHECK(is_err(req(&s, MXP_CMD_SET_CONFIG, 6, c, 17), MXP_CMD_SET_CONFIG, MXP_ERR_BAD_LENGTH));
+}
+
+static size_t deferred(mxs_state_t *s, uint8_t cmd, uint8_t seq)
+{
+  static uint8_t out[MXS_RESPONSE_MAX];
+  mxp_frame_t rq = { cmd, seq, 0, NULL };
+  return mxs_handle(s, &rq, 0, out, sizeof(out));
+}
+
+static void test_save_reset(void)
+{
+  mxs_state_t s;
+  fresh(&s);
+  static mxs_data_t snap;
+  uint8_t out[64], cmd = 0, seq = 0;
+
+  /* SAVE is deferred to the save worker; a second store op is BUSY */
+  CHECK(!mxs_take_pending_store(&s, &cmd, &seq, &snap));
+  add_color(1, 200, 0, 0);
+  g_data.cfg.dirty = 1;
+  CHECK(deferred(&s, MXP_CMD_SAVE, 40) == MXS_DEFERRED);
+  CHECK(is_err(req(&s, MXP_CMD_SAVE, 41, NULL, 0), MXP_CMD_SAVE, MXP_ERR_BUSY));
+  CHECK(is_err(req(&s, MXP_CMD_FACTORY_RESET, 42, NULL, 0), MXP_CMD_FACTORY_RESET, MXP_ERR_BUSY));
+  uint8_t junk = 1;
+  CHECK(is_err(req(&s, MXP_CMD_SAVE, 43, &junk, 1), MXP_CMD_SAVE, MXP_ERR_BAD_LENGTH));
+  CHECK(mxs_take_pending_store(&s, &cmd, &seq, &snap));
+  CHECK(cmd == MXP_CMD_SAVE && seq == 40 && snap.n_colors == 1 && snap.colors[0].id == 1);
+  CHECK(!mxs_take_pending_store(&s, &cmd, &seq, &snap)); /* claimed once */
+  CHECK(mxs_complete_store(&s, 39, true, out, sizeof(out)) == 0); /* wrong seq */
+  size_t n = mxs_complete_store(&s, 40, true, out, sizeof(out));
+  mxp_frame_t r;
+  uint8_t rb[64];
+  decode(out, n, &r, rb, sizeof(rb));
+  CHECK(r.cmd == 0xC2 && r.seq == 40 && r.len == 0);
+  CHECK(g_data.cfg.dirty == 0);
+  CHECK(mxs_complete_store(&s, 40, true, out, sizeof(out)) == 0); /* only once */
+
+  /* a change made while the save was running keeps dirty set */
+  CHECK(deferred(&s, MXP_CMD_SAVE, 50) == MXS_DEFERRED);
+  CHECK(mxs_take_pending_store(&s, &cmd, &seq, &snap));
+  forget(&s, 1, 1, 51);
+  CHECK(g_data.cfg.dirty == 1);
+  n = mxs_complete_store(&s, 50, true, out, sizeof(out));
+  decode(out, n, &r, rb, sizeof(rb));
+  CHECK(r.cmd == 0xC2 && g_data.cfg.dirty == 1);
+
+  /* a failed save answers INTERNAL and keeps dirty */
+  CHECK(deferred(&s, MXP_CMD_SAVE, 52) == MXS_DEFERRED);
+  CHECK(mxs_take_pending_store(&s, &cmd, &seq, &snap));
+  n = mxs_complete_store(&s, 52, false, out, sizeof(out));
+  decode(out, n, &r, rb, sizeof(rb));
+  CHECK(r.cmd == 0xFF && r.seq == 52 && r.payload[0] == MXP_CMD_SAVE && r.payload[1] == MXP_ERR_INTERNAL);
+  CHECK(g_data.cfg.dirty == 1);
+
+  /* FACTORY_RESET: defaults only after the erase succeeded */
+  add_color(3, 0, 0, 200);
+  mxst_set_name(&g_data, 2, 4, "x", 1);
+  g_data.cfg.tolerance = 90;
+  CHECK(deferred(&s, MXP_CMD_FACTORY_RESET, 60) == MXS_DEFERRED);
+  CHECK(mxs_take_pending_store(&s, &cmd, &seq, &snap) && cmd == MXP_CMD_FACTORY_RESET && seq == 60);
+  n = mxs_complete_store(&s, 60, false, out, sizeof(out));
+  decode(out, n, &r, rb, sizeof(rb));
+  CHECK(r.cmd == 0xFF && r.payload[0] == MXP_CMD_FACTORY_RESET && r.payload[1] == MXP_ERR_INTERNAL);
+  CHECK(g_data.n_colors == 1 && g_data.cfg.tolerance == 90);
+  CHECK(deferred(&s, MXP_CMD_FACTORY_RESET, 61) == MXS_DEFERRED);
+  CHECK(mxs_take_pending_store(&s, &cmd, &seq, &snap));
+  n = mxs_complete_store(&s, 61, true, out, sizeof(out));
+  decode(out, n, &r, rb, sizeof(rb));
+  CHECK(r.cmd == 0xC3 && r.seq == 61 && r.len == 0);
+  mxs_data_t def;
+  mxst_defaults(&def);
+  CHECK(g_data.n_colors == 0 && g_data.n_names == 0 && memcmp(&g_data.cfg, &def.cfg, sizeof(def.cfg)) == 0);
+  /* the store slot is free again */
+  CHECK(deferred(&s, MXP_CMD_SAVE, 62) == MXS_DEFERRED);
+}
+
+static void test_finish_learn(void)
+{
+  mxs_state_t s;
+  fresh(&s);
+  uint8_t out[64], rb[64], seq = 0, one = 1, zero = 0;
+  mxp_frame_t r;
+  mxp_learn_req_t lr;
+  const uint8_t red[3] = { 230, 20, 20 }, green[3] = { 20, 200, 40 };
+  req(&s, MXP_CMD_SET_FUNCTION, 1, &one, 1);
+
+  CHECK(learn(&s, 1, 70, 0, &r, rb, sizeof(rb)) == MXS_DEFERRED);
+  CHECK(mxs_finish_learn(&s, 70, red, out, sizeof(out)) == 0); /* not claimed yet */
+  CHECK(mxs_take_pending_learn(&s, &seq, &lr));
+  size_t n = mxs_finish_learn(&s, seq, red, out, sizeof(out));
+  decode(out, n, &r, rb, sizeof(rb));
+  CHECK(r.cmd == 0xB0 && r.seq == 70 && r.len == 1 && r.payload[0] == 1);
+  CHECK(g_data.n_colors == 1 && g_data.cfg.dirty == 1);
+
+  /* same colour again -> same id */
+  g_data.cfg.dirty = 0;
+  CHECK(learn(&s, 1, 71, 0, &r, rb, sizeof(rb)) == MXS_DEFERRED);
+  CHECK(mxs_take_pending_learn(&s, &seq, &lr));
+  n = mxs_finish_learn(&s, seq, red, out, sizeof(out));
+  decode(out, n, &r, rb, sizeof(rb));
+  CHECK(r.cmd == 0xB0 && r.payload[0] == 1 && g_data.n_colors == 1 && g_data.cfg.dirty == 1);
+
+  /* no colour in the region -> BAD_PARAM, data untouched */
+  g_data.cfg.dirty = 0;
+  CHECK(learn(&s, 1, 72, 0, &r, rb, sizeof(rb)) == MXS_DEFERRED);
+  CHECK(mxs_take_pending_learn(&s, &seq, &lr));
+  n = mxs_finish_learn(&s, seq, NULL, out, sizeof(out));
+  decode(out, n, &r, rb, sizeof(rb));
+  CHECK(is_err(&r, MXP_CMD_LEARN, MXP_ERR_BAD_PARAM) && r.seq == 72 && g_data.cfg.dirty == 0);
+
+  /* cancelled while sampling: nothing learned, nothing sent */
+  CHECK(learn(&s, 1, 73, 0, &r, rb, sizeof(rb)) == MXS_DEFERRED);
+  CHECK(mxs_take_pending_learn(&s, &seq, &lr));
+  req(&s, MXP_CMD_SET_FUNCTION, 2, &zero, 1);
+  CHECK(mxs_finish_learn(&s, seq, green, out, sizeof(out)) == 0);
+  CHECK(g_data.n_colors == 1);
+
+  /* full -> FULL */
+  req(&s, MXP_CMD_SET_FUNCTION, 3, &one, 1);
+  for (uint8_t id = 2; id <= 7; id++) add_color(id, 0, 0, 0); /* placeholders: black never matches */
+  CHECK(learn(&s, 1, 74, 0, &r, rb, sizeof(rb)) == MXS_DEFERRED);
+  CHECK(mxs_take_pending_learn(&s, &seq, &lr));
+  n = mxs_finish_learn(&s, seq, green, out, sizeof(out));
+  decode(out, n, &r, rb, sizeof(rb));
+  CHECK(is_err(&r, MXP_CMD_LEARN, MXP_ERR_FULL) && r.seq == 74);
+}
+
 int main(void)
 {
   test_info();
@@ -349,6 +758,13 @@ int main(void)
   test_timeout();
   test_learn();
   test_learn_cancel();
+  test_results();
+  test_forget();
+  test_set_name();
+  test_get_learned();
+  test_config();
+  test_save_reset();
+  test_finish_learn();
   if (g_fail) {
     printf("%d of %d checks FAILED\n", g_fail, g_checks);
     return 1;

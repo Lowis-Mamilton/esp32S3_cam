@@ -212,7 +212,7 @@ static void rx_task(void *arg)
 {
     (void)arg;
     static uint8_t payload_buf[MXP_MAX_REQUEST_PAYLOAD];
-    static uint8_t out[128];
+    static uint8_t out[MXS_RESPONSE_MAX]; /* largest: GET_LEARNED with 32 tag names */
     uint8_t rx[64];
     mxp_decoder_t dec;
     mxp_decoder_init(&dec, payload_buf, sizeof(payload_buf));

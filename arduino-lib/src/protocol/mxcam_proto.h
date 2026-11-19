@@ -153,6 +153,10 @@ typedef struct {
 } mxp_learn_req_t;
 bool mxp_unpack_learn(const uint8_t *p, uint16_t len, mxp_learn_req_t *out);
 
+/* Strict UTF-8 check (rejects overlong forms, surrogates, > U+10FFFF and
+ * truncated sequences). s may be NULL when n is 0. */
+bool mxp_utf8_valid(const uint8_t *s, size_t n);
+
 /* SET_NAME request. name is NOT NUL-terminated; name_len 0 clears the name. */
 typedef struct {
   uint8_t function_id;

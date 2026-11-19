@@ -218,12 +218,118 @@ static void test_forget(void) {
   CHECK(mxst_get_name(&d, MXST_FN_COLOR, 1, NULL) == NULL);
 }
 
+/* serialize must refuse anything deserialize would reject (otherwise a save
+ * silently loses everything at the next boot). */
+static void expect_no_serialize(const char *what, const mxs_data_t *d) {
+  if (mxst_serialize(d, blob, sizeof(blob)) != 0) {
+    printf("FAIL serialize accepted: %s\n", what);
+    fails++;
+  }
+}
+
+static void test_serialize_validates(void) {
+  mxs_data_t base, d;
+  mxst_defaults(&base);
+  base.n_colors = 2;
+  base.colors[0].id = 1;
+  base.colors[1].id = 2;
+  CHECK(mxst_set_name(&base, MXST_FN_COLOR, 1, "red", 3));
+  CHECK(mxst_set_name(&base, MXST_FN_TAG, 5, "door", 4));
+  CHECK(mxst_serialize(&base, blob, sizeof(blob)) > 0);
+
+  d = base; d.colors[1].id = 1;                    expect_no_serialize("dup colour id", &d);
+  d = base; d.colors[0].id = 0;                    expect_no_serialize("colour id 0", &d);
+  d = base; d.colors[0].id = 8;                    expect_no_serialize("colour id 8", &d);
+  d = base; d.n_colors = 8;                        expect_no_serialize("n_colors 8", &d);
+  d = base; d.names[0].len = 0;                    expect_no_serialize("name len 0", &d);
+  d = base; d.names[0].len = MXP_NAME_MAX + 1;     expect_no_serialize("name len 49", &d);
+  d = base; d.names[0].fn = 4;                     expect_no_serialize("name fn 4", &d);
+  d = base; d.names[0].id = 8;                     expect_no_serialize("colour name id 8", &d);
+  d = base; d.names[1].id = 587;                   expect_no_serialize("tag name id 587", &d);
+  d = base; d.names[1] = d.names[0];               expect_no_serialize("dup name key", &d);
+  d = base; d.names[1].name[0] = (char)0xC3;       expect_no_serialize("bad utf8 name", &d);
+  d = base; d.n_names = 33;                        expect_no_serialize("n_names 33", &d);
+}
+
+static void test_deserialize_rejects_bad_utf8(void) {
+  mxs_data_t a, b;
+  mxst_defaults(&a);
+  CHECK(mxst_set_name(&a, MXST_FN_TAG, 5, "ab", 2));
+  size_t n = mxst_serialize(&a, blob, sizeof(blob));
+  CHECK(n > 0);
+  /* the name bytes are just before the CRC */
+  blob[n - 4] = 0xC3;
+  blob[n - 3] = 0x28; /* C3 28: bad continuation */
+  fix_crc(blob, n);
+  CHECK(!mxst_deserialize(blob, n, &b));
+}
+
+static void test_set_name_utf8(void) {
+  mxs_data_t d;
+  mxst_defaults(&d);
+  CHECK(!mxst_set_name(&d, MXST_FN_TAG, 1, "\xC3", 1));
+  CHECK(!mxst_set_name(&d, MXST_FN_TAG, 1, "\xED\xA0\x80", 3)); /* surrogate */
+  CHECK(d.n_names == 0);
+  CHECK(mxst_set_name(&d, MXST_FN_TAG, 1, "\xC3\xA9", 2));
+}
+
+static void test_learn_color(void) {
+  mxs_data_t d;
+  mxst_defaults(&d);
+  const uint8_t red[3] = {230, 20, 20}, red2[3] = {220, 30, 25}, green[3] = {20, 200, 40},
+                blue[3] = {20, 40, 220};
+  CHECK(mxst_learn_color(&d, red, 30) == 1);
+  CHECK(d.n_colors == 1 && d.colors[0].id == 1 && memcmp(d.colors[0].rgb, red, 3) == 0);
+  /* same colour (within tolerance) updates the existing id */
+  CHECK(mxst_learn_color(&d, red2, 30) == 1);
+  CHECK(d.n_colors == 1 && memcmp(d.colors[0].rgb, red2, 3) == 0);
+  CHECK(mxst_learn_color(&d, green, 30) == 2);
+  CHECK(mxst_learn_color(&d, blue, 30) == 3);
+  /* the lowest free id is reused and the list stays sorted by id */
+  mxst_forget_color(&d, 2);
+  CHECK(mxst_learn_color(&d, green, 30) == 2);
+  CHECK(d.n_colors == 3 && d.colors[0].id == 1 && d.colors[1].id == 2 && d.colors[2].id == 3);
+  /* fill up to 7 with distinct hues, then FULL */
+  static const uint8_t more[4][3] = {{230, 230, 20}, {20, 220, 220}, {220, 20, 220}, {240, 120, 20}};
+  for (int i = 0; i < 4; i++) CHECK(mxst_learn_color(&d, more[i], 5) == 4 + i);
+  CHECK(d.n_colors == 7);
+  const uint8_t violet[3] = {120, 20, 230};
+  CHECK(mxst_learn_color(&d, violet, 5) == MXST_LEARN_FULL);
+  CHECK(d.n_colors == 7);
+  /* full, but an existing colour can still be refreshed */
+  CHECK(mxst_learn_color(&d, red, 5) == 1);
+  /* grey never matches anything, and is refused */
+  const uint8_t grey[3] = {128, 128, 128};
+  mxst_forget_color(&d, 0xFF);
+  CHECK(mxst_learn_color(&d, grey, 30) == MXST_LEARN_NO_COLOR);
+  CHECK(d.n_colors == 0);
+}
+
+static void test_forget_names(void) {
+  mxs_data_t d;
+  mxst_defaults(&d);
+  CHECK(mxst_set_name(&d, MXST_FN_TAG, 3, "a", 1));
+  CHECK(mxst_set_name(&d, MXST_FN_TAG, 9, "b", 1));
+  CHECK(mxst_set_name(&d, MXST_FN_COLOR, 1, "c", 1));
+  mxst_forget_names(&d, MXST_FN_TAG, 3);
+  CHECK(d.n_names == 2 && mxst_get_name(&d, MXST_FN_TAG, 3, NULL) == NULL);
+  mxst_forget_names(&d, MXST_FN_TAG, 77); /* absent: no-op */
+  CHECK(d.n_names == 2);
+  mxst_forget_names(&d, MXST_FN_TAG, 0xFFFF);
+  CHECK(d.n_names == 1 && mxst_get_name(&d, MXST_FN_COLOR, 1, NULL) != NULL);
+}
+
 int main(void) {
   test_defaults();
   test_roundtrip();
   test_corruption();
   test_names();
   test_forget();
+  test_serialize_validates();
+  test_deserialize_rejects_bad_utf8();
+  test_set_name_utf8();
+  test_learn_color();
+  test_forget_names();
   if (fails) {
     printf("%d failure(s)\n", fails);
     return 1;

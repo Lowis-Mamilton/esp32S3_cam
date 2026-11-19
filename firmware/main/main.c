@@ -8,12 +8,14 @@
 #include "mxcam_display.h"
 #include "mxcam_link.h"
 #include "mxcam_service.h"
+#include "mxcam_store.h"
 #include "encoder.h"
 #include "pipeline.h"
 
 static const char *TAG = "mxcam";
 
 static mxs_state_t s_state;
+static mxs_data_t s_data;
 
 static void build_info(mxp_info_t *info)
 {
@@ -52,7 +54,8 @@ void app_main(void)
 
     mxp_info_t info;
     build_info(&info);
-    mxs_init(&s_state, &info);
+    mxst_load(&s_data);
+    mxs_init(&s_state, &info, &s_data);
     if (encoder_start() != ESP_OK) {
         ESP_LOGE(TAG, "encoder start failed");
         return;

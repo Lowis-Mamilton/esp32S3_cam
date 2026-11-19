@@ -19,3 +19,7 @@ CONFIG_SPIRAM_USE_MALLOC=y
 # internal (DMA, ISR/cache-disabled access) must be allocated with
 # heap_caps_malloc(..., MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA), never malloc.
 CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=4096
+# app_main loads the store (mxst_load keeps an mxs_data_t, ~1.9 KB, on the stack).
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=8192
+# Colour / AprilTag detection run per frame on core 1: build with -O2.
+CONFIG_COMPILER_OPTIMIZATION_PERF=y

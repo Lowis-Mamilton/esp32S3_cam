@@ -300,7 +300,7 @@ bool mxp_unpack_learn(const uint8_t *p, uint16_t len, mxp_learn_req_t *out) {
   return true;
 }
 
-static bool utf8_valid(const uint8_t *s, size_t n) {
+bool mxp_utf8_valid(const uint8_t *s, size_t n) {
   size_t i = 0;
   while (i < n) {
     uint8_t b = s[i];
@@ -333,7 +333,7 @@ bool mxp_unpack_set_name(const uint8_t *p, uint16_t len, mxp_set_name_t *out) {
   if (len < 4) return false;
   uint8_t n = p[3];
   if (n > MXP_NAME_MAX || len != 4u + n) return false;
-  if (!utf8_valid(p + 4, n)) return false;
+  if (!mxp_utf8_valid(p + 4, n)) return false;
   memset(out, 0, sizeof(*out));
   out->function_id = p[0];
   out->id = get_u16(p + 1);

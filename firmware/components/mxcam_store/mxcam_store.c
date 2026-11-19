@@ -40,6 +40,7 @@ static void remove_name_at(mxs_data_t *d, int i) {
 
 bool mxst_set_name(mxs_data_t *d, uint8_t fn, uint16_t id, const char *utf8, uint8_t len) {
   if (!name_key_ok(fn, id) || len > MXP_NAME_MAX || (len > 0 && !utf8)) return false;
+  if (len > 0 && !mxp_utf8_valid((const uint8_t *)utf8, len)) return false;
   int i = find_name(d, fn, id);
   if (len == 0) {
     if (i >= 0) remove_name_at(d, i);
@@ -85,16 +86,65 @@ void mxst_forget_color(mxs_data_t *d, uint8_t id) {
   if (k >= 0) remove_name_at(d, k);
 }
 
+void mxst_forget_names(mxs_data_t *d, uint8_t fn, uint16_t id) {
+  for (int i = d->n_names - 1; i >= 0; i--)
+    if (d->names[i].fn == fn && (id == 0xFFFF || d->names[i].id == id)) remove_name_at(d, i);
+}
+
+int mxst_learn_color(mxs_data_t *d, const uint8_t rgb[3], uint8_t tolerance) {
+  /* mxc_same_color is false whenever either side is grey. */
+  if (!mxc_same_color(rgb, rgb, 100)) return MXST_LEARN_NO_COLOR;
+  int match = -1;
+  for (int i = 0; i < d->n_colors; i++)
+    if (mxc_same_color(d->colors[i].rgb, rgb, tolerance) &&
+        (match < 0 || d->colors[i].id < d->colors[match].id))
+      match = i;
+  if (match >= 0) {
+    memcpy(d->colors[match].rgb, rgb, 3);
+    return d->colors[match].id;
+  }
+  if (d->n_colors >= MXST_MAX_COLORS) return MXST_LEARN_FULL;
+  uint8_t id = 1; /* lowest id not in use */
+  for (bool used = true; used; ) {
+    used = false;
+    for (int i = 0; i < d->n_colors; i++)
+      if (d->colors[i].id == id) { used = true; id++; break; }
+  }
+  int pos = 0; /* keep the list sorted by id (GET_LEARNED order) */
+  while (pos < d->n_colors && d->colors[pos].id < id) pos++;
+  for (int j = d->n_colors; j > pos; j--) d->colors[j] = d->colors[j - 1];
+  d->colors[pos].id = id;
+  memcpy(d->colors[pos].rgb, rgb, 3);
+  d->n_colors++;
+  return id;
+}
+
+/* The same content rules deserialize enforces (so a save never writes a blob
+ * the next boot would throw away). */
+static bool data_valid(const mxs_data_t *d) {
+  if (d->n_colors > MXST_MAX_COLORS || d->n_names > MXST_MAX_NAMES) return false;
+  for (int i = 0; i < d->n_colors; i++) {
+    if (!color_id_ok(d->colors[i].id)) return false;
+    for (int j = 0; j < i; j++)
+      if (d->colors[j].id == d->colors[i].id) return false;
+  }
+  for (int i = 0; i < d->n_names; i++) {
+    const mxs_name_t *n = &d->names[i];
+    if (!name_key_ok(n->fn, n->id) || n->len == 0 || n->len > MXP_NAME_MAX) return false;
+    if (!mxp_utf8_valid((const uint8_t *)n->name, n->len)) return false;
+    for (int j = 0; j < i; j++)
+      if (d->names[j].fn == n->fn && d->names[j].id == n->id) return false;
+  }
+  return true;
+}
+
 static const uint8_t MAGIC[4] = {'M', 'X', 'S', 'T'};
 #define MXST_VERSION 1
 
 size_t mxst_serialize(const mxs_data_t *d, uint8_t *out, size_t cap) {
-  if (d->n_colors > MXST_MAX_COLORS || d->n_names > MXST_MAX_NAMES) return 0;
+  if (!data_valid(d)) return 0;
   size_t need = 4 + 1 + MXP_CONFIG_SIZE + 1 + (size_t)d->n_colors * 4 + 1 + 2;
-  for (int i = 0; i < d->n_names; i++) {
-    if (d->names[i].len > MXP_NAME_MAX) return 0;
-    need += 4u + d->names[i].len;
-  }
+  for (int i = 0; i < d->n_names; i++) need += 4u + d->names[i].len;
   if (need > cap) return 0;
   size_t o = 0;
   memcpy(out, MAGIC, 4);
@@ -161,6 +211,7 @@ bool mxst_deserialize(const uint8_t *p, size_t len, mxs_data_t *out) {
     o += 4;
     if (!name_key_ok(fn, id) || nl == 0 || nl > MXP_NAME_MAX || o + nl > end) return false;
     if (find_name(&t, fn, id) >= 0) return false;
+    if (!mxp_utf8_valid(p + o, nl)) return false;
     mxs_name_t *n = &t.names[i];
     n->fn = fn;
     n->id = id;

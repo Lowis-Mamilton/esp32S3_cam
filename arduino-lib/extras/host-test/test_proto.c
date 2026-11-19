@@ -312,7 +312,11 @@ static void test_set_name(void) {
     uint8_t p[8] = {1, 2, 0, good[i].n};
     memcpy(p + 4, good[i].b, good[i].n);
     CHECK(mxp_unpack_set_name(p, (uint16_t)(4 + good[i].n), &s), "utf8 valid case %d", (int)i);
+    CHECK(mxp_utf8_valid(good[i].b, good[i].n), "mxp_utf8_valid good %d", (int)i);
   }
+  for (size_t i = 0; i < sizeof bad / sizeof bad[0]; i++)
+    CHECK(!mxp_utf8_valid(bad[i].b, bad[i].n), "mxp_utf8_valid bad %s", bad[i].what);
+  CHECK(mxp_utf8_valid(NULL, 0), "empty string is valid UTF-8");
 }
 
 static void test_learned(void) {
