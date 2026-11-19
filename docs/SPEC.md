@@ -45,7 +45,23 @@
 - AprilTag 的方向（旋轉角度、四個角的順序）以官方 AprilRobotics tag36h11 圖片為準；OpenCV／ArUco 產生的 tag36h11 圖案方向相差 180°。
 - AprilTag **不估算距離與 3D 姿態**（需要鏡頭校正，留待之後的版本）。
 - 人臉偵測（M3）：Espressif `human_face_detect`（MSR+MNP 兩階段）；信心度 = 分數 ×100，`face.threshold` 以下不回報。第一階段固定 0.5 的分數門檻，所以 `face.threshold` 設在 50 以下**不會多找到臉**。不需要學習、不能取名（LEARN／SET_NAME 回 `BAD_PARAM`，FORGET 回成功）。
-- 第二版候選：幾何形狀、人臉辨識（需學習）、固定類別物件偵測。
+- **擴充功能（2026-11-19 決定，依 `docs/research/vision-functions.md`）**：打樣前把下列功能做完整，依序實作：
+
+| ID | 功能 | 做法 | 學習 | 里程碑 |
+|---|---|---|---|---|
+| 4 | 線條追蹤 | 自寫（灰階門檻＋分帶質心＋直線擬合） | 可選 | M6 |
+| 5 | 物體追蹤 | 自寫（NCC 範本比對＋色彩直方圖找回） | 是（框選） | M6 |
+| 6 | QR Code | `espressif/quirc`（ISC） | 可選（內容對應 ID） | M7 |
+| 11 | 幾何形狀 | 自寫（輪廓＋多邊形近似） | 否 | M7 |
+| 12 | 動態偵測 | 自寫（畫面差分＋連通區域） | 否 | M7 |
+| 7 | 人體偵測 | `pedestrian_detect`（esp-dl） | 否 | M8 |
+| 8 | 手勢辨識 | `hand_detect`＋`hand_gesture_recognition`（esp-dl） | 否 | M8 |
+| 9 | 人臉辨識 | 人臉偵測＋`human_face_recognition` 特徵模型 | 是 | M9 |
+| 10 | 自學習分類 | 手工特徵＋kNN | 是 | M9 |
+
+  - 延後：條碼（沒有適合授權、可用於 IDF 5 的函式庫）、貓狗偵測、ImageNet 分類。放棄：COCO 物件偵測（約 1 s／張）、姿態、OCR 等 ESP32-S3 沒有可用模型的功能。
+  - 手勢（兩隻手）與人臉辨識約 3 fps，NN 功能的效能目標放寬為 ≥ 3 fps。
+  - 架構前置（M6 開頭）：GET_INFO 功能上限調到 32、各功能自己的參數（Config v1 之外）、LEARN 可指定 ID；M8 起模型放 flash 的模型分割區、切換功能時才載入。
 
 ### 顏色學習流程
 
