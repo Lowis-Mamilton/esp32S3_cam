@@ -41,4 +41,14 @@ export const zhTW = {
   pageSoon: '這個頁面即將推出',
   liveIdle: '連線後會在這裡顯示即時畫面',
   items: '共 {n} 項',
+  catColor: '顏色',
+  catTag: 'AprilTag',
+  catFace: '人臉',
+  learnCenter: '學習中央',
+  learned: '已學習 ID{id}',
+  learnNoColor: '框選範圍內沒有顏色',
+  learnFull: '最多只能學 7 個顏色',
+  learnNeedFirmware: '需要更新韌體',
+  learnFailed: '學習失敗',
+  dragHint: '在畫面上拖曳框選要學習的顏色'
 } as const

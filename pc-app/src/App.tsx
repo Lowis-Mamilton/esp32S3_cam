@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import type { Device } from './device/types'
+import type { Device, Result } from './device/types'
 import { useDevice } from './device/useDevice'
 import { describeError, type ErrorText } from './i18n/core'
 import { useT } from './i18n'
@@ -7,7 +7,7 @@ import RightPanel from './ui/layout/RightPanel'
 import Sidebar from './ui/layout/Sidebar'
 import TopBar from './ui/layout/TopBar'
 import type { View } from './ui/layout/types'
-import LiveView, { type LiveViewHandle } from './ui/LiveView'
+import LiveStage, { type LiveStageHandle } from './ui/live/LiveStage'
 
 interface Props {
   /** Injectable for tests; defaults to navigator.serial. */
@@ -25,13 +25,16 @@ export default function App({ serial }: Props) {
   const [statsOf, setStatsOf] = useState<{ device: Device; fps: number; kbps: number } | null>(null)
   const error = errorOf && errorOf.device === device ? errorOf.error : null
   const stats = statsOf && statsOf.device === device ? statsOf : { fps: 0, kbps: 0 }
-  const liveRef = useRef<LiveViewHandle>(null)
+  const [resultsOf, setResultsOf] = useState<{ device: Device; results: Result[] } | null>(null)
+  const results = resultsOf && resultsOf.device === device ? resultsOf.results : []
+  const liveRef = useRef<LiveStageHandle>(null)
   const userClosed = useRef(false)
 
   useEffect(() => {
     if (!device) return
     const offs = [
       device.onFrame((f) => liveRef.current?.draw(f)),
+      device.onResults((r) => setResultsOf({ device, results: r })),
       device.onStats((x) => setStatsOf({ device, ...x })),
     ]
     return () => offs.forEach((off) => off())
@@ -70,7 +73,18 @@ export default function App({ serial }: Props) {
           {status === 'unsupported' ? (
             <p className="notice">{t('unsupported')}</p>
           ) : view.kind === 'function' ? (
-            <LiveView ref={liveRef} connected={status === 'connected'} fps={stats.fps} kbps={stats.kbps} />
+            <LiveStage
+              ref={liveRef}
+              connected={status === 'connected'}
+              fps={stats.fps}
+              kbps={demo ? null : stats.kbps}
+              fn={view.id}
+              canLearn={view.id === 1 && !!device && (demo || supported.includes(1))}
+              onLearn={(region) => device!.learnColor(region)}
+              results={results}
+              learned={snapshot.learned[view.id]}
+              showNames={view.id === 3 ? false : snapshot.params[view.id === 1 ? 'color' : 'tag'].showNames}
+            />
           ) : (
             <section className="page">
               {/* Task 6 builds the real settings / firmware pages. */}

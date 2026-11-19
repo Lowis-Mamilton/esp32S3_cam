@@ -43,4 +43,14 @@ export const en: Record<keyof typeof zhTW, string> = {
   pageSoon: 'This page is coming soon',
   liveIdle: 'The live view appears here once connected',
   items: '{n} items',
+  catColor: 'Color',
+  catTag: 'AprilTag',
+  catFace: 'Face',
+  learnCenter: 'Learn centre',
+  learned: 'Learned ID{id}',
+  learnNoColor: 'No colour in the selected area',
+  learnFull: 'At most 7 colours can be learned',
+  learnNeedFirmware: 'Firmware update required',
+  learnFailed: 'Learning failed',
+  dragHint: 'Drag on the picture to learn a colour'
 }
