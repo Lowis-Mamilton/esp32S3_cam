@@ -699,6 +699,22 @@ test('learn(4) learns the line colour, switches mode to learned and maps BAD_PAR
   expect(d.snapshot().params.line.mode).toBe('dark')
 })
 
+test('forget(4) clears the colour, turns mode learned back to dark but keeps mode light; dirty only on change', async () => {
+  const fw = trackFw()
+  const d = await connected(fw)
+  await d.setFunction(4)
+  await d.learn(4, { x: 10, y: 10, width: 40, height: 40 })
+  fw.line.mode = 1 // user switched to light line while the learned colour is still stored
+  fw.config.dirty = false
+  await d.forget(4, 0xffff)
+  expect(d.snapshot().learned[4]).toEqual([])
+  expect(d.snapshot().params.line.mode).toBe('light') // firmware keeps mode 1
+  expect(d.snapshot().dirty).toBe(true) // the colour was cleared
+  fw.config.dirty = false
+  await d.forget(4, 1) // nothing left to forget
+  expect(d.snapshot().dirty).toBe(false)
+})
+
 test('learn(5) maps BAD_PARAM to no-target and refreshes learned[5]', async () => {
   const fw = trackFw()
   const d = await connected(fw)

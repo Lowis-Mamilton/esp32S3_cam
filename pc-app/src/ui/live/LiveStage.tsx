@@ -266,7 +266,7 @@ export default function LiveStage({ ref, connected, fps, kbps, fn, canLearn, onL
               return <div key={i} className={`ls-box${(r.kind === 'color' || r.kind === 'gesture') && r.id === 0 ? ' unlearned' : ''}`} style={style} />
             })}
           </div>
-          {fn === 4 && lineRows.length > 0 && (
+          {fn === 4 && (
             <svg className="ls-line" width={vp.width} height={vp.height} viewBox={`0 0 ${vp.width} ${vp.height}`}>
               <line className="ls-roi" x1={0} x2={vp.width} y1={roiY} y2={roiY} />
               {lineRows.map((r, i) => {

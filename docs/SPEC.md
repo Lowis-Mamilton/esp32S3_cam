@@ -234,7 +234,7 @@ docs/          規格、協定、ADR
 | M3 | 人臉偵測（esp-dl） | ≥ 5 fps |
 | M4 | UART、I2C、Arduino 函式庫、電位轉換接線 | R4 用範例程式讀到三種功能的結果，延遲 ≤ 50 ms |
 | M5 | 網頁燒錄、PWA 離線、GitHub Pages、多語系 | 新電腦只開網頁就能燒錄並使用 |
-| M6 | 架構前置、線條追蹤、物體追蹤 | 兩個功能 TFT ≥ 10 fps（不串流）、實機驗收通過 |
+| M6 | 架構前置、線條追蹤、物體追蹤 | 兩個功能 TFT ≥ 10 fps（不串流）、實機驗收通過（**已完成**，2026-11-19 實機驗收通過，`docs/measurements/m6.md`） |
 | M8a | 手勢辨識（功能 8） | 一隻手 ≥ 3 fps、實機 9 種手勢驗收通過 |
 
 ## 9. 測試策略
@@ -268,14 +268,15 @@ docs/          規格、協定、ADR
   - Studio 的「需要更新韌體」分不出舊韌體與人臉初始化失敗（改用韌體版本判斷）
   - [x] store 的 `name_key_ok` 接受人臉的 key：要拒絕，或讓 FORGET 3 清掉人臉名字——M6 Task 4 改成拒絕（線條 4 也不能取名、物體 5 只有 id 1）
   - `FACE_EVERY` > 1 的路徑未測試（不會用到就刪掉，要用就補測試）
-- [ ] M6 Task 4 交接（M8a Task 3 已改了 store／service，M6 暫停中）——1–6 已在 M6 Task 4 完成（blob v3、`case 4／5`、11 bytes 的 LEARN 回 `BAD_PARAM`），7 留給 M6 Task 7：
+- [x] M6 Task 4 交接（M8a Task 3 已改了 store／service，M6 暫停中）——1–7 已完成（1–6 在 M6 Task 4：blob v3、`case 4／5`、11 bytes 的 LEARN 回 `BAD_PARAM`；7 在 M6 Task 7）：
   1. 先 rebase 到 M8a 的 `mxcam_store`／`mxcam_service`（blob v2、`gesture_cfg`、GET/SET_FUNC_CONFIG 的 `fcfg_get`／`fcfg_set`）
   2. 線條／物體追蹤的參數加進 v2 的 func config 紀錄清單（`read_fcfg_list` 加 `case 4／5`、serialize 多寫兩筆，**不升 blob 版本**）；學到的線色與物體範本另外升 **v3**（v3 要能讀 v1、v2），`test_store.c` 的 `k_v1_fixture` 沿用、不可改
   3. service 的 func config 在 `fcfg_get`／`fcfg_set` 加 `case 4／5`，規則照 `docs/protocol.md` §9：**要看能力清單**（GET_INFO 沒列出 → `BAD_PARAM`）；M6 計畫 Task 4 寫的「只接受 4、5（不看能力清單）」作廢
   4. GET_INFO 的暫存區已改成 `23 + MXP_INFO_MAX_FUNCS`（9 個以上功能不再回 `INTERNAL`），不用再修
   5. M6 計畫 Task 4 Step 1「先抓 v1 樣本」已完成（`k_v1_fixture`）
   6. 目前韌體把 11 bytes 的 LEARN 當成一般 LEARN（沒有回 `BAD_PARAM`）；M8a 沒改，留給 M6 Task 4
-  7. Studio 的 LiveStage（`kind`、`stage*`）和 App（`showNames`）用串接三元運算子分辨功能，新增功能 ID 會**無聲地落到人臉分支**；M6 Task 7 要改成 `Record<FunctionId, …>`（M8a 複審 M12）
+  7. [x] Studio 的 LiveStage（`kind`、`stage*`）和 App（`showNames`）用串接三元運算子分辨功能，新增功能 ID 會**無聲地落到人臉分支**；M6 Task 7 已改成 `Record<FunctionId, …>`（commit aeab1a5；M8a 複審 M12）
+- [ ] M6 審查延後項目：切到功能 5 後「目標遺失」可能閃一張；匯入模式 'learned' 但板上沒有線色時，選項顯示為停用；TFT 與 Studio 的線條／追蹤顏色不同（#2cc8d8／#4d8ef5 對 `--cat-line`／`--cat-track`）；降級到 M6 以前的韌體時，下一次 SAVE 會丟掉 v3 blob（M5 燒錄器要提醒）；FakeFirmware 對 LEARN 長度、灰色、dirty 比韌體寬鬆；`tracking.c` 沒有主機測試
 - [ ] 名字表維持全部功能合計 32 筆（M6：線條不能取名、物體只有 id 1）；M7（QR 內容 → ID）或 M9 有 `mxdata` 分割區（ADR-0017）時再加大，`MXS_RESPONSE_MAX` 綁在名字表大小上，要一起改
 - [ ] M4：service 改寫（傳輸別、各傳輸自己的 outbox）要以 M6 之後的 `mxcam_service` 為基礎（`0x44`／`0x45` func config、功能 4／5 的 LEARN／FORGET／SET_NAME／GET_LEARNED、`mxs_finish_learn_object`）
 - [ ] M4：Arduino API 加線條與物體追蹤：`MXCAM_ALGO_LINE`（4）、`MXCAM_ALGO_TRACK`（5）；`MXCamResult` 在線條功能多 `angle`（度，int）、`offset`（px）、`flags`（`MXCAM_LINE_BRANCH`、`MXCAM_LINE_CROSS`），由共用 C 的 `mxp_unpack_line_extra` 解出（M6 計畫設計決定 17）

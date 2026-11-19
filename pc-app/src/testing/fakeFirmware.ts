@@ -385,15 +385,17 @@ export class FakeFirmware {
         // face (3) has nothing to forget: answers OK like firmware (protocol.md 0x31)
         if (fn !== 1 && fn !== 2 && fn !== 3 && !this.hasFuncFn(fn)) return this.reply(f, { error: ErrorCode.BadParam })
         const count = () => this.colors.length + this.names.size + (this.lineColor ? 1 : 0) + (this.trackObject ? 1 : 0)
+        const modeBefore = this.line.mode
         const before = count() // like firmware: dirty only if something was removed
         if (fn === LINE_FN && (id === 1 || id === 0xffff)) {
           this.lineColor = null
-          this.line.mode = 0
+          // like firmware (mxst_set_line_color): only mode 2 (learned) falls back to 0; mode 1 is kept
+          if (this.line.mode === 2) this.line.mode = 0
         }
         if (fn === TRACK_FN && (id === 1 || id === 0xffff)) this.trackObject = null
         if (fn === 1) this.colors = id === 0xffff ? [] : this.colors.filter((c) => c.id !== id)
         for (const k of [...this.names.keys()]) if (k.startsWith(`${fn}:`) && (id === 0xffff || k === `${fn}:${id}`)) this.names.delete(k)
-        if (count() !== before) this.config.dirty = true
+        if (count() !== before || this.line.mode !== modeBefore) this.config.dirty = true
         return this.reply(f, new Uint8Array(0))
       }
       case Cmd.SetName: {

@@ -429,6 +429,13 @@ test('line: draws a segment with its end points, the dashed ROI edge, the label 
   expect(container.querySelector('.ls-box')).toBeNull()
 })
 
+test('line: the dashed ROI edge is drawn even when no line is found', () => {
+  stubRect(320, 240)
+  const { container } = setup({ fn: 4, canLearn: false, results: [], lineRoi: 60 })
+  expect(Number(container.querySelector('line.ls-roi')!.getAttribute('y1'))).toBe(96)
+  expect(container.querySelector('line.ls-seg')).toBeNull()
+})
+
 test('line: mirrored view uses 320 - x for the end points', () => {
   localStorage.setItem('mxcam.mirror', '1')
   stubRect(320, 240)
