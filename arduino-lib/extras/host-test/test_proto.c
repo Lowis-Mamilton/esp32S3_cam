@@ -37,7 +37,7 @@ static void test_crc(void) {
 static void test_encode(void) {
   for (int i = 0; i < VEC_COUNT(VEC_FRAMES); i++) {
     const vec_frame_t *f = &VEC_FRAMES[i];
-    uint8_t pl[64], exp[128], out[128];
+    uint8_t pl[256], exp[256], out[256];
     size_t pn = unhex(f->payload_hex, pl, sizeof pl);
     size_t en = unhex(f->encoded_hex, exp, sizeof exp);
     size_t n = mxp_encode(f->cmd, f->seq, pl, (uint16_t)pn, out, sizeof out);
@@ -624,6 +624,239 @@ static void test_line_extra(void) {
   CHECK(!mxp_unpack_line_extra(&bad, &le), "extra_len 18 rejected");
 }
 
+/* ---- M7 (protocol.md 11) ---- */
+
+static void test_info_m7(void) {
+  uint8_t pl[64], out[64];
+  size_t pn = vec_payload("get_info_response_m7", pl, sizeof pl);
+  mxp_info_t info;
+  CHECK(mxp_unpack_info(pl, (uint16_t)pn, &info) && info.function_count == 9, "m7 info 9 ids");
+  CHECK(info.function_ids[5] == MXP_FUNC_QR && info.function_ids[6] == MXP_FUNC_GESTURE &&
+            info.function_ids[7] == MXP_FUNC_SHAPE && info.function_ids[8] == MXP_FUNC_MOTION,
+        "m7 info ids end 6, 8, 11, 12");
+  CHECK(MXP_FUNC_QR == 6 && MXP_FUNC_SHAPE == 11 && MXP_FUNC_MOTION == 12, "m7 function ids");
+  CHECK(MXP_CMD_GET_RESULT_DATA == 0x21 && MXP_CMD_GET_LEARNED_DATA == 0x35 &&
+            MXP_RESPONSE(MXP_CMD_GET_RESULT_DATA) == 0xA1 && MXP_RESPONSE(MXP_CMD_GET_LEARNED_DATA) == 0xB5,
+        "m7 command ids");
+  CHECK(MXP_SHAPE_CIRCLE == 1 && MXP_SHAPE_TRIANGLE == 2 && MXP_SHAPE_SQUARE == 3 && MXP_SHAPE_RECT == 4 &&
+            MXP_SHAPE_MAX == 4,
+        "shape ids");
+  CHECK(mxp_pack_info(&info, out, sizeof out) == pn && memcmp(out, pl, pn) == 0, "m7 info round trip");
+}
+
+static void test_shape_motion_config_vectors(void) {
+  uint8_t pl[32], out[MXP_FUNC_CONFIG_SIZE];
+  CHECK(MXP_SHAPE_CONFIG_VERSION == 1 && MXP_MOTION_CONFIG_VERSION == 1, "config versions");
+  mxp_shape_config_t s, sd;
+  size_t pn = vec_payload("func_config_shape_default", pl, sizeof pl);
+  CHECK(pn == MXP_FUNC_CONFIG_SIZE && mxp_unpack_shape_config(pl, (uint16_t)pn, &s), "unpack shape default");
+  const mxp_shape_config_t *e = &VEC_P_SHAPE_CONFIG_DEFAULT;
+  CHECK(s.mode == e->mode && s.threshold == e->threshold && s.min_size == e->min_size &&
+            s.max_results == e->max_results,
+        "shape default matches vector");
+  memset(&sd, 0xAA, sizeof sd);
+  mxp_shape_config_defaults(&sd);
+  CHECK(sd.mode == 0 && sd.threshold == 0 && sd.min_size == 32 && sd.max_results == 4 && sd.mode == s.mode &&
+            sd.threshold == s.threshold && sd.min_size == s.min_size && sd.max_results == s.max_results,
+        "shape defaults");
+  memset(out, 0xEE, sizeof out);
+  CHECK(mxp_pack_shape_config(&sd, out) == MXP_FUNC_CONFIG_SIZE && memcmp(out, pl, pn) == 0,
+        "pack shape default round trip");
+  pn = vec_payload("get_func_config_shape_request", pl, sizeof pl);
+  CHECK(pn == 1 && pl[0] == MXP_FUNC_SHAPE, "get shape config request");
+
+  mxp_motion_config_t m, md;
+  pn = vec_payload("func_config_motion_default", pl, sizeof pl);
+  memset(&md, 0xAA, sizeof md);
+  mxp_motion_config_defaults(&md);
+  CHECK(md.threshold == 25 && md.min_size == 24 && md.max_results == 4, "motion defaults");
+  CHECK(pn == MXP_FUNC_CONFIG_SIZE && mxp_unpack_motion_config(pl, (uint16_t)pn, &m) &&
+            m.threshold == md.threshold && m.min_size == md.min_size && m.max_results == md.max_results,
+        "unpack motion default");
+  memset(out, 0xEE, sizeof out);
+  CHECK(mxp_pack_motion_config(&md, out) == MXP_FUNC_CONFIG_SIZE && memcmp(out, pl, pn) == 0,
+        "pack motion default round trip");
+  pn = vec_payload("set_func_config_motion_request", pl, sizeof pl);
+  const mxp_motion_config_t *me = &VEC_P_MOTION_CONFIG_SET;
+  CHECK(pn == MXP_FUNC_CONFIG_SIZE && mxp_unpack_motion_config(pl, (uint16_t)pn, &m) && m.threshold == 15 &&
+            m.min_size == 48 && m.max_results == 2 && m.threshold == me->threshold &&
+            m.min_size == me->min_size && m.max_results == me->max_results,
+        "unpack motion set");
+  memset(out, 0xEE, sizeof out);
+  CHECK(mxp_pack_motion_config(&m, out) == MXP_FUNC_CONFIG_SIZE && memcmp(out, pl, pn) == 0, "pack motion set");
+}
+
+static void test_shape_motion_clamp(void) {
+  uint8_t out[MXP_FUNC_CONFIG_SIZE];
+  mxp_shape_config_t s;
+  const uint8_t sin[10] = {11, 1, 5, 77, 3, 20, 9, 9, 9, 9};
+  CHECK(mxp_unpack_shape_config(sin, 10, &s) && s.mode == 0 && s.threshold == 77 && s.min_size == 16 &&
+            s.max_results == 8,
+        "shape clamp: mode %d thr %d min %d max %d", s.mode, s.threshold, s.min_size, s.max_results);
+  static const uint8_t sexp[10] = {11, 1, 0, 77, 16, 8, 0, 0, 0, 0};
+  CHECK(mxp_pack_shape_config(&s, out) == 10 && memcmp(out, sexp, 10) == 0, "shape repack, reserved 0");
+  const uint8_t sin2[10] = {11, 1, 1, 255, 250, 0, 0, 0, 0, 0};
+  CHECK(mxp_unpack_shape_config(sin2, 10, &s) && s.mode == 1 && s.threshold == 255 && s.min_size == 240 &&
+            s.max_results == 1,
+        "shape clamp upper / lower");
+
+  mxp_motion_config_t m;
+  const uint8_t min1[10] = {12, 1, 0, 255, 0, 9, 9, 9, 9, 9};
+  CHECK(mxp_unpack_motion_config(min1, 10, &m) && m.threshold == 5 && m.min_size == 240 && m.max_results == 1,
+        "motion clamp: thr %d min %d max %d", m.threshold, m.min_size, m.max_results);
+  static const uint8_t mexp[10] = {12, 1, 5, 240, 1, 0, 0, 0, 0, 0};
+  CHECK(mxp_pack_motion_config(&m, out) == 10 && memcmp(out, mexp, 10) == 0, "motion repack, reserved 0");
+  const uint8_t min2[10] = {12, 1, 200, 0, 50, 0, 0, 0, 0, 0};
+  CHECK(mxp_unpack_motion_config(min2, 10, &m) && m.threshold == 100 && m.min_size == 8 && m.max_results == 8,
+        "motion clamp upper / lower");
+}
+
+static void test_shape_motion_reject(void) {
+  uint8_t pl[16];
+  mxp_shape_config_t s;
+  mxp_motion_config_t m;
+  vec_payload("func_config_shape_default", pl, sizeof pl);
+  pl[10] = 0;
+  CHECK(!mxp_unpack_shape_config(pl, 9, &s) && !mxp_unpack_shape_config(pl, 11, &s), "shape length");
+  pl[0] = 8;
+  CHECK(!mxp_unpack_shape_config(pl, 10, &s), "shape wrong fn");
+  pl[0] = 12;
+  CHECK(!mxp_unpack_shape_config(pl, 10, &s), "shape fn 12");
+  pl[0] = 11;
+  pl[1] = 2;
+  CHECK(!mxp_unpack_shape_config(pl, 10, &s), "shape version 2");
+
+  vec_payload("func_config_motion_default", pl, sizeof pl);
+  pl[10] = 0;
+  CHECK(!mxp_unpack_motion_config(pl, 9, &m) && !mxp_unpack_motion_config(pl, 11, &m), "motion length");
+  pl[0] = 8;
+  CHECK(!mxp_unpack_motion_config(pl, 10, &m), "motion wrong fn");
+  pl[0] = 11;
+  CHECK(!mxp_unpack_motion_config(pl, 10, &m), "motion fn 11");
+  pl[0] = 12;
+  pl[1] = 2;
+  CHECK(!mxp_unpack_motion_config(pl, 10, &m), "motion version 2");
+}
+
+static void test_corners_extra(void) {
+  uint8_t pl[128], out[128];
+  size_t pn = vec_payload("results_qr_two", pl, sizeof pl);
+  mxp_results_t r;
+  CHECK(mxp_unpack_results(pl, (uint16_t)pn, &r), "unpack results_qr_two");
+  check_results_equal(&r, &VEC_P_RESULTS_QR_TWO, "results_qr_two");
+  CHECK(r.function_id == MXP_FUNC_QR && r.count == 2 && r.r[0].extra_len == MXP_CORNERS_EXTRA_SIZE &&
+            r.r[1].extra_len == MXP_CORNERS_EXTRA_SIZE && MXP_CORNERS_EXTRA_SIZE == 18,
+        "qr records");
+  CHECK(mxp_pack_results(&VEC_P_RESULTS_QR_TWO, out, sizeof out) == pn && memcmp(out, pl, pn) == 0,
+        "pack results_qr_two");
+
+  mxp_corners_extra_t e;
+  CHECK(mxp_unpack_corners_extra(&r.r[0], &e) && e.rotation_cdeg == 0 && e.x[1] == 160 && e.y[1] == 60,
+        "qr 0 corners");
+  memset(&e, 0, sizeof e);
+  CHECK(mxp_unpack_corners_extra(&r.r[1], &e), "unpack qr 1 corners");
+  CHECK(e.rotation_cdeg == -9000 && e.x[0] == 220 && e.y[0] == 200 && e.x[1] == 220 && e.y[1] == 160 &&
+            e.x[2] == 260 && e.y[2] == 160 && e.x[3] == 260 && e.y[3] == 200,
+        "qr 1 rotation and corners");
+
+  mxp_result_t packed;
+  memset(&packed, 0xFF, sizeof packed);
+  mxp_pack_corners_extra(&e, &packed);
+  CHECK(packed.extra_len == 18 && memcmp(packed.extra, r.r[1].extra, 18) == 0, "pack corners extra bytes");
+
+  /* the AprilTag vector uses the same layout */
+  pn = vec_payload("results_tag_one", pl, sizeof pl);
+  CHECK(mxp_unpack_results(pl, (uint16_t)pn, &r) && mxp_unpack_corners_extra(&r.r[0], &e) &&
+            e.rotation_cdeg == 4500 && e.x[0] == 134 && e.y[3] == 144,
+        "tag corners via mxp_unpack_corners_extra");
+
+  mxp_result_t bad = r.r[0];
+  bad.extra_len = 14;
+  CHECK(!mxp_unpack_corners_extra(&bad, &e), "extra_len 14 rejected");
+  bad.extra_len = 0;
+  CHECK(!mxp_unpack_corners_extra(&bad, &e), "extra_len 0 rejected");
+}
+
+static bool result_data_eq(const mxp_result_data_t *a, const mxp_result_data_t *b) {
+  return a->frame_id == b->frame_id && a->index == b->index && a->flags == b->flags &&
+         a->total_len == b->total_len && a->len == b->len && memcmp(a->data, b->data, a->len) == 0;
+}
+
+static void test_result_data(void) {
+  uint8_t pl[256], out[256];
+  mxp_result_data_t d;
+  static const char *names[] = {"result_data_hello", "result_data_truncated"};
+  const mxp_result_data_t *exp[] = {&VEC_P_RESULT_DATA_HELLO, &VEC_P_RESULT_DATA_TRUNCATED};
+  for (int i = 0; i < 2; i++) {
+    size_t pn = vec_payload(names[i], pl, sizeof pl);
+    CHECK(pn == 9u + exp[i]->len, "%s length", names[i]);
+    memset(&d, 0xAA, sizeof d);
+    CHECK(mxp_unpack_result_data(pl, (uint16_t)pn, &d) && result_data_eq(&d, exp[i]), "unpack %s", names[i]);
+    memset(out, 0xEE, sizeof out);
+    CHECK(mxp_pack_result_data(exp[i], out, sizeof out) == pn && memcmp(out, pl, pn) == 0, "pack %s", names[i]);
+    CHECK(mxp_pack_result_data(exp[i], out, pn - 1) == 0, "%s small cap", names[i]);
+    CHECK(!mxp_unpack_result_data(pl, (uint16_t)(pn - 1), &d), "%s one byte short", names[i]);
+    pl[pn] = 0;
+    CHECK(!mxp_unpack_result_data(pl, (uint16_t)(pn + 1), &d), "%s one byte extra", names[i]);
+  }
+  CHECK(VEC_P_RESULT_DATA_HELLO.frame_id == 300 && VEC_P_RESULT_DATA_HELLO.len == 5 &&
+            memcmp(VEC_P_RESULT_DATA_HELLO.data, "HELLO", 5) == 0,
+        "hello vector");
+  vec_payload("result_data_truncated", pl, sizeof pl);
+  CHECK(mxp_unpack_result_data(pl, 137, &d) && (d.flags & MXP_DATA_FLAG_TRUNCATED) && d.total_len == 300 &&
+            d.len == MXP_RESULT_DATA_MAX && d.data[127] == 127 && d.index == 1 && d.frame_id == 301,
+        "truncated fields");
+
+  mxp_result_data_t big = VEC_P_RESULT_DATA_TRUNCATED;
+  big.len = 129;
+  CHECK(mxp_pack_result_data(&big, out, sizeof out) == 0, "len 129 not packed");
+  pl[8] = 129; /* len field */
+  pl[137] = 0;
+  CHECK(!mxp_unpack_result_data(pl, 138, &d), "len 129 not unpacked");
+  CHECK(!mxp_unpack_result_data(pl, 8, &d), "shorter than the fixed part");
+}
+
+static void test_learned_data(void) {
+  uint8_t pl[64], out[64];
+  mxp_learned_data_t d;
+  const mxp_learned_data_t *e = &VEC_P_LEARNED_DATA_QR;
+  size_t pn = vec_payload("learned_data_qr", pl, sizeof pl);
+  CHECK(pn == 7u + e->len && pn == 11, "learned data length");
+  memset(&d, 0xAA, sizeof d);
+  CHECK(mxp_unpack_learned_data(pl, (uint16_t)pn, &d) && d.function_id == 6 && d.id == 2 && d.flags == 0 &&
+            d.total_len == 4 && d.len == 4 && memcmp(d.data, "LEFT", 4) == 0,
+        "unpack learned data");
+  memset(out, 0xEE, sizeof out);
+  CHECK(mxp_pack_learned_data(e, out, sizeof out) == pn && memcmp(out, pl, pn) == 0, "pack learned data");
+  CHECK(mxp_pack_learned_data(e, out, pn - 1) == 0, "learned data small cap");
+  CHECK(!mxp_unpack_learned_data(pl, (uint16_t)(pn - 1), &d), "learned data short");
+  pl[pn] = 0;
+  CHECK(!mxp_unpack_learned_data(pl, (uint16_t)(pn + 1), &d), "learned data trailing byte");
+  CHECK(!mxp_unpack_learned_data(pl, 6, &d), "learned data shorter than the fixed part");
+  mxp_learned_data_t big = *e;
+  big.len = 129;
+  CHECK(mxp_pack_learned_data(&big, out, sizeof out) == 0, "learned len 129 not packed");
+
+  uint8_t fn = 0;
+  uint16_t id = 0;
+  pn = vec_payload("get_learned_data_request", pl, sizeof pl);
+  CHECK(pn == 3 && mxp_unpack_get_learned_data(pl, 3, &fn, &id) && fn == MXP_FUNC_QR && id == 2,
+        "get learned data request");
+  CHECK(!mxp_unpack_get_learned_data(pl, 2, &fn, &id) && !mxp_unpack_get_learned_data(pl, 4, &fn, &id),
+        "get learned data request length");
+}
+
+static void test_get_result_data_req(void) {
+  uint8_t pl[8] = {0};
+  uint8_t index = 0xAA;
+  size_t pn = vec_payload("get_result_data_request", pl, sizeof pl);
+  CHECK(pn == 1 && mxp_unpack_get_result_data(pl, 1, &index) && index == 0, "get result data request");
+  pl[0] = 7;
+  CHECK(mxp_unpack_get_result_data(pl, 1, &index) && index == 7, "index 7");
+  CHECK(!mxp_unpack_get_result_data(pl, 0, &index) && !mxp_unpack_get_result_data(pl, 2, &index),
+        "get result data request length");
+}
+
 int main(void) {
   test_crc();
   test_encode();
@@ -649,6 +882,14 @@ int main(void) {
   test_gesture_results();
   test_learn_with_id();
   test_line_extra();
+  test_info_m7();
+  test_shape_motion_config_vectors();
+  test_shape_motion_clamp();
+  test_shape_motion_reject();
+  test_corners_extra();
+  test_result_data();
+  test_learned_data();
+  test_get_result_data_req();
   if (failures) {
     printf("%d failure(s)\n", failures);
     return 1;

@@ -25,7 +25,12 @@ export interface PayloadResultVector {
   id: number; x: number; y: number; width: number; height: number; confidence: number;
   extra?: { rotation_cdeg: number; corners: [number, number][] };
   line?: { angle_cdeg: number; offset_x: number; x0: number; y0: number; x1: number; y1: number; flags: number };
+  /** QR (function 6): same 18-byte layout as the AprilTag extra. */
+  corners_extra?: { rotation_cdeg: number; corners: [number, number][] };
 }
+export interface FuncConfigVector { function_id: number; layout_version: number }
+export interface ResultDataVector { frame_id: number; index: number; flags: number; total_len: number; data_hex: string }
+export interface LearnedDataVector { function_id: number; id: number; flags: number; total_len: number; data_hex: string }
 export interface GestureConfigVector {
   function_id: number; layout_version: number; hand_threshold: number; gesture_threshold: number; max_hands: number;
 }
@@ -51,5 +56,11 @@ export interface PayloadVectors {
   gesture_config_default: GestureConfigVector;
   gesture_config_set: GestureConfigVector;
   results_gesture_two: { frame_id: number; function_id: number; results: PayloadResultVector[] };
+  shape_config_default: FuncConfigVector & { mode: number; threshold: number; min_size: number; max_results: number };
+  motion_config_set: FuncConfigVector & { threshold: number; min_size: number; max_results: number };
+  result_data_hello: ResultDataVector;
+  result_data_truncated: ResultDataVector;
+  learned_data_qr: LearnedDataVector;
+  results_qr_two: { frame_id: number; function_id: number; results: PayloadResultVector[] };
 }
 export const payloadVectors = vectors.payloads as PayloadVectors;

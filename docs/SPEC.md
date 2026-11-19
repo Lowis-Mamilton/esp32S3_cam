@@ -62,6 +62,9 @@
   - **線條追蹤（功能 4，ADR-0018）**：模式 `0` 自動深線（預設，黑膠帶白紙）、`1` 自動淺線、`2` 學到的顏色（彩色膠帶；LEARN 學線色，黑／白膠帶學不到，模式 2 沒學過時照模式 0 跑）；「自動」是 Otsu 門檻，也可以設固定門檻值。預設只看畫面**下方 60%**，切成 8 條橫帶由下往上找線，**至少 2 帶找到線才回報**。只回報**一條主線**（`id = 1`）：角度（0 = 垂直向上，順時針為正）、偏移（底端 x − 160，正 = 線在右邊）、兩端點，另有路口旗標 `CROSS`（橫線／十字／T 字路口）與岔路旗標 `BRANCH`。偏移與角度都是**真實影像座標**（ADR-0010），鏡頭朝前時「右」就是車子的右邊。參數見 `docs/protocol.md` §9（Line config v1）。
   - **物體追蹤（功能 5，ADR-0018）**：**一次追一個目標**（`id = 1`）。在即時畫面上框住物體按 LEARN 就學會（再 LEARN 會取代舊的、名字一起清掉）；物體**要有花紋或明暗變化**，純色、沒有紋理的東西或太小（< 16×16 px）學不到。之後每張在上次位置附近找（會跟著變大變小），結果是框的中心與大小、`confidence` = 相似度 ×100；**跟丟時沒有紀錄**（R4 讀到 0 筆就是跟丟）。跟丟後預設會**自動在全畫面找回**（`reacquire`）；同色但花紋不同的東西不會被當成目標。學到的物體跟顏色一樣，**SAVE 後斷電仍在**。參數見 `docs/protocol.md` §9（Track config v1）。
   - **手勢辨識（功能 8，ADR-0019，M8a）**：Espressif 手部偵測＋手勢分類，**9 種固定手勢**：1–5（比幾根手指）、讚、OK、打電話、倒讚（ID 1–9）。**不需要學習**，但可以取名（跟 AprilTag 一樣）。`id 0` = 有手但認不出（回報這隻手，R4 只看特定 ID 就會略過）。最多同時 2 隻手（`max_hands`，預設 1；一隻手約 5.5 fps、兩隻手約 4 fps）。信心度 = 手勢分數 ×100。參數（手的偵測門檻、手勢門檻、最多幾隻手）與完整規則見 `docs/protocol.md` §10（Gesture config v1）。
+  - **QR Code（功能 6，ADR-0020，M7）**：`espressif/quirc`（ISC），在全解析度 320×240 上**每張都辨識**，一張畫面最多回報 **4 個解碼成功的碼**（大的在前）。結果是四個角的外接框，另帶與 AprilTag 相同的旋轉角度＋四個角（QR 自己的左上、右上、右下、左下）；`confidence` 固定 255。**內容用 `GET_RESULT_DATA (0x21)` 讀**（最近一批結果第 i 筆），**最多 128 bytes**，更長的截斷並標示 `TRUNCATED`。可以把內容學成 ID：框住一張碼按 LEARN（ID 1–8，同一個內容回原本的 ID，學滿 8 個回 `FULL`），之後同內容的碼回報那個 ID、沒學過的是 `id 0`；學到的內容用 `GET_LEARNED_DATA (0x35)` 讀，可以取名，SAVE 後斷電仍在。沒有參數。完整規則見 `docs/protocol.md` §11。
+  - **幾何形狀（功能 11，ADR-0021，M7）**：自寫（半解析度二值化＋連通區域＋外輪廓＋多邊形近似）。**只認 4 種**：圓形、三角形、正方形、長方形（ID 1–4），五邊形、星形等不回報，**六邊形以上會算成圓**；碰到畫面邊緣的形狀與太大的區域（紙張、背景）不回報。只有外框（用筆畫的形狀）也可以。不需要學習，但可以取名（同手勢）。`confidence` = 與理想形狀的面積相符程度。參數（深色／淺色形狀、門檻自動或固定、最小尺寸、最多幾個）見 `docs/protocol.md` §11（Shape config v1）。
+  - **動態偵測（功能 12，ADR-0021，M7）**：自寫（移動平均背景＋曝光補償＋連通區域），回報畫面中**動的區域**（`id 0`，`confidence` = 框內真正在動的比例）。**只適用於固定不動的鏡頭**：鏡頭被移動或整個畫面一起變亮變暗時會重建背景、幾張內不回報；切到這個功能後的前幾張也不回報；停下來的物體約 1–2 秒後不再回報。不需要學習、不能取名（同人臉）。參數（靈敏度門檻、最小尺寸、最多幾個）見 `docs/protocol.md` §11（Motion config v1）。
   - 延後：條碼（沒有適合授權、可用於 IDF 5 的函式庫）、貓狗偵測、ImageNet 分類。放棄：COCO 物件偵測（約 1 s／張）、姿態、OCR 等 ESP32-S3 沒有可用模型的功能。
   - 手勢（兩隻手）與人臉辨識約 3 fps，NN 功能的效能目標放寬為 ≥ 3 fps。
   - 手部關鍵點（21 點，類似 MediaPipe）：2026-11-19 原型評估後**不做**——MediaPipe hand_landmark_lite 在 ESP32-S3 上每隻手約 1 s、PSRAM 不夠和人臉／手勢模型共存（`docs/research/hand-landmarks-proto-b.md`）。手勢維持 ADR-0019 的分類器。
@@ -148,6 +151,7 @@ USB、UART、I2C 三種傳輸用同一套封包。
 - 共同欄位：`id`、`x`、`y`（中心）、`width`、`height`、`confidence`（255 = 不適用）；座標以 **320×240** 為準
 - AprilTag 另帶：旋轉角度、四個角座標
 - 線條追蹤（M6）另帶：角度、相對畫面中央的偏移、線段兩端點、路口／岔路旗標（14 bytes，`docs/protocol.md` §9）
+- QR Code（M7）另帶：與 AprilTag 相同的旋轉角度＋四個角（18 bytes）；內容是**附帶資料**，用 `GET_RESULT_DATA (0x21)` 另外讀（最多 128 bytes，`docs/protocol.md` §11）
 - 一次最多 **8 筆**，依面積或信心度排序
 
 ### 預設值
@@ -161,7 +165,7 @@ USB、UART、I2C 三種傳輸用同一套封包。
 
 - ESP-IDF v5.x（見 ADR-0002）
 - 鏡頭用 `esp32-camera` 元件，人臉偵測用 `espressif/human_face_detect`（esp-dl），螢幕用 `esp_lcd`（ILI9341）
-- 設定與學習資料存在 NVS（單一 blob）；blob v2（M8a）：多一份各功能參數的紀錄清單（func config：線條、物體追蹤、手勢），可讀 v1；不認得的紀錄略過。blob v3（M6）：再多一份學習資料的紀錄清單（學到的線色、物體範本），最大約 3 KB（2,993 B），可讀 v1、v2；分割表不改，之後的新分割區只從 `storage` 切（ADR-0017）
+- 設定與學習資料存在 NVS（單一 blob）；blob v2（M8a）：多一份各功能參數的紀錄清單（func config：線條、物體追蹤、手勢），可讀 v1；不認得的紀錄略過。blob v3（M6）：再多一份學習資料的紀錄清單（學到的線色、物體範本），最大約 3 KB（2,993 B），可讀 v1、v2；M7：形狀／動態參數加進 func config 紀錄清單，QR 對照表（最多 8 個 ID、內容 128 bytes）是 v3 學習資料清單的一筆，blob 最大 4,054 B（版本不變）；分割表不改，之後的新分割區只從 `storage` 切（ADR-0017）
 - USB 連線先用 USB-Serial-JTAG（網頁燒錄最省事），在 M1 實測頻寬；不夠再改用 TinyUSB CDC
 - 鏡頭輸出 **RGB565**（辨識和螢幕直接用）；傳給網頁時才用軟體壓 JPEG，預覽上限每秒 10 張，M1 實測約 6 張（目標 ≥ 5，見 `docs/measurements/m1.md`），把 CPU 留給辨識
 - 效能設定：CPU 240 MHz、PSRAM 80 MHz、flash QIO 80 MHz（M1 起固定，作為量測基準）；資料快取 32 KB、**64 B 快取線**（M8a 加速起，所有功能都變快、內部 RAM 不變，ADR-0019 補充）
@@ -235,6 +239,7 @@ docs/          規格、協定、ADR
 | M4 | UART、I2C、Arduino 函式庫、電位轉換接線 | R4 用範例程式讀到三種功能的結果，延遲 ≤ 50 ms |
 | M5 | 網頁燒錄、PWA 離線、GitHub Pages、多語系 | 新電腦只開網頁就能燒錄並使用 |
 | M6 | 架構前置、線條追蹤、物體追蹤 | 兩個功能 TFT ≥ 10 fps（不串流）、實機驗收通過（**已完成**，2026-11-19 實機驗收通過，`docs/measurements/m6.md`） |
+| M7 | QR、幾何形狀、動態偵測（功能 6、11、12） | 形狀／動態 TFT ≥ 10 fps、QR 沒有碼 ≥ 8 fps、一張碼 ≥ 3 fps、實機驗收通過 |
 | M8a | 手勢辨識（功能 8） | 一隻手 ≥ 3 fps、實機 9 種手勢驗收通過 |
 
 ## 9. 測試策略
@@ -277,7 +282,8 @@ docs/          規格、協定、ADR
   6. 目前韌體把 11 bytes 的 LEARN 當成一般 LEARN（沒有回 `BAD_PARAM`）；M8a 沒改，留給 M6 Task 4
   7. [x] Studio 的 LiveStage（`kind`、`stage*`）和 App（`showNames`）用串接三元運算子分辨功能，新增功能 ID 會**無聲地落到人臉分支**；M6 Task 7 已改成 `Record<FunctionId, …>`（commit aeab1a5；M8a 複審 M12）
 - [ ] M6 審查延後項目：切到功能 5 後「目標遺失」可能閃一張；匯入模式 'learned' 但板上沒有線色時，選項顯示為停用；TFT 與 Studio 的線條／追蹤顏色不同（#2cc8d8／#4d8ef5 對 `--cat-line`／`--cat-track`）；降級到 M6 以前的韌體時，下一次 SAVE 會丟掉 v3 blob（M5 燒錄器要提醒）；FakeFirmware 對 LEARN 長度、灰色、dirty 比韌體寬鬆；`tracking.c` 沒有主機測試
-- [ ] 名字表維持全部功能合計 32 筆（M6：線條不能取名、物體只有 id 1）；M7（QR 內容 → ID）或 M9 有 `mxdata` 分割區（ADR-0017）時再加大，`MXS_RESPONSE_MAX` 綁在名字表大小上，要一起改
+- [ ] 名字表維持全部功能合計 32 筆（M6：線條不能取名、物體只有 id 1）；M7（QR 內容 → ID）或 M9 有 `mxdata` 分割區（ADR-0017）時再加大，`MXS_RESPONSE_MAX` 綁在名字表大小上，要一起改。**M7 決定不加大**（QR 最多多 8 筆、形狀 4 筆；加到 64 筆要多約 10 KB 內部 RAM 與約 1.7 KB blob，NVS 會很緊），M9 有 `mxdata` 分割區時再一起改
+- [ ] M4：Arduino API 加 M7 功能：`MXCAM_ALGO_QR`（6）、`MXCAM_ALGO_SHAPE`（11）、`MXCAM_ALGO_MOTION`（12）；`MXCAM_SHAPE_CIRCLE`…`MXCAM_SHAPE_RECT`（1–4，值來自共用 C 的 `MXP_SHAPE_*`）；`bool MXCam::readText(uint8_t index, char *buf, size_t cap)`（`GET_RESULT_DATA`；`frame_id` 和上一次 `request()` 不同就回 false，學生再 `request()` 一次）；QR 的 `r.angle` 與 AprilTag 共用 `mxp_unpack_corners_extra`。Studio 程式分頁的範例照這組名稱寫（M7 計畫設計決定 18）
 - [ ] M4：service 改寫（傳輸別、各傳輸自己的 outbox）要以 M6 之後的 `mxcam_service` 為基礎（`0x44`／`0x45` func config、功能 4／5 的 LEARN／FORGET／SET_NAME／GET_LEARNED、`mxs_finish_learn_object`）
 - [ ] M4：Arduino API 加線條與物體追蹤：`MXCAM_ALGO_LINE`（4）、`MXCAM_ALGO_TRACK`（5）；`MXCamResult` 在線條功能多 `angle`（度，int）、`offset`（px）、`flags`（`MXCAM_LINE_BRANCH`、`MXCAM_LINE_CROSS`），由共用 C 的 `mxp_unpack_line_extra` 解出（M6 計畫設計決定 17）
 - [x] M2 開工前（M1 總審查建議）——已在 M2 處理：

@@ -242,6 +242,94 @@
       "seq": 0,
       "payload_hex": "7800000008020700c8007800500060005c0000005a008c003c0046005100",
       "encoded_hex": "4d580161001e007800000008020700c8007800500060005c0000005a008c003c004600510069bf"
+    },
+    {
+      "name": "get_info_response_m7",
+      "ver": 1,
+      "cmd": 129,
+      "seq": 2,
+      "payload_hex": "010001006131623263336424ec4a0011ff4001f0000809010203040506080b0c",
+      "encoded_hex": "4d580181022000010001006131623263336424ec4a0011ff4001f0000809010203040506080b0cdbde"
+    },
+    {
+      "name": "get_func_config_shape_request",
+      "ver": 1,
+      "cmd": 68,
+      "seq": 14,
+      "payload_hex": "0b",
+      "encoded_hex": "4d5801440e01000bdff7"
+    },
+    {
+      "name": "func_config_shape_default",
+      "ver": 1,
+      "cmd": 196,
+      "seq": 14,
+      "payload_hex": "0b010000200400000000",
+      "encoded_hex": "4d5801c40e0a000b0100002004000000008154"
+    },
+    {
+      "name": "func_config_motion_default",
+      "ver": 1,
+      "cmd": 196,
+      "seq": 15,
+      "payload_hex": "0c011918040000000000",
+      "encoded_hex": "4d5801c40f0a000c011918040000000000dc77"
+    },
+    {
+      "name": "set_func_config_motion_request",
+      "ver": 1,
+      "cmd": 69,
+      "seq": 16,
+      "payload_hex": "0c010f30020000000000",
+      "encoded_hex": "4d580145100a000c010f30020000000000e041"
+    },
+    {
+      "name": "get_result_data_request",
+      "ver": 1,
+      "cmd": 33,
+      "seq": 17,
+      "payload_hex": "00",
+      "encoded_hex": "4d5801211101000076b3"
+    },
+    {
+      "name": "result_data_hello",
+      "ver": 1,
+      "cmd": 161,
+      "seq": 17,
+      "payload_hex": "2c010000000005000548454c4c4f",
+      "encoded_hex": "4d5801a1110e002c010000000005000548454c4c4f55cd"
+    },
+    {
+      "name": "result_data_truncated",
+      "ver": 1,
+      "cmd": 161,
+      "seq": 18,
+      "payload_hex": "2d01000001012c0180000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f",
+      "encoded_hex": "4d5801a11289002d01000001012c0180000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f2374"
+    },
+    {
+      "name": "get_learned_data_request",
+      "ver": 1,
+      "cmd": 53,
+      "seq": 19,
+      "payload_hex": "060200",
+      "encoded_hex": "4d580135130300060200b3b8"
+    },
+    {
+      "name": "learned_data_qr",
+      "ver": 1,
+      "cmd": 181,
+      "seq": 19,
+      "payload_hex": "060200000400044c454654",
+      "encoded_hex": "4d5801b5130b00060200000400044c45465411f2"
+    },
+    {
+      "name": "results_qr_two",
+      "ver": 1,
+      "cmd": 97,
+      "seq": 0,
+      "payload_hex": "2c0100000602020082005a003d003d00ff12000064003c00a0003c00a0007800640078000000f000b40029002900ff12d8dcdc00c800dc00a0000401a0000401c800",
+      "encoded_hex": "4d5801610042002c0100000602020082005a003d003d00ff12000064003c00a0003c00a0007800640078000000f000b40029002900ff12d8dcdc00c800dc00a0000401a0000401c8005bff"
     }
   ],
   "decoder": [
@@ -532,6 +620,106 @@
           "width": 60,
           "height": 70,
           "confidence": 81
+        }
+      ]
+    },
+    "shape_config_default": {
+      "function_id": 11,
+      "layout_version": 1,
+      "mode": 0,
+      "threshold": 0,
+      "min_size": 32,
+      "max_results": 4
+    },
+    "motion_config_set": {
+      "function_id": 12,
+      "layout_version": 1,
+      "threshold": 15,
+      "min_size": 48,
+      "max_results": 2
+    },
+    "result_data_hello": {
+      "frame_id": 300,
+      "index": 0,
+      "flags": 0,
+      "total_len": 5,
+      "data_hex": "48454c4c4f"
+    },
+    "result_data_truncated": {
+      "frame_id": 301,
+      "index": 1,
+      "flags": 1,
+      "total_len": 300,
+      "data_hex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f"
+    },
+    "learned_data_qr": {
+      "function_id": 6,
+      "id": 2,
+      "flags": 0,
+      "total_len": 4,
+      "data_hex": "4c454654"
+    },
+    "results_qr_two": {
+      "frame_id": 300,
+      "function_id": 6,
+      "results": [
+        {
+          "id": 2,
+          "x": 130,
+          "y": 90,
+          "width": 61,
+          "height": 61,
+          "confidence": 255,
+          "corners_extra": {
+            "rotation_cdeg": 0,
+            "corners": [
+              [
+                100,
+                60
+              ],
+              [
+                160,
+                60
+              ],
+              [
+                160,
+                120
+              ],
+              [
+                100,
+                120
+              ]
+            ]
+          }
+        },
+        {
+          "id": 0,
+          "x": 240,
+          "y": 180,
+          "width": 41,
+          "height": 41,
+          "confidence": 255,
+          "corners_extra": {
+            "rotation_cdeg": -9000,
+            "corners": [
+              [
+                220,
+                200
+              ],
+              [
+                220,
+                160
+              ],
+              [
+                260,
+                160
+              ],
+              [
+                260,
+                200
+              ]
+            ]
+          }
         }
       ]
     }

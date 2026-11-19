@@ -480,3 +480,147 @@ bool mxp_unpack_line_extra(const mxp_result_t *r, mxp_line_extra_t *out) {
   out->flags = x[12];
   return true;
 }
+
+/* ---- M7 payloads (protocol.md 11) ---- */
+
+void mxp_shape_config_defaults(mxp_shape_config_t *c) {
+  c->mode = 0;
+  c->threshold = 0;
+  c->min_size = 32;
+  c->max_results = 4;
+}
+
+void mxp_motion_config_defaults(mxp_motion_config_t *c) {
+  c->threshold = 25;
+  c->min_size = 24;
+  c->max_results = 4;
+}
+
+size_t mxp_pack_shape_config(const mxp_shape_config_t *c, uint8_t out[MXP_FUNC_CONFIG_SIZE]) {
+  memset(out, 0, MXP_FUNC_CONFIG_SIZE);
+  out[0] = MXP_FUNC_SHAPE;
+  out[1] = MXP_SHAPE_CONFIG_VERSION;
+  out[2] = c->mode;
+  out[3] = c->threshold;
+  out[4] = c->min_size;
+  out[5] = c->max_results;
+  return MXP_FUNC_CONFIG_SIZE;
+}
+
+bool mxp_unpack_shape_config(const uint8_t *p, uint16_t len, mxp_shape_config_t *out) {
+  if (len != MXP_FUNC_CONFIG_SIZE || p[0] != MXP_FUNC_SHAPE || p[1] != MXP_SHAPE_CONFIG_VERSION) return false;
+  out->mode = p[2] > 1 ? 0 : p[2];
+  out->threshold = p[3];
+  out->min_size = clamp_u8(p[4], 16, 240);
+  out->max_results = clamp_u8(p[5], 1, MXP_MAX_RESULTS);
+  return true;
+}
+
+size_t mxp_pack_motion_config(const mxp_motion_config_t *c, uint8_t out[MXP_FUNC_CONFIG_SIZE]) {
+  memset(out, 0, MXP_FUNC_CONFIG_SIZE);
+  out[0] = MXP_FUNC_MOTION;
+  out[1] = MXP_MOTION_CONFIG_VERSION;
+  out[2] = c->threshold;
+  out[3] = c->min_size;
+  out[4] = c->max_results;
+  return MXP_FUNC_CONFIG_SIZE;
+}
+
+bool mxp_unpack_motion_config(const uint8_t *p, uint16_t len, mxp_motion_config_t *out) {
+  if (len != MXP_FUNC_CONFIG_SIZE || p[0] != MXP_FUNC_MOTION || p[1] != MXP_MOTION_CONFIG_VERSION) return false;
+  out->threshold = clamp_u8(p[2], 5, 100);
+  out->min_size = clamp_u8(p[3], 8, 240);
+  out->max_results = clamp_u8(p[4], 1, MXP_MAX_RESULTS);
+  return true;
+}
+
+void mxp_pack_corners_extra(const mxp_corners_extra_t *e, mxp_result_t *r) {
+  uint8_t *x = r->extra;
+  put_u16(x, (uint16_t)e->rotation_cdeg);
+  for (int k = 0; k < 4; k++) {
+    put_u16(x + 2 + 4 * k, (uint16_t)e->x[k]);
+    put_u16(x + 4 + 4 * k, (uint16_t)e->y[k]);
+  }
+  r->extra_len = MXP_CORNERS_EXTRA_SIZE;
+}
+
+bool mxp_unpack_corners_extra(const mxp_result_t *r, mxp_corners_extra_t *out) {
+  if (r->extra_len != MXP_CORNERS_EXTRA_SIZE) return false;
+  const uint8_t *x = r->extra;
+  out->rotation_cdeg = get_i16(x);
+  for (int k = 0; k < 4; k++) {
+    out->x[k] = get_i16(x + 2 + 4 * k);
+    out->y[k] = get_i16(x + 4 + 4 * k);
+  }
+  return true;
+}
+
+#define RESULT_DATA_FIXED 9u
+#define LEARNED_DATA_FIXED 7u
+
+bool mxp_unpack_get_result_data(const uint8_t *p, uint16_t len, uint8_t *index) {
+  if (len != 1) return false;
+  *index = p[0];
+  return true;
+}
+
+size_t mxp_pack_result_data(const mxp_result_data_t *d, uint8_t *out, size_t cap) {
+  if (d->len > MXP_RESULT_DATA_MAX) return 0;
+  size_t total = RESULT_DATA_FIXED + d->len;
+  if (out == NULL || cap < total) return 0;
+  put_u32(out, d->frame_id);
+  out[4] = d->index;
+  out[5] = d->flags;
+  put_u16(out + 6, d->total_len);
+  out[8] = d->len;
+  memcpy(out + RESULT_DATA_FIXED, d->data, d->len);
+  return total;
+}
+
+bool mxp_unpack_result_data(const uint8_t *p, uint16_t len, mxp_result_data_t *out) {
+  if (len < RESULT_DATA_FIXED) return false;
+  uint8_t n = p[8];
+  if (n > MXP_RESULT_DATA_MAX || len != RESULT_DATA_FIXED + n) return false;
+  memset(out, 0, sizeof(*out));
+  out->frame_id = get_u32(p);
+  out->index = p[4];
+  out->flags = p[5];
+  out->total_len = get_u16(p + 6);
+  out->len = n;
+  memcpy(out->data, p + RESULT_DATA_FIXED, n);
+  return true;
+}
+
+bool mxp_unpack_get_learned_data(const uint8_t *p, uint16_t len, uint8_t *function_id, uint16_t *id) {
+  if (len != 3) return false;
+  *function_id = p[0];
+  *id = get_u16(p + 1);
+  return true;
+}
+
+size_t mxp_pack_learned_data(const mxp_learned_data_t *d, uint8_t *out, size_t cap) {
+  if (d->len > MXP_RESULT_DATA_MAX) return 0;
+  size_t total = LEARNED_DATA_FIXED + d->len;
+  if (out == NULL || cap < total) return 0;
+  out[0] = d->function_id;
+  put_u16(out + 1, d->id);
+  out[3] = d->flags;
+  put_u16(out + 4, d->total_len);
+  out[6] = d->len;
+  memcpy(out + LEARNED_DATA_FIXED, d->data, d->len);
+  return total;
+}
+
+bool mxp_unpack_learned_data(const uint8_t *p, uint16_t len, mxp_learned_data_t *out) {
+  if (len < LEARNED_DATA_FIXED) return false;
+  uint8_t n = p[6];
+  if (n > MXP_RESULT_DATA_MAX || len != LEARNED_DATA_FIXED + n) return false;
+  memset(out, 0, sizeof(*out));
+  out->function_id = p[0];
+  out->id = get_u16(p + 1);
+  out->flags = p[3];
+  out->total_len = get_u16(p + 4);
+  out->len = n;
+  memcpy(out->data, p + LEARNED_DATA_FIXED, n);
+  return true;
+}

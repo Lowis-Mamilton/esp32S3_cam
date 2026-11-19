@@ -69,7 +69,10 @@ CRC 錯誤的封包**不回應**：因為內容不可信，連 `seq` 都不能�
 | 3 | 人臉偵測（已實作，M3） | M3 |
 | 4 | 線條追蹤 | M6 |
 | 5 | 物體追蹤 | M6 |
+| 6 | QR Code | M7 |
 | 8 | 手勢辨識 | M8a |
+| 11 | 幾何形狀 | M7 |
+| 12 | 動態偵測 | M7 |
 
 ## 5. 指令總表
 
@@ -80,8 +83,10 @@ CRC 錯誤的封包**不回應**：因為內容不可信，連 `seq` 都不能�
 | 0x10 | SET_FUNCTION | M1 |
 | 0x11 | GET_FUNCTION | M1 |
 | 0x20 | GET_RESULTS | M2 |
+| 0x21 | GET_RESULT_DATA | M7 |
 | 0x30–0x33 | LEARN / FORGET / SET_NAME / GET_LEARNED | M2 |
 | 0x34 | 保留 | — |
+| 0x35 | GET_LEARNED_DATA | M7 |
 | 0x40–0x43 | GET_CONFIG / SET_CONFIG / SAVE / FACTORY_RESET | M2 |
 | 0x44 | GET_FUNC_CONFIG | M6 |
 | 0x45 | SET_FUNC_CONFIG | M6 |
@@ -90,7 +95,7 @@ CRC 錯誤的封包**不回應**：因為內容不可信，連 `seq` 都不能�
 | 0x60 | 推送 FRAME | M1 |
 | 0x61 | 推送 RESULTS | M2 |
 
-M2 的指令細節見第 7 節，M6 的見第 9 節（第 8 節保留給 M4 的 I2C 傳輸）；之後新增的指令在各自的里程碑定稿。
+M2 的指令細節見第 7 節，M6 的見第 9 節（第 8 節保留給 M4 的 I2C 傳輸），M8a 的見第 10 節，M7 的見第 11 節；之後新增的指令在各自的里程碑定稿。
 
 ## 6. M1 指令細節
 
@@ -164,7 +169,7 @@ M2 定稿於 2026-11-19（決策見 ADR-0007～0010）。
 | extra_len | u8 | 後面附加資料的長度 |
 | extra | u8[extra_len] | 依功能而定（見下） |
 
-AprilTag 的 `extra`（18 bytes）：`rotation_cdeg (i16，-18000～18000，百分之一度)`，接著四個角 `x0,y0,x1,y1,x2,y2,x3,y3 (i16 ×8)`。顏色和人臉的 `extra_len` 是 0。線條（功能 4）的 `extra` 是 14 bytes，見第 9 節。
+AprilTag 的 `extra`（18 bytes）：`rotation_cdeg (i16，-18000～18000，百分之一度)`，接著四個角 `x0,y0,x1,y1,x2,y2,x3,y3 (i16 ×8)`。顏色和人臉的 `extra_len` 是 0。線條（功能 4）的 `extra` 是 14 bytes，見第 9 節。QR Code（功能 6）的 `extra` 與 AprilTag 相同（18 bytes，四個角是 QR 自己的左上、右上、右下、左下），見第 11 節。
 
 `extra_len` 最大 18。主機依 `function_id` 解讀 `extra`；遇到不認得的長度（0–18）要**略過這段 extra、照常使用其他欄位**，不可以整包失敗（之後的功能可能帶新的 extra）；只有 `extra_len` > 18 或長度超出 payload 才是格式錯誤。
 
@@ -201,6 +206,7 @@ payload 與 GET_RESULTS 的回應相同。每處理完一張畫面推送一次�
 - 約 1 秒內沒有畫面可取樣（例如鏡頭抓圖持續失敗）時，MXCam 以 `BAD_PARAM` 取消這個 LEARN，不會一直回 `BUSY`
 - 回應 `0xB0`：`id (u8)` —— 分配到的 ID（同一個顏色已學過就是原本的 ID）
 - 錯誤：區域沒有顏色（太暗、太灰）→ `BAD_PARAM`；已經學滿 7 個 → `FULL (0x07)`
+- QR（6）、形狀（11）、動態（12）見第 11 節
 
 ### 0x31 FORGET
 
@@ -211,6 +217,7 @@ payload 與 GET_RESULTS 的回應相同。每處理完一張畫面推送一次�
 - 人臉偵測（3）：不需要學習、也不能取名，沒有東西可忘，直接回成功
 - 線條（4）、物體追蹤（5）：見第 9 節
 - 手勢（8）：見第 10 節
+- QR（6）、形狀（11）、動態（12）：見第 11 節
 - 其他功能 → `BAD_PARAM`
 
 ### 0x32 SET_NAME
@@ -221,6 +228,7 @@ payload 與 GET_RESULTS 的回應相同。每處理完一張畫面推送一次�
 - AprilTag：任何 0–586 的 tag ID 都可以取名（不需要先學習）
 - 線條（4）：`BAD_PARAM`（不能取名）；物體追蹤（5）：見第 9 節
 - 手勢（8）：見第 10 節
+- QR（6）、形狀（11）、動態（12）：見第 11 節
 - 人臉偵測（3）與其他功能：`BAD_PARAM`
 - 名字超過 48 bytes 或不是合法 UTF-8 → `BAD_LENGTH` / `BAD_PARAM`
 - 名字表已滿（所有功能合計 32 筆）→ `FULL`；改已有的名字或清除名字不受影響
@@ -236,7 +244,7 @@ payload 與 GET_RESULTS 的回應相同。每處理完一張畫面推送一次�
 | name_len | u8 | |
 | name | UTF-8 | |
 
-- 顏色（1）：學到的顏色（依 ID 排序）；AprilTag（2）：有名字的 tag（依 ID 排序）；線條（4）、物體追蹤（5）見第 9 節；手勢（8）見第 10 節
+- 顏色（1）：學到的顏色（依 ID 排序）；AprilTag（2）：有名字的 tag（依 ID 排序）；線條（4）、物體追蹤（5）見第 9 節；手勢（8）見第 10 節；QR（6）、形狀（11）、動態（12）見第 11 節
 - 人臉偵測（3）與其他功能：`BAD_PARAM`（人臉沒有學習資料）
 
 ### 0x40 GET_CONFIG / 0x41 SET_CONFIG
@@ -285,7 +293,7 @@ M6 定稿於 2026-11-19（協定成長方式見 ADR-0016）。第 8 節保留給
 
 | 欄位 | 型別 | 說明 |
 |---|---|---|
-| function_id | u8 | 4 = 線條、5 = 物體追蹤、8 = 手勢 |
+| function_id | u8 | 4 = 線條、5 = 物體追蹤、8 = 手勢（第 10 節）、11 = 幾何形狀、12 = 動態偵測（第 11 節） |
 | layout_version | u8 | 這個功能的版面版本（線條、物體追蹤目前都是 1） |
 | body | 依功能 | 線條 v1、物體追蹤 v1 都是 8 bytes，整包 10 bytes |
 
@@ -428,3 +436,118 @@ ResultRecord 格式同第 7 節，每隻手一筆：
 ### 速度
 
 一隻手約 5.5 次／秒、兩隻手約 4 次／秒（`max_hands` 2 但只有一隻手時約 3.9 次／秒；實測見 `docs/measurements/m8a.md`）。
+
+## 11. M7 指令細節（QR、幾何形狀、動態偵測）
+
+M7 定稿於 2026-11-19（協定成長方式見 ADR-0016；QR 的決定見 ADR-0020，形狀與動態見 ADR-0021）。只新增：功能 6／11／12、兩個新指令（`0x21`、`0x35`）、Shape config v1、Motion config v1。舊韌體不認得這些功能，GET_INFO 的功能清單裡沒有 6／11／12，對 `0x21`／`0x35` 回 `UNKNOWN_CMD`；主機要先看清單，沒有 6 就不要送 `0x21`／`0x35`。
+
+### 0x21 GET_RESULT_DATA（讀一筆辨識結果的附帶資料）
+
+讀 GET_RESULTS **同一份快取**（最近一張處理完的畫面）第 `index` 筆紀錄的附帶資料；目前只有 QR（功能 6）的紀錄有附帶資料（QR 的內容）。
+
+請求：`index (u8)`。回應 `0xA1`（9 + len bytes）：
+
+| 欄位 | 型別 | 說明 |
+|---|---|---|
+| frame_id | u32 | 這筆資料所屬那批結果的 `frame_id` |
+| index | u8 | 同請求 |
+| flags | u8 | bit0 `TRUNCATED`：原資料超過 128 bytes、只送前 128 bytes；其他位元填 0 |
+| total_len | u16 | 原資料長度 |
+| len | u8 | 0–128，後面 `data` 的長度 |
+| data | u8[len] | 原始 bytes（不保證是 UTF-8） |
+
+- 主機要比對回應的 `frame_id` 和剛讀到的 GET_RESULTS（或 PUSH_RESULTS）是否相同；不同表示中間換了一張畫面，要**重讀兩者**，不能把別張畫面的內容接到框上。
+- `data` 最多 128 bytes（`MXP_RESULT_DATA_MAX`，R4 記憶體有限）；更長的截斷並設 `TRUNCATED`，`total_len` 是原長。QR 的 byte 模式通常是 UTF-8，數字／英數模式是 ASCII，主機顯示時遇到不合法的 UTF-8 用替代字元，不能失敗。
+- 沒有附帶資料的紀錄（其他功能）回 `total_len 0`、`len 0`。
+- 錯誤：長度不是 1 → `BAD_LENGTH`；還沒有處理完的畫面、或 `index` ≥ 這批的筆數 → `BAD_PARAM`。
+
+### 0x35 GET_LEARNED_DATA（讀學到的內容）
+
+請求：`function_id (u8)`，`id (u16)`。回應 `0xB5`（7 + len bytes）：
+
+| 欄位 | 型別 | 說明 |
+|---|---|---|
+| function_id | u8 | 同請求 |
+| id | u16 | 同請求 |
+| flags | u8 | bit0 `TRUNCATED`（同 `0x21`） |
+| total_len | u16 | 學到的內容的原長 |
+| len | u8 | 0–128 |
+| data | u8[len] | 學到的內容（最多前 128 bytes） |
+
+- 只支援功能 6（QR：ID 學到的是哪個內容）；其他功能、或沒學過的 ID → `BAD_PARAM`；長度不是 3 → `BAD_LENGTH`。
+- 用途：Studio 的學習分頁顯示「ID 3 = LEFT」。GET_LEARNED（`0x33`）的版面不變，`0x34` 保留給別的用途。
+
+### QR Code（功能 6）
+
+用 quirc 在全解析度 320×240 灰階上辨識，每張畫面都辨識、解碼。
+
+**辨識結果**：一張畫面最多 4 個碼；只回報**解碼成功**的，依四角形面積由大到小取前 4 個（解碼失敗的格子不回報，所以每一筆都有內容）。不做鏡像重試（ADR-0010）。
+
+| 欄位 | 說明 |
+|---|---|
+| id | 學到的 ID（內容完全相符時 1–8）；沒學過 = `0` |
+| x, y, width, height | 四個角的外接框，裁到畫面內：寬高 = max − min + 1，中心 = (min + max) / 2 取整 |
+| confidence | `255`（不適用：解碼成功就是確定的） |
+| extra_len | 18 |
+
+QR 的 `extra`（18 bytes）與 AprilTag 相同：`rotation_cdeg (i16)`＋四個角 `x0,y0..x3,y3 (i16 ×8)`。四個角是 QR 自己的**左上、右上、右下、左下**（不裁切，可能落在畫面外）；`rotation_cdeg = atan2(右上.y − 左上.y, 右上.x − 左上.x)`，QR 正放是 0、在畫面上順時針為正。內容用 `0x21` GET_RESULT_DATA 讀。
+
+**學習與名字**（把「內容 → ID」記下來，同 HUSKYLENS 2）：
+
+- LEARN 6（9 bytes；目前功能必須是 6）：區域語意同顏色（左上角＋大小，可以給整張畫面）。延後回應（ADR-0007）：處理流程**辨識完這張畫面之後**，從這張的碼裡選「中心在區域內」的、面積最大的那個——內容已學過 → 回原本的 ID（不改資料）；新的 → 最小的空 ID 1–8；學滿 8 個 → `FULL`；區域內沒有解碼成功的碼 → `BAD_PARAM`。新 ID 從下一張畫面起生效。
+- 比對規則：`total_len` 相同，且前 `min(total_len, 128)` bytes 相同（前 128 bytes 相同但長度不同是不同的碼）。
+- 11 bytes 的 LEARN（指定 ID）對功能 6 回 `BAD_PARAM`。
+- FORGET 6：`id` 刪除對照與名字；`0xFFFF` 全刪；不存在也回成功。
+- SET_NAME 6：只接受已學的 ID，其他 → `BAD_PARAM`；名字表仍是全部功能合計 32 筆。
+- GET_LEARNED 6：已學的 ID（依 ID 排序），`r, g, b` 填 0，加名字；內容用 `0x35` GET_LEARNED_DATA 讀。
+- QR 對照表跟其他學習資料一樣，SAVE 才寫進 flash（store blob v3 的學習資料清單多一筆，版本不變）。
+
+QR 沒有 func config（GET_FUNC_CONFIG 6 → `BAD_PARAM`）。
+
+### 幾何形狀（功能 11）
+
+**形狀 ID**（固定類別，不需要學習，可以取名，同手勢）：
+
+| ID | 形狀 | TFT 標籤 |
+|---|---|---|
+| 1 | 圓形 | `CIRCLE` |
+| 2 | 三角形 | `TRIANGLE` |
+| 3 | 正方形 | `SQUARE` |
+| 4 | 長方形 | `RECT` |
+
+五邊形、星形等**不回報**；六邊形以上在 320×240 上和圓分不開，會當成圓。ID 5 以後保留。
+
+**Shape config v1**（function_id 11，layout_version 1，走第 9 節的 GET_FUNC_CONFIG／SET_FUNC_CONFIG，body 8 bytes，整包 10 bytes）：
+
+| 欄位 | 型別 | 預設 | 範圍／夾限 | 說明 |
+|---|---|---|---|---|
+| mode | u8 | 0 | 0／1；> 1 → 0 | 0 = 深色形狀淺色底，1 = 淺色形狀深色底 |
+| threshold | u8 | 0 | 0–255（不夾） | 0 = 自動（Otsu），1–255 = 固定灰階門檻 |
+| min_size | u8 | 32 | 16–240（夾到邊界） | 外接框長邊（px，320 座標）小於它的不回報 |
+| max_results | u8 | 4 | 1–8（夾到邊界） | 最多回報幾個 |
+| reserved | u8 ×4 | 0 | | 送什麼都被忽略，回應裡是 0 |
+
+**辨識結果**：每個形狀一筆，最多 `max_results` 筆，依面積由大到小。`id` = 形狀 ID；`x, y, width, height` = 外接框（320 座標）；`confidence` = round(100 × 小 ÷ 大)，比的是輪廓面積與近似形狀（多邊形或圓）的面積；`extra_len` 0。碰到畫面邊緣的形狀、外接框面積超過畫面 60% 的區域（背景、紙張）不回報。做法見 ADR-0021。
+
+**名字與學習**：SET_NAME 11：`id` 1–4（其他 → `BAD_PARAM`）；GET_LEARNED 11：有名字的形狀（依 ID 排序，`r, g, b` 填 0）；FORGET 11：刪名字（`0xFFFF` 全刪），不存在也回成功；LEARN 11 → `BAD_PARAM`。
+
+### 動態偵測（功能 12）
+
+偵測畫面中**動的區域**（背景是移動平均，有曝光補償與全畫面變化重設；做法見 ADR-0021）。**只適用於固定不動的鏡頭**；切到功能 12 後的前幾張只建背景、不回報；整個畫面一起變（開關燈、鏡頭被移動）時重建背景、幾張內不回報；靜止下來的物體約 1–2 秒後融入背景。
+
+**Motion config v1**（function_id 12，layout_version 1，body 8 bytes，整包 10 bytes）：
+
+| 欄位 | 型別 | 預設 | 範圍／夾限 | 說明 |
+|---|---|---|---|---|
+| threshold | u8 | 25 | 5–100（夾到邊界） | 灰階差門檻（越小越靈敏） |
+| min_size | u8 | 24 | 8–240（夾到邊界） | 外接框長邊（px，320 座標）小於它的不回報 |
+| max_results | u8 | 4 | 1–8（夾到邊界） | 最多回報幾個 |
+| reserved | u8 ×5 | 0 | | 送什麼都被忽略，回應裡是 0 |
+
+**辨識結果**：每個動的區域一筆，依面積由大到小、最多 `max_results` 筆。`id` = `0`（同人臉：只有偵測、沒有類別）；`x, y, width, height` = 框（320 座標、裁到畫面內）；`confidence` = round(100 × 框內真正變化的格數 ÷ 框內格數)；`extra_len` 0。
+
+**名字與學習**：不需要學習、不能取名（同人臉）：LEARN 12、SET_NAME 12、GET_LEARNED 12 → `BAD_PARAM`；FORGET 12 回成功。
+
+### 速度
+
+目標：形狀、動態 TFT（不串流）≥ 10 fps；QR 畫面上沒有碼時 ≥ 8 fps、有一張碼時 ≥ 3 fps。實測以 `docs/measurements/m7.md` 為準。

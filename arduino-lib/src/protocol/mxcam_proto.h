@@ -30,10 +30,12 @@ enum {
   MXP_CMD_SET_FUNCTION = 0x10,
   MXP_CMD_GET_FUNCTION = 0x11,
   MXP_CMD_GET_RESULTS = 0x20,
+  MXP_CMD_GET_RESULT_DATA = 0x21, /* M7 */
   MXP_CMD_LEARN = 0x30,
   MXP_CMD_FORGET = 0x31,
   MXP_CMD_SET_NAME = 0x32,
   MXP_CMD_GET_LEARNED = 0x33,
+  MXP_CMD_GET_LEARNED_DATA = 0x35, /* M7 */
   MXP_CMD_GET_CONFIG = 0x40,
   MXP_CMD_SET_CONFIG = 0x41,
   MXP_CMD_SAVE = 0x42,
@@ -64,7 +66,10 @@ enum {
   MXP_FUNC_FACE = 3,
   MXP_FUNC_LINE = 4,
   MXP_FUNC_TRACK = 5,
-  MXP_FUNC_GESTURE = 8
+  MXP_FUNC_QR = 6,
+  MXP_FUNC_GESTURE = 8,
+  MXP_FUNC_SHAPE = 11,
+  MXP_FUNC_MOTION = 12
 };
 
 /* Gesture ids (function 8, ResultRecord id): 1..5 = fingers shown;
@@ -137,7 +142,7 @@ typedef struct {
 void mxp_pack_frame_header(const mxp_frame_header_t *h, uint8_t out[MXP_FRAME_HEADER_SIZE]);
 
 /* ResultRecord (protocol.md 7). x, y are the box centre; extra is 0 bytes
- * (colour, face) or 18 bytes (AprilTag: rotation_cdeg i16 + 4 corners i16 x8). */
+ * (colour, face) or 18 bytes (AprilTag and QR: rotation_cdeg i16 + 4 corners i16 x8). */
 typedef struct {
   uint16_t id;
   int16_t x, y;
@@ -254,6 +259,80 @@ typedef struct {
 void mxp_pack_line_extra(const mxp_line_extra_t *e, mxp_result_t *r);
 /* false when r->extra_len != 14. */
 bool mxp_unpack_line_extra(const mxp_result_t *r, mxp_line_extra_t *out);
+
+/* ---- M7 (protocol.md 11) ---- */
+
+/* Shape ids (function 11, ResultRecord id). Hexagons and rounder count as circles;
+ * other polygons are not reported. Ids above 4 are reserved. */
+enum { MXP_SHAPE_CIRCLE = 1, MXP_SHAPE_TRIANGLE = 2, MXP_SHAPE_SQUARE = 3, MXP_SHAPE_RECT = 4 };
+#define MXP_SHAPE_MAX 4
+#define MXP_SHAPE_CONFIG_VERSION 1
+#define MXP_MOTION_CONFIG_VERSION 1
+
+/* Shape config v1: mode 0 = dark shapes on light, 1 = light on dark; threshold 0 = automatic (Otsu). */
+typedef struct {
+  uint8_t mode, threshold, min_size, max_results;
+} mxp_shape_config_t;
+/* Motion config v1: threshold is the grey-level difference. */
+typedef struct {
+  uint8_t threshold, min_size, max_results;
+} mxp_motion_config_t;
+void mxp_shape_config_defaults(mxp_shape_config_t *c);   /* 0, 0, 32, 4 */
+void mxp_motion_config_defaults(mxp_motion_config_t *c); /* 25, 24, 4 */
+/* pack writes function_id, layout_version, the body and zero reserved bytes; returns 10. */
+size_t mxp_pack_shape_config(const mxp_shape_config_t *c, uint8_t out[MXP_FUNC_CONFIG_SIZE]);
+size_t mxp_pack_motion_config(const mxp_motion_config_t *c, uint8_t out[MXP_FUNC_CONFIG_SIZE]);
+/* Require len 10, the right function_id and layout_version 1; reserved bytes are ignored.
+ * Shape clamps: mode > 1 -> 0, min_size 16-240, max_results 1-8 (threshold as is).
+ * Motion clamps: threshold 5-100, min_size 8-240, max_results 1-8. */
+bool mxp_unpack_shape_config(const uint8_t *p, uint16_t len, mxp_shape_config_t *out);
+bool mxp_unpack_motion_config(const uint8_t *p, uint16_t len, mxp_motion_config_t *out);
+
+/* AprilTag (2) and QR (6) ResultRecord extra (18 bytes): rotation_cdeg i16, then the
+ * four corners x0, y0 .. x3, y3 as i16 (not clipped to the frame). */
+#define MXP_CORNERS_EXTRA_SIZE 18
+typedef struct {
+  int16_t rotation_cdeg;
+  int16_t x[4], y[4];
+} mxp_corners_extra_t;
+/* Writes r->extra and sets r->extra_len = 18; other record fields are untouched. */
+void mxp_pack_corners_extra(const mxp_corners_extra_t *e, mxp_result_t *r);
+/* false when r->extra_len != 18. */
+bool mxp_unpack_corners_extra(const mxp_result_t *r, mxp_corners_extra_t *out);
+
+/* GET_RESULT_DATA (0x21) / GET_LEARNED_DATA (0x35): attached data such as QR content,
+ * at most 128 bytes; longer data is cut and flagged TRUNCATED, total_len is the full length. */
+#define MXP_RESULT_DATA_MAX 128
+#define MXP_DATA_FLAG_TRUNCATED 0x01
+typedef struct {
+  uint32_t frame_id;
+  uint8_t index, flags;
+  uint16_t total_len;
+  uint8_t len;
+  uint8_t data[MXP_RESULT_DATA_MAX];
+} mxp_result_data_t;
+typedef struct {
+  uint8_t function_id;
+  uint16_t id;
+  uint8_t flags;
+  uint16_t total_len;
+  uint8_t len;
+  uint8_t data[MXP_RESULT_DATA_MAX];
+} mxp_learned_data_t;
+/* GET_RESULT_DATA request: index u8 (len must be 1). */
+bool mxp_unpack_get_result_data(const uint8_t *p, uint16_t len, uint8_t *index);
+/* 0xA1 payload: frame_id u32, index u8, flags u8, total_len u16, len u8, data[len].
+ * pack returns 9 + len, or 0 when len > 128 or cap is too small. */
+size_t mxp_pack_result_data(const mxp_result_data_t *d, uint8_t *out, size_t cap);
+/* Requires len <= 128 and payload length == 9 + len. */
+bool mxp_unpack_result_data(const uint8_t *p, uint16_t len, mxp_result_data_t *out);
+/* GET_LEARNED_DATA request: function_id u8, id u16 (len must be 3). */
+bool mxp_unpack_get_learned_data(const uint8_t *p, uint16_t len, uint8_t *function_id, uint16_t *id);
+/* 0xB5 payload: function_id u8, id u16, flags u8, total_len u16, len u8, data[len].
+ * pack returns 7 + len, or 0 when len > 128 or cap is too small. */
+size_t mxp_pack_learned_data(const mxp_learned_data_t *d, uint8_t *out, size_t cap);
+/* Requires len <= 128 and payload length == 7 + len. */
+bool mxp_unpack_learned_data(const uint8_t *p, uint16_t len, mxp_learned_data_t *out);
 
 #ifdef __cplusplus
 }

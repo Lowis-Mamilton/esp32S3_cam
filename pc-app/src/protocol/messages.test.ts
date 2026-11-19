@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
-  Cmd, ErrorCode, FunctionId, Gesture, encodeConfig, encodeForget, encodeFuncConfig, encodeGetFuncConfig, encodeLearn,
-  encodeSetName, encodeStreamStart, parseConfig, parseError, parseFramePush, parseFuncConfig, parseInfo, parseLearned,
-  parseResults, responseOf,
+  Cmd, ErrorCode, FunctionId, Gesture, Shape, encodeConfig, encodeForget, encodeFuncConfig, encodeGetFuncConfig,
+  encodeGetLearnedData, encodeGetResultData, encodeLearn, encodeSetName, encodeStreamStart, parseConfig, parseError,
+  parseFramePush, parseFuncConfig, parseInfo, parseLearned, parseLearnedData, parseResultData, parseResults, responseOf,
 } from "./messages";
 import { frameVector, fromHex, payloadVectors as pv, toHex } from "./vectors";
 
@@ -354,5 +354,118 @@ describe("M6 groundwork", () => {
   it("parseResults rejects extra_len 19", () => {
     const p = new Uint8Array([1, 0, 0, 0, 9, 1, 1, 0, 10, 0, 20, 0, 4, 0, 4, 0, 50, 19, ...new Array(19).fill(0)]);
     expect(() => parseResults(p)).toThrow();
+  });
+});
+
+describe("M7: QR, shapes and motion", () => {
+  it("command and function ids", () => {
+    expect([Cmd.GetResultData, Cmd.GetLearnedData]).toEqual([0x21, 0x35]);
+    expect([responseOf(Cmd.GetResultData), responseOf(Cmd.GetLearnedData)]).toEqual([0xa1, 0xb5]);
+    expect([FunctionId.Qr, FunctionId.Shape, FunctionId.Motion]).toEqual([6, 11, 12]);
+  });
+
+  it("parseInfo reads m7 function ids", () => {
+    expect(parseInfo(fromHex(frameVector("get_info_response_m7").payload_hex)).functionIds).toEqual([1, 2, 3, 4, 5, 6, 8, 11, 12]);
+  });
+
+  it("shape and motion func config vectors round trip", () => {
+    expect(toHex(encodeGetFuncConfig(FunctionId.Shape))).toBe(frameVector("get_func_config_shape_request").payload_hex);
+    const s = pv.shape_config_default;
+    const shape = parseFuncConfig(fromHex(frameVector("func_config_shape_default").payload_hex));
+    expect(shape).toEqual({
+      functionId: 11, shape: { mode: s.mode, threshold: s.threshold, minSize: s.min_size, maxResults: s.max_results },
+    });
+    expect(toHex(encodeFuncConfig(shape))).toBe(frameVector("func_config_shape_default").payload_hex);
+
+    const motionDefault = parseFuncConfig(fromHex(frameVector("func_config_motion_default").payload_hex));
+    expect(motionDefault).toEqual({ functionId: 12, motion: { threshold: 25, minSize: 24, maxResults: 4 } });
+    expect(toHex(encodeFuncConfig(motionDefault))).toBe(frameVector("func_config_motion_default").payload_hex);
+
+    const m = pv.motion_config_set;
+    const motion = parseFuncConfig(fromHex(frameVector("set_func_config_motion_request").payload_hex));
+    expect(motion).toEqual({ functionId: 12, motion: { threshold: m.threshold, minSize: m.min_size, maxResults: m.max_results } });
+    expect(motion).toEqual({ functionId: 12, motion: { threshold: 15, minSize: 48, maxResults: 2 } });
+    expect(toHex(encodeFuncConfig(motion))).toBe(frameVector("set_func_config_motion_request").payload_hex);
+  });
+
+  it("encodeFuncConfig writes shape/motion reserved bytes as 0", () => {
+    expect(toHex(encodeFuncConfig({ functionId: 11, shape: { mode: 1, threshold: 90, minSize: 40, maxResults: 8 } })))
+      .toBe("0b01015a280800000000");
+    expect(toHex(encodeFuncConfig({ functionId: 12, motion: { threshold: 30, minSize: 16, maxResults: 3 } })))
+      .toBe("0c011e10030000000000");
+  });
+
+  it("parseFuncConfig rejects wrong shape/motion version and length", () => {
+    for (const name of ["func_config_shape_default", "func_config_motion_default"]) {
+      const p = fromHex(frameVector(name).payload_hex);
+      expect(() => parseFuncConfig(p.slice(0, 9))).toThrow();
+      expect(() => parseFuncConfig(new Uint8Array([...p, 0]))).toThrow();
+      const v2 = p.slice(); v2[1] = 2;
+      expect(() => parseFuncConfig(v2)).toThrow(/layout_version/);
+      const v0 = p.slice(); v0[1] = 0;
+      expect(() => parseFuncConfig(v0)).toThrow(/layout_version/);
+    }
+    const qr = fromHex(frameVector("func_config_shape_default").payload_hex);
+    qr[0] = FunctionId.Qr;
+    expect(() => parseFuncConfig(qr)).toThrow();
+  });
+
+  it("parseResults decodes qr corners", () => {
+    const r = parseResults(fromHex(frameVector("results_qr_two").payload_hex));
+    const e = pv.results_qr_two;
+    expect(r.frameId).toBe(300);
+    expect(r.functionId).toBe(FunctionId.Qr);
+    expect(r.results.map((x) => [x.id, x.x, x.y, x.width, x.height, x.confidence])).toEqual(
+      e.results.map((x) => [x.id, x.x, x.y, x.width, x.height, undefined]));
+    expect(r.results[0].extra).toEqual({ rotationDeg: 0, corners: e.results[0].corners_extra?.corners });
+    expect(r.results[0].extra?.corners[1]).toEqual([160, 60]);
+    expect(r.results[1].extra).toEqual({ rotationDeg: -90, corners: [[220, 200], [220, 160], [260, 160], [260, 200]] });
+    for (const x of r.results) expect(x.line).toBeUndefined();
+  });
+
+  it("result data vectors", () => {
+    const hello = parseResultData(fromHex(frameVector("result_data_hello").payload_hex));
+    const h = pv.result_data_hello;
+    expect(hello).toEqual({ frameId: h.frame_id, index: h.index, truncated: false, totalLength: h.total_len, data: fromHex(h.data_hex) });
+    expect(new TextDecoder().decode(hello.data)).toBe("HELLO");
+
+    const t = parseResultData(fromHex(frameVector("result_data_truncated").payload_hex));
+    expect(t.frameId).toBe(301);
+    expect(t.index).toBe(1);
+    expect(t.truncated).toBe(true);
+    expect(t.totalLength).toBe(300);
+    expect(t.data.length).toBe(128);
+    expect(t.data[127]).toBe(127);
+
+    const p = fromHex(frameVector("result_data_hello").payload_hex);
+    expect(() => parseResultData(p.slice(0, p.length - 1))).toThrow();
+    expect(() => parseResultData(new Uint8Array([...p, 0]))).toThrow();
+    expect(() => parseResultData(p.slice(0, 8))).toThrow();
+    const big = new Uint8Array(9 + 129); big[8] = 129;
+    expect(() => parseResultData(big)).toThrow();
+  });
+
+  it("learned data vector", () => {
+    const d = parseLearnedData(fromHex(frameVector("learned_data_qr").payload_hex));
+    const l = pv.learned_data_qr;
+    expect(d).toEqual({ functionId: l.function_id, id: l.id, truncated: false, totalLength: l.total_len, data: fromHex(l.data_hex) });
+    expect(new TextDecoder().decode(d.data)).toBe("LEFT");
+    const p = fromHex(frameVector("learned_data_qr").payload_hex);
+    expect(() => parseLearnedData(p.slice(0, p.length - 1))).toThrow();
+    expect(() => parseLearnedData(new Uint8Array([...p, 0]))).toThrow();
+    expect(() => parseLearnedData(p.slice(0, 6))).toThrow();
+  });
+
+  it("encodeGetResultData and encodeGetLearnedData equal the vectors", () => {
+    expect(frameVector("get_result_data_request").cmd).toBe(Cmd.GetResultData);
+    expect(toHex(encodeGetResultData(0))).toBe(frameVector("get_result_data_request").payload_hex);
+    expect(frameVector("get_learned_data_request").cmd).toBe(Cmd.GetLearnedData);
+    expect(toHex(encodeGetLearnedData(FunctionId.Qr, 2))).toBe(frameVector("get_learned_data_request").payload_hex);
+    expect(frameVector("result_data_hello").cmd).toBe(responseOf(Cmd.GetResultData));
+    expect(frameVector("learned_data_qr").cmd).toBe(responseOf(Cmd.GetLearnedData));
+  });
+
+  it("Shape ids match the protocol table", () => {
+    expect(Shape).toEqual({ Circle: 1, Triangle: 2, Square: 3, Rect: 4 });
   });
 });

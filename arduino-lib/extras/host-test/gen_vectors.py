@@ -24,13 +24,13 @@ LINE_I16 = ("angle_cdeg", "offset_x", "x0", "y0", "x1", "y1")
 def emit_payloads(v, o):
     """Typed C constants for the decoded expectations. Needs mxcam_proto.h included first."""
     pl = v["payloads"]
-    for name in ("results_color_two", "results_tag_one", "results_line_one", "results_gesture_two"):
+    for name in ("results_color_two", "results_tag_one", "results_line_one", "results_gesture_two", "results_qr_two"):
         p = pl[name]
         recs = []
         for r in p["results"]:
             extra = []
-            if "extra" in r:
-                e = r["extra"]
+            e = r.get("extra") or r.get("corners_extra")  # AprilTag / QR corners extra (18 bytes)
+            if e:
                 vals = [e["rotation_cdeg"]] + [n for c in e["corners"] for n in c]
                 for n in vals:
                     n &= 0xFFFF
@@ -72,6 +72,22 @@ def emit_payloads(v, o):
     n = pl["set_name_utf8"]
     o.append("static const mxp_set_name_t VEC_P_SET_NAME_UTF8 = {%d, %d, %d, %s};" % (
         n["function_id"], n["id"], len(n["name"].encode("utf-8")), cstr(n["name"])))
+    sc = pl["shape_config_default"]
+    o.append("static const mxp_shape_config_t VEC_P_SHAPE_CONFIG_DEFAULT = {%d, %d, %d, %d};" % (
+        sc["mode"], sc["threshold"], sc["min_size"], sc["max_results"]))
+    mc = pl["motion_config_set"]
+    o.append("static const mxp_motion_config_t VEC_P_MOTION_CONFIG_SET = {%d, %d, %d};" % (
+        mc["threshold"], mc["min_size"], mc["max_results"]))
+    for name in ("result_data_hello", "result_data_truncated"):
+        d = pl[name]
+        data = bytes.fromhex(d["data_hex"])
+        o.append("static const mxp_result_data_t VEC_P_%s = {%du, %d, %d, %d, %d, {%s}};" % (
+            name.upper(), d["frame_id"], d["index"], d["flags"], d["total_len"], len(data),
+            ", ".join(str(b) for b in data) or "0"))
+    d = pl["learned_data_qr"]
+    data = bytes.fromhex(d["data_hex"])
+    o.append("static const mxp_learned_data_t VEC_P_LEARNED_DATA_QR = {%d, %d, %d, %d, %d, {%s}};" % (
+        d["function_id"], d["id"], d["flags"], d["total_len"], len(data), ", ".join(str(b) for b in data) or "0"))
     items = pl["learned_list"]["items"]
     o.append("static const mxp_learned_t VEC_P_LEARNED_LIST[] = {")
     for it in items:
