@@ -3,6 +3,7 @@ import { beforeEach, expect, test, vi } from 'vitest'
 import { I18nProvider } from '../../i18n'
 import RightPanel from './RightPanel'
 import Sidebar from './Sidebar'
+import TopBar from './TopBar'
 import { defaultParams, defaultSystem, emptyLearned, type DeviceSnapshot } from '../../device/types'
 
 const idleSnapshot: DeviceSnapshot = {
@@ -42,6 +43,38 @@ test('sidebar greys out unsupported functions and does not select them', () => {
   expect(onSelect).not.toHaveBeenCalled()
   fireEvent.click(screen.getByRole('button', { name: '設定' }))
   expect(onSelect).toHaveBeenCalledWith({ kind: 'settings' })
+})
+
+test('sidebar: needConnect shows 請先連線 MXCam, and disabled items carry an aria-describedby description', () => {
+  render(
+    <I18nProvider>
+      <Sidebar view={{ kind: 'function', id: 1 }} supported={[]} needConnect onSelect={() => {}} />
+    </I18nProvider>,
+  )
+  const b = screen.getByRole('button', { name: '人臉' })
+  expect(b).toHaveAttribute('title', '請先連線 MXCam')
+  expect(b).toHaveAccessibleDescription('請先連線 MXCam')
+  expect(screen.queryByText('需要更新韌體')).toBeNull()
+})
+
+test('sidebar: connected but unsupported describes needFirmware', () => {
+  render(
+    <I18nProvider>
+      <Sidebar view={{ kind: 'function', id: 1 }} supported={[1]} onSelect={() => {}} />
+    </I18nProvider>,
+  )
+  expect(screen.getByRole('button', { name: '人臉' })).toHaveAccessibleDescription('需要更新韌體')
+  expect(screen.getByRole('button', { name: '顏色' })).not.toHaveAttribute('aria-describedby')
+})
+
+test('language buttons carry their own lang attribute', () => {
+  render(
+    <I18nProvider>
+      <TopBar status="connected" lost={false} info={null} demo={false} onToggleDemo={() => {}} onConnect={() => {}} onDisconnect={() => {}} />
+    </I18nProvider>,
+  )
+  expect(screen.getByRole('button', { name: '繁中' })).toHaveAttribute('lang', 'zh-Hant')
+  expect(screen.getByRole('button', { name: 'English' })).toHaveAttribute('lang', 'en')
 })
 
 test('nav landmark is named as general navigation in both languages', () => {

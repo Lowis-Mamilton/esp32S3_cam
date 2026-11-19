@@ -41,6 +41,12 @@ function FirmwareHarness({ device }: { device: Device }) {
 function PanelHarness({ device, fn }: { device: Device; fn: FunctionId }) {
   return <RightPanel device={device} snapshot={useSnap(device)} fn={fn} results={[]} />
 }
+/** A RealDevice that reports a live connection (the firmware has no system/config commands yet). */
+function connectedReal(supported: FunctionId[] = []) {
+  const r = new RealDevice(undefined)
+  vi.spyOn(r, 'snapshot').mockReturnValue({ ...r.snapshot(), status: 'connected', supported })
+  return r
+}
 function mount(ui: (d: Device) => React.ReactElement, device: Device = new DemoDevice(() => 0)) {
   devices.push(device)
   render(<I18nProvider>{ui(device)}</I18nProvider>)
@@ -130,12 +136,12 @@ test('I2C invalid on blur keeps error and draft; Escape reverts', () => {
 })
 
 test('real device: I2C commit shows 需要更新韌體 and disables the field', async () => {
-  mount((x) => <SettingsHarness device={x} />, new RealDevice(undefined))
+  mount((x) => <SettingsHarness device={x} />, connectedReal())
   type('30')
   fireEvent.keyDown(i2c(), { key: 'Enter' })
   expect(await screen.findByText('需要更新韌體')).toBeInTheDocument()
   expect(i2c()).toBeDisabled()
-  expect(i2c()).toHaveValue('5A')
+  expect(i2c()).toHaveValue('—')
 })
 
 test('LED slider debounces and flushes on unmount', async () => {
@@ -181,7 +187,7 @@ test('factory reset needs inline confirmation, focus goes to cancel', async () =
 })
 
 test('real device: change shows 需要更新韌體 and disables controls', async () => {
-  mount((x) => <SettingsHarness device={x} />, new RealDevice(undefined))
+  mount((x) => <SettingsHarness device={x} />, connectedReal())
   fireEvent.click(screen.getByRole('radio', { name: '9600' }))
   expect(await screen.findByText('需要更新韌體')).toBeInTheDocument()
   expect(screen.getByRole('radio', { name: '9600' })).toBeDisabled()
@@ -284,13 +290,41 @@ test.each(['{not json', '{"version":2}', JSON.stringify({ version: 1, learned: {
   },
 )
 
-test('real device: export works, import says 需要更新韌體', async () => {
-  const real = mount((x) => <PanelHarness device={x} fn={1} />, new RealDevice(undefined))
+test('real device, disconnected: export and import are disabled with 請先連線 MXCam, not the firmware hint', () => {
+  mount((x) => <PanelHarness device={x} fn={1} />, new RealDevice(undefined))
   openParams()
-  expect(screen.getByRole('button', { name: '匯出' })).toBeEnabled()
-  upload(real.exportConfig())
+  expect(screen.getByRole('button', { name: '匯出' })).toBeDisabled()
+  expect(screen.getByRole('button', { name: '匯入' })).toBeDisabled()
+  expect(screen.getAllByText('請先連線 MXCam').length).toBeGreaterThan(0)
+  expect(screen.queryByText('需要更新韌體')).toBeNull()
+})
+
+test('real device exportConfig throws NotSupportedError until the protocol has config', () => {
+  const r = new RealDevice(undefined)
+  devices.push(r)
+  expect(() => r.exportConfig()).toThrow(expect.objectContaining({ name: 'NotSupportedError' }))
+})
+
+test('real device, connected: export shows 需要更新韌體 and never downloads made-up defaults', async () => {
+  const create = vi.fn()
+  Object.defineProperty(URL, 'createObjectURL', { value: create, configurable: true })
+  mount((x) => <PanelHarness device={x} fn={1} />, connectedReal([1]))
+  openParams()
+  fireEvent.click(screen.getByRole('button', { name: '匯出' }))
   expect((await screen.findAllByText('需要更新韌體')).length).toBeGreaterThan(0)
-  expect(screen.queryByText(/設定檔格式不正確/)).toBeNull()
+  expect(create).not.toHaveBeenCalled()
+  delete (URL as unknown as Record<string, unknown>).createObjectURL
+})
+
+test('real device settings show — instead of default system values and 請先連線 when disconnected', () => {
+  mount((x) => <SettingsHarness device={x} />, new RealDevice(undefined))
+  expect(screen.getByText('請先連線 MXCam')).toBeInTheDocument()
+  expect(screen.queryByText('需要更新韌體')).toBeNull()
+  expect(screen.getByRole('textbox')).toHaveValue('—')
+  expect(screen.getByRole('radio', { name: '115200' })).not.toBeChecked()
+  expect(screen.getByRole('radio', { name: '115200' })).toBeDisabled()
+  expect(screen.getByRole('slider', { name: '亮度' })).toBeDisabled()
+  expect(screen.getByText('—', { selector: 'output' })).toBeInTheDocument()
 })
 
 test('importing the same file twice works both times', async () => {

@@ -221,8 +221,20 @@ test('code tab copies the snippet and confirms; works without clipboard', async 
   fireEvent.click(screen.getByRole('button', { name: '複製' }))
 })
 
-test('real device without the function: controls are disabled with a firmware hint, nothing throws', () => {
+test('real device, disconnected: hints say 請先連線 MXCam (not the firmware hint) and controls are disabled', () => {
+  setup(1, [], new RealDevice(undefined))
+  tab('學習')
+  expect(screen.getAllByText('請先連線 MXCam').length).toBeGreaterThan(0)
+  expect(screen.queryByText('需要更新韌體')).toBeNull()
+  expect(screen.getByRole('button', { name: '全部忘記' })).toBeDisabled()
+  tab('參數')
+  expect(screen.getByRole('slider', { name: '容許範圍' })).toBeDisabled()
+  expect(save()).toBeDisabled()
+})
+
+test('real device, connected without the function: controls are disabled with a firmware hint, nothing throws', () => {
   const real = new RealDevice(undefined)
+  vi.spyOn(real, 'snapshot').mockReturnValue({ ...real.snapshot(), status: 'connected', supported: [] })
   setup(1, [], real)
   tab('學習')
   expect(screen.getAllByText('需要更新韌體').length).toBeGreaterThan(0)
@@ -241,6 +253,23 @@ test('NotSupportedError from the device is caught and shown as a firmware hint',
 })
 
 // ---- review fixes ----
+
+test('SaveBar keeps its DOM node when dirty changes, and a failed save error clears when dirty changes', async () => {
+  const { device, container } = setup()
+  await act(async () => {
+    await device.learnColor(FULL)
+  })
+  const bar = container.querySelector('.rp-savebar')!
+  vi.spyOn(device, 'save').mockRejectedValueOnce(new Error('disk full'))
+  fireEvent.click(save())
+  expect(await screen.findByText('disk full')).toBeInTheDocument()
+  await act(async () => {
+    await device.factoryReset() // dirty true -> false
+  })
+  expect(screen.queryByText('disk full')).toBeNull()
+  expect(container.querySelector('.rp-savebar')).toBe(bar)
+})
+
 
 test('a slider change is flushed when the tab is left within the debounce window', async () => {
   const { device } = setup()

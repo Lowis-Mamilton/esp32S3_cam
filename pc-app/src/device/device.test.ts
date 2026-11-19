@@ -77,6 +77,21 @@ test('DemoDevice emits canvas frames every 100 ms and stops after dispose', () =
   expect(frames).toHaveLength(3)
 })
 
+test('DemoDevice: setting params or system to the current value does not make the config dirty', async () => {
+  const d = new DemoDevice(() => 0)
+  const notified = vi.fn()
+  d.subscribe(notified)
+  await d.setParams({ color: { ...d.snapshot().params.color } })
+  await d.setParams({})
+  await d.setSystem({ ledBrightness: d.snapshot().system.ledBrightness })
+  await d.setSystem({})
+  expect(d.snapshot().dirty).toBe(false)
+  expect(notified).not.toHaveBeenCalled()
+  await d.setSystem({ ledBrightness: 10 })
+  expect(d.snapshot().dirty).toBe(true)
+  d.dispose()
+})
+
 test('DemoDevice dirty flag: edits set it, save and factoryReset clear it', async () => {
   const d = new DemoDevice(() => 0)
   const notified = vi.fn()
@@ -127,7 +142,7 @@ test('RealDevice with empty functionIds supports nothing and rejects mutations',
   await expect(d.learnColor({ x: 0, y: 0, width: 1, height: 1 })).rejects.toBeInstanceOf(NotSupportedError)
   await expect(d.setParams({})).rejects.toBeInstanceOf(NotSupportedError)
   await expect(d.save()).rejects.toBeInstanceOf(NotSupportedError)
-  expect(JSON.parse(d.exportConfig()).version).toBe(1)
+  expect(() => d.exportConfig()).toThrow(NotSupportedError)
   d.dispose()
 })
 

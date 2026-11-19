@@ -44,18 +44,18 @@ export default function TopBar({ status, lost, info, demo, onToggleDemo, onConne
         type="button"
         role="switch"
         aria-checked={demo}
-        className="switch"
+        className="tb-switch"
         data-slot="demo-toggle"
         onClick={() => onToggleDemo(!demo)}
       >
-        <span className="switch-track" aria-hidden="true" />
+        <span className="tb-switch-track" aria-hidden="true" />
         {t('demoMode')}
       </button>
-      <div className="seg" role="group" aria-label={t('language')}>
-        <button type="button" aria-pressed={lang === 'zh-TW'} onClick={() => setLang('zh-TW')}>
+      <div className="tb-seg" role="group" aria-label={t('language')}>
+        <button type="button" lang="zh-Hant" aria-pressed={lang === 'zh-TW'} onClick={() => setLang('zh-TW')}>
           繁中
         </button>
-        <button type="button" aria-pressed={lang === 'en'} onClick={() => setLang('en')}>
+        <button type="button" lang="en" aria-pressed={lang === 'en'} onClick={() => setLang('en')}>
           English
         </button>
       </div>

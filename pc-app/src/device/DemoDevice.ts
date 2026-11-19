@@ -148,15 +148,19 @@ export class DemoDevice implements Device {
     this.touch()
   }
   async setParams(p: Partial<FunctionParams>) {
-    this.params = {
+    const next = {
       color: { ...this.params.color, ...p.color },
       tag: { ...this.params.tag, ...p.tag },
       face: { ...this.params.face, ...p.face },
     }
+    if (JSON.stringify(next) === JSON.stringify(this.params)) return // nothing changed: stay clean
+    this.params = next
     this.touch()
   }
   async setSystem(c: Partial<SystemConfig>) {
-    this.system = { ...this.system, ...c }
+    const next = { ...this.system, ...c }
+    if (JSON.stringify(next) === JSON.stringify(this.system)) return
+    this.system = next
     this.touch()
   }
   async save() {

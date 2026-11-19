@@ -1,5 +1,6 @@
+import { X } from 'lucide-react'
 import { useCallback, useEffect, useRef, useState } from 'react'
-import type { Device, FunctionId, Result } from './device/types'
+import { needsConnection, type Device, type FunctionId, type Result } from './device/types'
 import { useDevice } from './device/useDevice'
 import { describeError, type ErrorText } from './i18n/core'
 import { useT } from './i18n'
@@ -29,11 +30,21 @@ export default function App({ serial }: Props) {
   const { device, snapshot, demo, setDemo } = useDevice(resolved)
   const { status, lost, info, supported } = snapshot
   // Errors and stats belong to one device instance; ignore them once it is replaced.
-  const [errorOf, setErrorOf] = useState<{ device: Device; error: ErrorText } | null>(null)
-  const [statsOf, setStatsOf] = useState<{ device: Device; fps: number; kbps: number } | null>(null)
+  const [errorOf, setErrorOf] = useState<{
+    device: Device
+    error: ErrorText
+  } | null>(null)
+  const [statsOf, setStatsOf] = useState<{
+    device: Device
+    fps: number
+    kbps: number
+  } | null>(null)
   const error = errorOf && errorOf.device === device ? errorOf.error : null
   const stats = statsOf && statsOf.device === device ? statsOf : { fps: 0, kbps: 0 }
-  const [resultsOf, setResultsOf] = useState<{ device: Device; results: Result[] } | null>(null)
+  const [resultsOf, setResultsOf] = useState<{
+    device: Device
+    results: Result[]
+  } | null>(null)
   const results = resultsOf && resultsOf.device === device ? resultsOf.results : []
   const liveRef = useRef<LiveStageHandle>(null)
   const userClosed = useRef(false)
@@ -47,6 +58,14 @@ export default function App({ serial }: Props) {
     ]
     return () => offs.forEach((off) => off())
   }, [device])
+
+  // The device must be told which function is active: it does not know what the user is looking at.
+  // Real devices without the command reject with NotSupportedError, which is expected for now.
+  const connected = status === 'connected'
+  useEffect(() => {
+    if (!device || !connected) return
+    device.setFunction(lastFn).catch(() => {})
+  }, [device, connected, lastFn])
 
   const onConnect = () => {
     if (!device) return
@@ -65,9 +84,9 @@ export default function App({ serial }: Props) {
   return (
     <div className="app">
       <TopBar status={status} lost={lost} info={info ?? null} demo={demo} onToggleDemo={setDemo} onConnect={onConnect} onDisconnect={onDisconnect} />
-      <div className="columns">
-        {error && (
-          <p role="alert" className="alert">
+      {error && (
+        <p role="alert" className="app-alert">
+          <span>
             {t('error')}: {t(error.key)}
             {error.detail && (
               <>
@@ -75,12 +94,17 @@ export default function App({ serial }: Props) {
                 <small>{error.detail}</small>
               </>
             )}
-          </p>
-        )}
-        <Sidebar view={view} supported={supported} onSelect={select} />
-        <main className="center">
+          </span>
+          <button type="button" className="app-alert-close" aria-label={t('dismiss')} onClick={() => setErrorOf(null)}>
+            <X size={16} aria-hidden="true" />
+          </button>
+        </p>
+      )}
+      <div className="app-columns">
+        <Sidebar view={view} supported={supported} needConnect={needsConnection(snapshot)} onSelect={select} />
+        <main className="app-center">
           {status === 'unsupported' ? (
-            <p className="notice">{t('unsupported')}</p>
+            <p className="app-notice">{t('unsupported')}</p>
           ) : view.kind === 'function' ? (
             <LiveStage
               ref={liveRef}
@@ -94,12 +118,10 @@ export default function App({ serial }: Props) {
               learned={snapshot.learned[view.id]}
               showNames={view.id === 3 ? false : snapshot.params[view.id === 1 ? 'color' : 'tag'].showNames}
             />
+          ) : view.kind === 'settings' ? (
+            <SettingsPage device={device} snapshot={snapshot} />
           ) : (
-            view.kind === 'settings' ? (
-              <SettingsPage device={device} snapshot={snapshot} />
-            ) : (
-              <FirmwarePage snapshot={snapshot} />
-            )
+            <FirmwarePage snapshot={snapshot} />
           )}
         </main>
         <RightPanel device={device} snapshot={snapshot} fn={lastFn} results={results} />

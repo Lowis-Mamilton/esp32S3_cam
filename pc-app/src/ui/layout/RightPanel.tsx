@@ -1,5 +1,5 @@
 import { useId, useRef, useState, type KeyboardEvent } from 'react'
-import type { Device, DeviceSnapshot, Result } from '../../device/types'
+import { needsConnection, type Device, type DeviceSnapshot, type Result } from '../../device/types'
 import { useT, type MessageKey } from '../../i18n'
 import CodeTab from '../panel/CodeTab'
 import { useGuard } from '../panel/guard'
@@ -26,7 +26,8 @@ interface Props {
 export default function RightPanel({ device, snapshot, fn, results }: Props) {
   const { t } = useT()
   const guard = useGuard(device)
-  const blocked = !device || !snapshot.supported.includes(fn) || guard.needFirmware
+  const needConnect = needsConnection(snapshot)
+  const blocked = !device || needConnect || !snapshot.supported.includes(fn) || guard.needFirmware
   const [tab, setTab] = useState<PanelTab>('results')
   const base = useId()
   const refs = useRef<Record<PanelTab, HTMLButtonElement | null>>({ results: null, learn: null, params: null, code: null })
@@ -49,7 +50,7 @@ export default function RightPanel({ device, snapshot, fn, results }: Props) {
   }
   return (
     <aside className="rightpanel">
-      <div role="tablist" className="tabs">
+      <div role="tablist" className="rp-tabs">
         {TABS.map(({ id, key }, i) => (
           <button
             key={id}
@@ -69,8 +70,8 @@ export default function RightPanel({ device, snapshot, fn, results }: Props) {
           </button>
         ))}
       </div>
-      <div role="tabpanel" id={`${base}-panel`} aria-labelledby={`${base}-${tab}`} className="tabpanel">
-        {tab !== 'results' && tab !== 'code' && blocked && <p className="rp-hint rp-firmware">{t('needFirmware')}</p>}
+      <div role="tabpanel" id={`${base}-panel`} aria-labelledby={`${base}-${tab}`} className="rp-tabpanel">
+        {tab !== 'results' && tab !== 'code' && blocked && <p className="rp-hint rp-firmware">{t(needConnect ? 'needConnect' : 'needFirmware')}</p>}
         {guard.error && (
           <p role="alert" className="rp-error">
             {t('opFailed')} <small>{guard.error}</small>
@@ -81,7 +82,7 @@ export default function RightPanel({ device, snapshot, fn, results }: Props) {
         {tab === 'params' && <ParamsTab device={device} fn={fn} params={snapshot.params} disabled={blocked} guard={guard} />}
         {tab === 'code' && <CodeTab fn={fn} />}
       </div>
-      <SaveBar key={String(snapshot.dirty)} device={device} dirty={snapshot.dirty} disabled={!snapshot.supported.includes(fn)} />
+      <SaveBar device={device} dirty={snapshot.dirty} disabled={needConnect || !snapshot.supported.includes(fn)} />
     </aside>
   )
 }

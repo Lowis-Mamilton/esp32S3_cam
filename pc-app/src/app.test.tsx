@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from '@testing-library/react'
+import { fireEvent, render, screen, within } from '@testing-library/react'
 import { Decoder, encodeFrame } from './protocol/codec'
 import { Cmd, responseOf } from './protocol/messages'
 import { beforeEach, expect, test } from 'vitest'
@@ -256,9 +256,98 @@ test('live-stage overlay classes are namespaced and do not collide with the righ
   await screen.findByText('DEMO')
   const tablist = screen.getByRole('tablist')
   expect(tablist.closest('.stage')).toBeNull()
-  expect(tablist.className).toBe('tabs')
+  expect(tablist.className).toBe('rp-tabs')
   const stage = container.querySelector('.stage')!
-  expect(stage.querySelector('.tabs, .tab, .box, .boxes, .overlay, .crosshair, .toast')).toBeNull()
+  expect(stage.querySelector('.rp-tabs, .tabs, .tab, .box, .boxes, .overlay, .crosshair, .toast')).toBeNull()
   expect(stage.querySelector('.ls-overlay')).not.toBeNull()
   expect(stage.querySelector('.ls-labels')).not.toBeNull()
+})
+
+// ---- fix wave ----
+
+test('demo: choosing 人臉 makes faces recognised (the device is told the active function)', async () => {
+  localStorage.setItem('mxcam.demo', '1')
+  renderApp({ serial: idleSerial })
+  await screen.findByText('DEMO')
+  fireEvent.click(screen.getByRole('button', { name: '人臉' }))
+  expect((await screen.findAllByText(/人臉 \d+%/)).length).toBeGreaterThan(0)
+  expect((await screen.findAllByText(/^\d+%$/)).length).toBeGreaterThan(0)
+})
+
+test('demo: choosing AprilTag makes Tag 3 appear', async () => {
+  localStorage.setItem('mxcam.demo', '1')
+  renderApp({ serial: idleSerial })
+  await screen.findByText('DEMO')
+  fireEvent.click(screen.getByRole('button', { name: 'AprilTag' }))
+  expect((await screen.findAllByText('Tag 3')).length).toBeGreaterThan(0)
+})
+
+test('real mode while disconnected says 請先連線 MXCam, never 需要更新韌體', () => {
+  renderApp({ serial: idleSerial })
+  expect(screen.getByRole('button', { name: '人臉' })).toHaveAttribute('title', '請先連線 MXCam')
+  fireEvent.click(screen.getByRole('tab', { name: '學習' }))
+  expect(screen.getAllByText('請先連線 MXCam').length).toBeGreaterThan(0)
+  fireEvent.click(screen.getByRole('button', { name: '設定' }))
+  expect(screen.getAllByText('請先連線 MXCam').length).toBeGreaterThan(0)
+  expect(screen.queryByText('需要更新韌體')).toBeNull()
+  expect(screen.getByRole('slider', { name: '亮度' })).toBeDisabled()
+})
+
+test('connect-error alert is in normal flow above the columns, can be closed, and never covers the tab bar', async () => {
+  const port = {
+    getInfo: () => ({ usbVendorId: 0x303a, usbProductId: 0x1001 }),
+    open: async () => {
+      throw new DOMException('Failed to open serial port.', 'NetworkError')
+    },
+    close: async () => {},
+  }
+  const serial = { ...idleSerial, requestPort: async () => port } as unknown as Serial
+  const { container } = renderApp({ serial })
+  fireEvent.click(screen.getByRole('button', { name: '連線' }))
+  const alert = await screen.findByRole('alert')
+  const columns = container.querySelector('.app-columns')!
+  expect(alert.className).toBe('app-alert')
+  expect(columns.contains(alert)).toBe(false)
+  expect(alert.nextElementSibling).toBe(columns)
+  expect(alert.contains(screen.getByRole('tablist'))).toBe(false)
+  fireEvent.click(within(alert).getByRole('button', { name: '關閉' }))
+  expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+})
+
+function visibleCjk(root: HTMLElement): string[] {
+  const found: string[] = []
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT)
+  for (let n = walker.nextNode(); n; n = walker.nextNode()) {
+    const el = n.parentElement
+    if (el?.closest('[lang="zh-Hant"]')) continue
+    if (/[一-鿿]/.test(n.textContent ?? '')) found.push(`text:${n.textContent}`)
+  }
+  for (const el of root.querySelectorAll('[aria-label],[title],[placeholder]')) {
+    if (el.closest('[lang="zh-Hant"]')) continue
+    for (const a of ['aria-label', 'title', 'placeholder']) {
+      const v = el.getAttribute(a)
+      if (v && /[一-鿿]/.test(v)) found.push(`${a}:${v}`)
+    }
+  }
+  return found
+}
+
+test('English demo mode leaks no CJK text or attributes on any tab of any view', async () => {
+  localStorage.setItem('mxcam.lang', 'en')
+  localStorage.setItem('mxcam.demo', '1')
+  const { container } = renderApp({ serial: idleSerial })
+  await screen.findByText('DEMO')
+  const leaks: string[] = []
+  for (const fn of ['Color', 'AprilTag', 'Face']) {
+    fireEvent.click(screen.getByRole('button', { name: fn }))
+    for (const tabName of ['Results', 'Learn', 'Params', 'Code']) {
+      fireEvent.click(screen.getByRole('tab', { name: tabName }))
+      leaks.push(...visibleCjk(container).map((x) => `${fn}/${tabName}/${x}`))
+    }
+  }
+  for (const page of ['Settings', 'Firmware']) {
+    fireEvent.click(screen.getByRole('button', { name: page }))
+    leaks.push(...visibleCjk(container).map((x) => `${page}/${x}`))
+  }
+  expect(leaks).toEqual([])
 })

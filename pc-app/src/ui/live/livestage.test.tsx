@@ -15,6 +15,7 @@ function stubRect(w: number, h: number) {
 }
 
 interface Over {
+  connected?: boolean
   fn?: 1 | 2 | 3
   canLearn?: boolean
   onLearn?: (r: { x: number; y: number; width: number; height: number }) => Promise<number>
@@ -30,7 +31,7 @@ function setup(o: Over = {}) {
     <I18nProvider>
       <LiveStage
         ref={ref}
-        connected
+        connected={o.connected ?? true}
         fps={o.fps ?? 0}
         kbps={o.kbps === undefined ? 0 : o.kbps}
         fn={o.fn ?? 1}
@@ -162,6 +163,13 @@ test('crosshair is shown even when learning is unavailable (real device)', () =>
   const ch = container.querySelector<HTMLElement>('.ls-crosshair')!
   expect(ch.style.left).toBe('320px')
   expect(ch.style.top).toBe('240px')
+})
+
+test('no crosshair over the placeholder while there is no frame (not connected)', () => {
+  stubRect(640, 480)
+  const { container } = setup({ connected: false })
+  expect(container.querySelector('.ls-crosshair')).toBeNull()
+  expect(screen.getByText('連線後會在這裡顯示即時畫面')).toBeInTheDocument()
 })
 
 test('tabs render in a layer after all boxes so no box covers a tab', () => {

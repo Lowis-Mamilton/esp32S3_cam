@@ -29,6 +29,8 @@ export const zhTW = {
   navSettings: '設定',
   navFirmware: '韌體',
   needFirmware: '需要更新韌體',
+  needConnect: '請先連線 MXCam',
+  dismiss: '關閉',
   tabResults: '結果',
   tabLearn: '學習',
   tabParams: '參數',

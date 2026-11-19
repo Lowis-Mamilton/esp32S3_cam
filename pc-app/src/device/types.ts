@@ -7,6 +7,7 @@ export type { ConnectionStatus, DeviceInfo, FunctionId }
 export interface Result {
   id: number // 0 = not learned
   kind: 'color' | 'tag' | 'face'
+  /** Box centre in 320x240 frame coordinates (not the top-left corner). */
   x: number
   y: number
   width: number
@@ -41,6 +42,9 @@ export interface DeviceSnapshot {
   /** Real mode: the last disconnect was not requested by the user. */
   lost: boolean
 }
+/** Real mode and not connected: nothing can be configured yet; the hint is "connect first". */
+export const needsConnection = (s: DeviceSnapshot): boolean => s.mode === 'real' && s.status !== 'connected'
+
 export type FrameSource =
   | { kind: 'jpeg'; jpeg: Uint8Array }
   | { kind: 'canvas'; draw(ctx: CanvasRenderingContext2D): void }

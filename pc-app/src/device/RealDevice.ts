@@ -129,9 +129,9 @@ export class RealDevice implements Device {
   importConfig(): Promise<void> {
     return this.unsupported()
   }
+  /** The firmware has no config commands yet; exporting the local defaults would be made-up data. */
   exportConfig(): string {
-    const s = this.snapshot()
-    return JSON.stringify({ version: 1, learned: s.learned, params: s.params, system: s.system })
+    throw new NotSupportedError()
   }
 
   dispose() {

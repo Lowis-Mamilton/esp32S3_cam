@@ -9,6 +9,8 @@ const DEBOUNCE_MS = 150
 interface SliderProps {
   label: string
   value: number
+  /** Replaces the number next to the label (e.g. a dash when the value is unknown). */
+  valueText?: string
   min: number
   max: number
   step?: number
@@ -17,7 +19,7 @@ interface SliderProps {
 }
 
 /** Shows the value live while dragging; sends it to the device once the user pauses. */
-export function Slider({ label, value, min, max, step = 1, disabled, onCommit }: SliderProps) {
+export function Slider({ label, value, valueText, min, max, step = 1, disabled, onCommit }: SliderProps) {
   const [draft, setDraft] = useState<number | null>(null)
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const pending = useRef<{ v: number; commit: SliderProps['onCommit'] } | null>(null)
@@ -46,7 +48,7 @@ export function Slider({ label, value, min, max, step = 1, disabled, onCommit }:
     <div className="rp-slider">
       <div className="rp-slider-head">
         <span>{label}</span>
-        <output>{shown}</output>
+        <output>{draft === null && valueText ? valueText : shown}</output>
       </div>
       <input type="range" aria-label={label} min={min} max={max} step={step} value={shown} disabled={disabled} onChange={(e) => change(Number(e.target.value))} />
       <div className="rp-slider-range" aria-hidden="true">
@@ -88,15 +90,18 @@ function ConfigIO({ device, disabled, guard }: { device: Device | null; disabled
   const [state, setState] = useState<ImportState>(null)
   const exportFile = () => {
     if (!device) return
-    const url = URL.createObjectURL(new Blob([device.exportConfig()], { type: 'application/json' }))
-    const a = document.createElement('a')
-    a.href = url
-    a.download = 'mxcam-config.json'
-    document.body.appendChild(a)
-    a.click()
-    a.remove()
-    // Revoking at once can cancel the download in some browsers.
-    setTimeout(() => URL.revokeObjectURL(url), REVOKE_DELAY_MS)
+    // Goes through the guard: a device without config support throws NotSupportedError here.
+    void guard.run(async () => {
+      const url = URL.createObjectURL(new Blob([device.exportConfig()], { type: 'application/json' }))
+      const a = document.createElement('a')
+      a.href = url
+      a.download = 'mxcam-config.json'
+      document.body.appendChild(a)
+      a.click()
+      a.remove()
+      // Revoking at once can cancel the download in some browsers.
+      setTimeout(() => URL.revokeObjectURL(url), REVOKE_DELAY_MS)
+    })
   }
   const importFile = async (file: File) => {
     if (!device) return
@@ -119,10 +124,10 @@ function ConfigIO({ device, disabled, guard }: { device: Device | null; disabled
     }
   }
   return (
-    <div className="pg-config">
+    <div className="rp-config">
       <h3 className="rp-h">{t('cfgHeading')}</h3>
-      <div className="pg-actions">
-        <button type="button" className="btn" disabled={!device} onClick={exportFile}>
+      <div className="rp-actions">
+        <button type="button" className="btn" disabled={!device || disabled} onClick={exportFile}>
           {t('cfgExport')}
         </button>
         <button type="button" className="btn" disabled={disabled} onClick={() => input.current?.click()}>

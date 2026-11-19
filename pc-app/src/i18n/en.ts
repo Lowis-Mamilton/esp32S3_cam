@@ -31,6 +31,8 @@ export const en: Record<keyof typeof zhTW, string> = {
   navSettings: 'Settings',
   navFirmware: 'Firmware',
   needFirmware: 'Firmware update required',
+  needConnect: 'Connect MXCam first',
+  dismiss: 'Close',
   tabResults: 'Results',
   tabLearn: 'Learn',
   tabParams: 'Params',

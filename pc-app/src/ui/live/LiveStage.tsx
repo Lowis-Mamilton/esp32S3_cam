@@ -229,7 +229,7 @@ export default function LiveStage({ ref, connected, fps, kbps, fn, canLearn, onL
               )
             })}
           </div>
-          <div className="ls-crosshair" style={{ left: centre.px, top: centre.py }} />
+          {connected && <div className="ls-crosshair" style={{ left: centre.px, top: centre.py }} />}
           {dragBox && <div className="ls-drag" style={dragBox} />}
         </div>
         <div className="stage-stats">

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { isValidI2cAddress } from '../../device/config'
-import type { Device, DeviceSnapshot } from '../../device/types'
+import { needsConnection, type Device, type DeviceSnapshot } from '../../device/types'
 import { useT } from '../../i18n'
 import { useGuard } from '../panel/guard'
 import { Slider } from '../panel/ParamsTab'
@@ -10,6 +10,7 @@ interface Props {
   snapshot: DeviceSnapshot
 }
 
+const DASH = '—'
 const BAUDS = [115200, 9600] as const
 const HEX = /^[0-9a-f]{1,2}$/i
 
@@ -23,14 +24,17 @@ export default function SettingsPage({ device, snapshot }: Props) {
   const { t } = useT()
   const guard = useGuard(device)
   const { info, system } = snapshot
-  const disabled = !device || guard.needFirmware
+  const needConnect = needsConnection(snapshot)
+  // Real mode: the firmware has no system config yet, so the stored defaults are not the device's values.
+  const unknown = snapshot.mode === 'real'
+  const disabled = !device || needConnect || guard.needFirmware
   const set = (patch: Partial<typeof system>) => (device ? guard.run(() => device.setSystem(patch)) : undefined)
 
   // The address is only sent on Enter or blur: a half-typed value must never reach the bus.
   const [draft, setDraft] = useState<string | null>(null)
   const [rangeError, setRangeError] = useState(false)
   const shown = guard.needFirmware ? null : draft
-  const hex = shown ?? system.i2cAddress.toString(16).toUpperCase()
+  const hex = shown ?? (unknown ? DASH : system.i2cAddress.toString(16).toUpperCase())
   const commitHex = () => {
     if (shown === null) return
     const n = parseHex(shown.trim().replace(/^0x/i, ''))
@@ -67,7 +71,7 @@ export default function SettingsPage({ device, snapshot }: Props) {
   return (
     <section className="pg">
       <h2>{t('pageSettings')}</h2>
-      {guard.needFirmware && <p className="rp-hint rp-firmware">{t('needFirmware')}</p>}
+      {(needConnect || guard.needFirmware) && <p className="rp-hint rp-firmware">{t(needConnect ? 'needConnect' : 'needFirmware')}</p>}
       {guard.error && (
         <p role="alert" className="rp-error">
           {t('opFailed')} <small>{guard.error}</small>
@@ -102,8 +106,8 @@ export default function SettingsPage({ device, snapshot }: Props) {
           <span id="pg-baud">{t('uartBaud')}</span>
           <div className="pg-seg" role="radiogroup" aria-labelledby="pg-baud">
             {BAUDS.map((b) => (
-              <label key={b} className={system.uartBaud === b ? 'on' : undefined}>
-                <input type="radio" name="uartBaud" checked={system.uartBaud === b} disabled={disabled} onChange={() => void set({ uartBaud: b })} />
+              <label key={b} className={!unknown && system.uartBaud === b ? 'on' : undefined}>
+                <input type="radio" name="uartBaud" checked={!unknown && system.uartBaud === b} disabled={disabled} onChange={() => void set({ uartBaud: b })} />
                 {b}
               </label>
             ))}
@@ -144,7 +148,7 @@ export default function SettingsPage({ device, snapshot }: Props) {
 
       <div className="pg-section">
         <h3 className="pg-h">{t('secLed')}</h3>
-        <Slider key="led" label={t('ledBrightness')} value={system.ledBrightness} min={0} max={100} disabled={disabled} onCommit={(v) => set({ ledBrightness: v })} />
+        <Slider key="led" label={t('ledBrightness')} value={system.ledBrightness} valueText={unknown ? DASH : undefined} min={0} max={100} disabled={disabled} onCommit={(v) => set({ ledBrightness: v })} />
       </div>
 
       <div className="pg-section">
