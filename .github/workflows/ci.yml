@@ -72,3 +72,6 @@ jobs:
       - run: cmake -S firmware/components/mxcam_service/host-test -B build/service-host-test
       - run: cmake --build build/service-host-test
       - run: ctest --test-dir build/service-host-test --output-on-failure
+      - run: cmake -S firmware/components/mxcam_color/host-test -B build/color-host-test
+      - run: cmake --build build/color-host-test
+      - run: ctest --test-dir build/color-host-test --output-on-failure
