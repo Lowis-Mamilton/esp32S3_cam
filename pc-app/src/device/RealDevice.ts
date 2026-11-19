@@ -107,7 +107,7 @@ const sameGesture = (a: FunctionParams['gesture'], b: FunctionParams['gesture'])
   a.handThreshold === b.handThreshold && a.gestureThreshold === b.gestureThreshold && a.maxHands === b.maxHands
 
 /** Full Config v1 from Studio's view; values are clamped so they cannot wrap in the u8/u16 fields. */
-function toWire(base: DeviceConfig, p: FunctionParams, s: SystemConfig): DeviceConfig {
+function toWire(base: DeviceConfig, p: Omit<FunctionParams, 'gesture'>, s: SystemConfig): DeviceConfig {
   return {
     tolerance: clampInt(p.color.tolerance, 0, 100),
     minArea: clampInt(p.color.minArea, 0, 0xffff),
@@ -327,8 +327,9 @@ export class RealDevice implements Device {
       if (c.functionId !== WireFn.Gesture) throw new DeviceOpError('failed', 'GET_FUNC_CONFIG answered another function')
       this.gestureCfg = clampGesture(c.gesture as FunctionParams['gesture'])
     } catch (e) {
-      if (!(e instanceof NotSupportedError)) throw e
-      console.warn('MXCam: firmware lists gesture but has no GET_FUNC_CONFIG; gesture is disabled')
+      // An unknown layout_version (newer firmware) is treated like "cannot answer": drop gesture, keep the connection.
+      if (!(e instanceof NotSupportedError) && !(e instanceof Error && /layout_version/.test(e.message))) throw e
+      console.warn('MXCam: firmware lists gesture but its GET_FUNC_CONFIG is missing or unsupported; gesture is disabled')
       this.dropped.add(GESTURE)
       this.gestureCfg = null
     }
@@ -552,7 +553,9 @@ export class RealDevice implements Device {
   exportConfig(): string {
     this.ensureConnected()
     const c = this.requireConfig()
-    return JSON.stringify({ version: 1, learned: this.learned, params: toParams(c, this.gestureCfg ?? undefined), system: toSystem(c) })
+    const { gesture, ...params } = toParams(c, this.gestureCfg ?? undefined)
+    // No gesture config read from the board (old firmware): omit it rather than export made-up defaults.
+    return JSON.stringify({ version: 1, learned: this.learned, params: this.gestureCfg ? { ...params, gesture } : params, system: toSystem(c) })
   }
 
   /**
@@ -571,7 +574,7 @@ export class RealDevice implements Device {
     // Check the shared name table first, so a file that cannot fit never wipes the tag names.
     if (this.namesAfterImport(file, fns) > NAME_TABLE_SIZE) throw new DeviceOpError('names-full', 'name table full')
     await this.applyConfig(toWire(cur, file.params, file.system))
-    if (fns.includes(GESTURE)) await this.applyGesture(file.params.gesture)
+    if (fns.includes(GESTURE) && file.params.gesture) await this.applyGesture(file.params.gesture)
     let colorsNeedRelearn = false
     if (fns.includes(1)) {
       for (const e of file.learned[1]) {

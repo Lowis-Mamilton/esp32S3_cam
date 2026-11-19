@@ -54,8 +54,9 @@ export default function LiveStage({ ref, connected, fps, kbps, fn, canLearn, onL
   const [toast, setToast] = useState<{ text: string; error: boolean } | null>(null)
   // Results and LEARN regions are TRUE-image coordinates; only the screen is mirrored.
   const [mirror, setMirror] = useMirror()
+  // A layout effect runs synchronously in the commit, so a decode finishing right after the pause cannot slip through.
   const pausedRef = useRef(previewPaused)
-  useEffect(() => {
+  useLayoutEffect(() => {
     pausedRef.current = previewPaused
   }, [previewPaused])
   const [resultsRate, setResultsRate] = useState(0)
@@ -90,6 +91,7 @@ export default function LiveStage({ ref, connected, fps, kbps, fn, canLearn, onL
       createImageBitmap(new Blob([f.jpeg as BlobPart], { type: 'image/jpeg' }))
         .then((bmp) => {
           try {
+            if (pausedRef.current) return // paused while this JPEG was decoding: no picture, no frame id
             if (canvas.width !== bmp.width) canvas.width = bmp.width
             if (canvas.height !== bmp.height) canvas.height = bmp.height
             canvas.getContext('2d')?.drawImage(bmp, 0, 0)
@@ -257,7 +259,7 @@ export default function LiveStage({ ref, connected, fps, kbps, fn, canLearn, onL
             {shown.map((r, i) => {
               // Result x/y are the box centre, in true-image coordinates.
               const style = { '--c': idColorVar(r), ...boxToScreen(vp, r, mirror) } as CSSProperties
-              return <div key={i} className={`ls-box${r.kind === 'color' && r.id === 0 ? ' unlearned' : ''}`} style={style} />
+              return <div key={i} className={`ls-box${(r.kind === 'color' || r.kind === 'gesture') && r.id === 0 ? ' unlearned' : ''}`} style={style} />
             })}
           </div>
           <div className="ls-labels">
@@ -319,7 +321,7 @@ export default function LiveStage({ ref, connected, fps, kbps, fn, canLearn, onL
           </>
         )}
         <label className="ls-mirror ls-pause">
-          <input type="checkbox" checked={previewPaused} onChange={(e) => onPausePreview?.(e.target.checked)} />
+          <input type="checkbox" checked={previewPaused} disabled={!connected} onChange={(e) => onPausePreview?.(e.target.checked)} />
           {t('pausePreview')}
         </label>
         <label className="ls-mirror">

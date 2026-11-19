@@ -358,3 +358,52 @@ test('not paused: no placeholder and the stats show fps', () => {
   expect(screen.queryByText('預覽已暫停（辨識照常進行）')).toBeNull()
   expect(container.querySelector('.stage-stats')!.textContent).toContain('9.9 fps')
 })
+
+test('pause race: a JPEG still decoding when the preview is paused does not set the displayed frame', async () => {
+  stubRect(320, 240)
+  const ctx = { clearRect: () => {}, drawImage: vi.fn() }
+  vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(ctx as unknown as CanvasRenderingContext2D)
+  let release: (b: { width: number; height: number; close: () => void }) => void = () => {}
+  vi.stubGlobal('createImageBitmap', () => new Promise((res) => (release = res)))
+  const store = new ResultsStore()
+  const ref = createRef<LiveStageHandle>()
+  const tree = (paused: boolean) => (
+    <I18nProvider>
+      <LiveStage ref={ref} connected fps={0} kbps={0} fn={1} canLearn={false} onLearn={async () => 1} results={store} learned={[]} showNames previewPaused={paused} />
+    </I18nProvider>
+  )
+  const { rerender } = render(tree(false))
+  act(() => {
+    ref.current!.draw({ kind: 'jpeg', jpeg: new Uint8Array([0xff, 0xd8]), frameId: 5 })
+  })
+  rerender(tree(true))
+  const spy = vi.spyOn(store, 'setDisplayed')
+  const close = vi.fn()
+  await act(async () => {
+    release({ width: 320, height: 240, close })
+    await Promise.resolve()
+  })
+  await vi.waitFor(() => expect(close).toHaveBeenCalled())
+  expect(spy).not.toHaveBeenCalled()
+  expect(ctx.drawImage).not.toHaveBeenCalled()
+  vi.unstubAllGlobals()
+})
+
+test('the pause toggle is disabled while not connected', () => {
+  setup({ connected: false })
+  expect(screen.getByRole('checkbox', { name: '暫停預覽' })).toBeDisabled()
+})
+
+test('a gesture id 0 box (hand, not recognised) is drawn thin like an unlearned colour', () => {
+  stubRect(640, 480)
+  const { container } = setup({
+    fn: 8,
+    results: [
+      { id: 0, kind: 'gesture', confidence: 81, x: 100, y: 100, width: 40, height: 40 },
+      { id: 6, kind: 'gesture', confidence: 92, x: 200, y: 100, width: 40, height: 40 },
+    ],
+  })
+  const boxes = [...container.querySelectorAll('.ls-box')]
+  expect(boxes[0]).toHaveClass('unlearned')
+  expect(boxes[1]).not.toHaveClass('unlearned')
+})

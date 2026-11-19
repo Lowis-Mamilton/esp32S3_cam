@@ -143,7 +143,7 @@ export const en: Record<keyof typeof zhTW, string> = {
   paramHandThreshold: 'Hand detection threshold',
   paramGestureThreshold: 'Gesture threshold',
   paramMaxHands: 'Max hands',
-  maxHandsHint: 'Two hands are slower, about 3 fps',
+  maxHandsHint: 'Two hands are slower',
   pausePreview: 'Pause preview',
   previewPausedNote: 'Preview paused (recognition keeps running)',
   resultsRate: 'Results'

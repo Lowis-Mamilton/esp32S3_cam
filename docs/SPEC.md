@@ -274,6 +274,7 @@ docs/          規格、協定、ADR
   4. GET_INFO 的暫存區已改成 `23 + MXP_INFO_MAX_FUNCS`（9 個以上功能不再回 `INTERNAL`），不用再修
   5. M6 計畫 Task 4 Step 1「先抓 v1 樣本」已完成（`k_v1_fixture`）
   6. 目前韌體把 11 bytes 的 LEARN 當成一般 LEARN（沒有回 `BAD_PARAM`）；M8a 沒改，留給 M6 Task 4
+  7. Studio 的 LiveStage（`kind`、`stage*`）和 App（`showNames`）用串接三元運算子分辨功能，新增功能 ID 會**無聲地落到人臉分支**；M6 Task 7 要改成 `Record<FunctionId, …>`（M8a 複審 M12）
 - [x] M2 開工前（M1 總審查建議）——已在 M2 處理：
   - `mxcam_link` 改成非阻塞的推送佇列（`mxcam_link_push`），推送序號集中在 link；RESULTS 不可以讓 TFT 卡住
   - 需要 pipeline 資料才能回答的指令（例如 LEARN）：先決定用 BUSY＋輪詢，還是延後回應

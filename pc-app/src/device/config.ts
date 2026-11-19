@@ -1,9 +1,9 @@
-import { NAME_MAX_BYTES, defaultParams, emptyLearned, nameBytes, type FunctionId, type FunctionParams, type LearnedId, type SystemConfig } from './types'
+import { NAME_MAX_BYTES, emptyLearned, nameBytes, type FunctionId, type FunctionParams, type LearnedId, type SystemConfig } from './types'
 
 /** Versioned device configuration, as exported/imported by Studio. */
 export interface Config {
   learned: Record<FunctionId, LearnedId[]>
-  params: FunctionParams
+  params: Omit<FunctionParams, 'gesture'> & { gesture?: FunctionParams['gesture'] }
   system: SystemConfig
 }
 
@@ -71,7 +71,7 @@ export function parseConfig(json: string): Config {
     return bad('params.color')
   if (!isBool(t.showNames)) return bad('params.tag')
   if (!inRange(f.threshold, 0, 100) || !isInt(f.maxResults, 1, 8)) return bad('params.face')
-  let gesture = defaultParams().gesture // optional: files from before M8a have none
+  let gesture: FunctionParams['gesture'] | undefined // optional: files from before M8a have none; absent leaves the board alone
   if (params.gesture !== undefined) {
     const g = params.gesture
     if (!isObj(g) || !isInt(g.handThreshold, 10, 95) || !isInt(g.gestureThreshold, 0, 100) || (g.maxHands !== 1 && g.maxHands !== 2))
@@ -88,7 +88,7 @@ export function parseConfig(json: string): Config {
       color: { tolerance: c.tolerance, minArea: c.minArea, maxResults: c.maxResults, showNames: c.showNames },
       tag: { showNames: t.showNames },
       face: { threshold: f.threshold, maxResults: f.maxResults },
-      gesture,
+      ...(gesture ? { gesture } : {}),
     },
     system: { uartBaud, i2cAddress, ledBrightness },
   }

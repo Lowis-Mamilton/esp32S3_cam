@@ -604,3 +604,41 @@ test('gesture: importConfig applies gesture params and names', async () => {
   expect(fw.names.get('8:7')).toBe('OK啦')
   expect(d.snapshot().learned[8]).toEqual([{ id: 7, name: 'OK啦' }])
 })
+
+test('gesture: importing an old file (no params.gesture) leaves the board gesture params untouched and clean', async () => {
+  const fw = gestureFw()
+  fw.gesture = { handThreshold: 33, gestureThreshold: 77, maxHands: 2 }
+  const d = await connected(fw)
+  const file = JSON.parse(d.exportConfig())
+  delete file.params.gesture
+  delete file.learned[8]
+  await d.importConfig(JSON.stringify(file))
+  expect(sent(fw, Cmd.SetFuncConfig)).toHaveLength(0)
+  expect(fw.gesture).toEqual({ handThreshold: 33, gestureThreshold: 77, maxHands: 2 })
+  expect(d.snapshot().params.gesture).toEqual({ handThreshold: 33, gestureThreshold: 77, maxHands: 2 })
+})
+
+test('gesture: export omits params.gesture when the board gave no gesture config', async () => {
+  const d = await connected() // functions [1, 2]
+  expect(JSON.parse(d.exportConfig()).params.gesture).toBeUndefined()
+  const d2 = await connected(gestureFw())
+  expect(JSON.parse(d2.exportConfig()).params.gesture).toEqual({ handThreshold: 40, gestureThreshold: 60, maxHands: 1 })
+})
+
+test('gesture: an unknown func config layout_version drops gesture without failing the connect', async () => {
+  const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+  const fw = gestureFw()
+  fw.gestureLayoutVersion = 2
+  const d = await connected(fw)
+  expect(d.snapshot().status).toBe('connected')
+  expect(d.snapshot().supported).toEqual([1, 2, 3])
+  warn.mockRestore()
+})
+
+test('pause preview: a failed STREAM_START restores the previous paused state', async () => {
+  const fw = gestureFw()
+  const d = await connected(fw)
+  fw.unknown.add(Cmd.StreamStart)
+  await expect(d.setPreviewPaused(true)).rejects.toBeDefined()
+  expect(d.snapshot().previewPaused).toBe(false)
+})

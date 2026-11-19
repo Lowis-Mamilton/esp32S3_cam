@@ -89,6 +89,8 @@ export class FakeFirmware {
   config: DeviceConfig = { ...DEFAULT_CONFIG }
   /** Gesture config v1 (function 8; GET/SET_FUNC_CONFIG). Add 8 to functionIds to enable it. */
   gesture: FakeGestureConfig = { ...DEFAULT_GESTURE }
+  /** layout_version byte of the gesture func config replies. */
+  gestureLayoutVersion = 1
   /** flags byte of the last STREAM_START (bit0 FRAME, bit1 RESULTS); pushFrame sends nothing when bit0 is 0, like the firmware. */
   streamFlags = 0
   colors: { id: number; rgb: [number, number, number] }[] = []
@@ -374,7 +376,7 @@ export class FakeFirmware {
   }
   private gesturePayload(): Uint8Array {
     const g = this.gesture
-    return new Uint8Array([GESTURE_FN, 1, g.handThreshold, g.gestureThreshold, g.maxHands, 0, 0, 0, 0, 0])
+    return new Uint8Array([GESTURE_FN, this.gestureLayoutVersion, g.handThreshold, g.gestureThreshold, g.maxHands, 0, 0, 0, 0, 0])
   }
 
   private configPayload(): Uint8Array {

@@ -283,6 +283,8 @@ export class MxcamConnection {
       return
     }
     if (f.cmd === Cmd.PushResults) {
+      // With results streaming on, a paused (results-only) stream is alive: do not re-send STREAM_START every 2.5 s.
+      if (this.streamResults) this.silentTicks = 0
       this.events.results?.(parseResults(f.payload))
       return
     }

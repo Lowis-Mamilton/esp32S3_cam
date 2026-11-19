@@ -217,7 +217,7 @@ export class DemoDevice implements Device {
   async importConfig(json: string): Promise<ImportOutcome> {
     const c = parseConfig(json) // throws before any state is touched
     this.learned = c.learned
-    this.params = c.params
+    this.params = { ...c.params, gesture: c.params.gesture ?? this.params.gesture }
     this.system = c.system
     this.touch()
     return { colorsNeedRelearn: false }

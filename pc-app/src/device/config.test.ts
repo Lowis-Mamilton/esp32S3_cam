@@ -84,12 +84,12 @@ test('rejects non-JSON, wrong version and wrong shapes', () => {
 
 // ---- M8a: gesture in the config file ----
 
-test('an old file without params.gesture or learned[8] imports with gesture defaults', () => {
+test('an old file without params.gesture or learned[8] imports with no gesture params', () => {
   const raw = JSON.parse(JSON.stringify(base()))
   delete raw.params.gesture
   delete raw.learned[8]
   const c = parseConfig(JSON.stringify(raw))
-  expect(c.params.gesture).toEqual(defaultParams().gesture)
+  expect(c.params.gesture).toBeUndefined()
   expect(c.learned[8]).toEqual([])
 })
 

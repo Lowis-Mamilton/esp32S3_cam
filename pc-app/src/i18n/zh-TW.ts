@@ -141,7 +141,7 @@ export const zhTW = {
   paramHandThreshold: '偵測到手的門檻',
   paramGestureThreshold: '手勢門檻',
   paramMaxHands: '最多幾隻手',
-  maxHandsHint: '兩隻手較慢，約 3 fps',
+  maxHandsHint: '兩隻手較慢',
   pausePreview: '暫停預覽',
   previewPausedNote: '預覽已暫停（辨識照常進行）',
   resultsRate: '結果'

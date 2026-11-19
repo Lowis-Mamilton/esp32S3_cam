@@ -491,21 +491,22 @@ describe('MxcamConnection', () => {
 })
 
 // ---- M2: results pushes, stream flags and the setup hook ----
+function resultsPayload(frameId: number, fn: number): Uint8Array {
+  const p = new Uint8Array(6 + 12)
+  const v = new DataView(p.buffer)
+  v.setUint32(0, frameId, true)
+  p[4] = fn
+  p[5] = 1
+  v.setUint16(6, 2, true)
+  v.setInt16(8, 160, true)
+  v.setInt16(10, 120, true)
+  v.setUint16(12, 30, true)
+  v.setUint16(14, 20, true)
+  p[16] = 255
+  return p
+}
+
 describe('MxcamConnection M2 additions', () => {
-  function resultsPayload(frameId: number, fn: number): Uint8Array {
-    const p = new Uint8Array(6 + 12)
-    const v = new DataView(p.buffer)
-    v.setUint32(0, frameId, true)
-    p[4] = fn
-    p[5] = 1
-    v.setUint16(6, 2, true)
-    v.setInt16(8, 160, true)
-    v.setInt16(10, 120, true)
-    v.setUint16(12, 30, true)
-    v.setUint16(14, 20, true)
-    p[16] = 255
-    return p
-  }
 
   test('streamResults sets STREAM_START flags bit1; RESULTS pushes reach the results event', async () => {
     const port = new FakePort()
@@ -572,5 +573,44 @@ describe('MxcamConnection M2 additions', () => {
     await expect(conn.connect()).rejects.toThrow('boom')
     expect(port.closed).toBe(true)
     expect(port.requests.some((r) => r.cmd === Cmd.StreamStart)).toBe(false)
+  })
+})
+
+describe('paused stream (results only)', () => {
+  test('watchdog / visibility re-send after pausing still carries flags 0x02', async () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'setTimeout', 'clearTimeout'] })
+    const port = new FakePort()
+    const conn = new MxcamConnection(
+      new FakeSerial(port) as unknown as Serial,
+      { status: () => {}, frame: () => {}, stats: () => {} },
+      { streamResults: true },
+    )
+    await conn.connect()
+    await conn.setFrames(false)
+    const starts = () => port.requests.filter((r) => r.cmd === Cmd.StreamStart)
+    const n = starts().length
+    await vi.advanceTimersByTimeAsync(3000)
+    expect(starts().length).toBe(n + 1)
+    expect([...starts().at(-1)!.payload]).toEqual([2, 10, 0])
+    await conn.disconnect()
+  })
+
+  test('RESULTS pushes keep the watchdog quiet when results streaming is on', async () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'setTimeout', 'clearTimeout'] })
+    const port = new FakePort()
+    const conn = new MxcamConnection(
+      new FakeSerial(port) as unknown as Serial,
+      { status: () => {}, frame: () => {}, stats: () => {}, results: () => {} },
+      { streamResults: true },
+    )
+    await conn.connect()
+    await conn.setFrames(false)
+    const n = port.requests.filter((r) => r.cmd === Cmd.StreamStart).length
+    for (let i = 0; i < 10; i++) {
+      port.push(encodeFrame(Cmd.PushResults, 0, resultsPayload(i, 1)))
+      await vi.advanceTimersByTimeAsync(1000)
+    }
+    expect(port.requests.filter((r) => r.cmd === Cmd.StreamStart).length).toBe(n)
+    await conn.disconnect()
   })
 })
