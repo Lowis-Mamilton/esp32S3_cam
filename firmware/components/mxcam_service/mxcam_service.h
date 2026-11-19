@@ -97,7 +97,8 @@ void mxs_init(mxs_state_t *s, const mxp_info_t *info, mxs_data_t *data);
 
 /* Handle one request, write the response packet to out and return its size
  * (0 if out_cap is too small; MXS_RESPONSE_MAX always suffices).
- * Function IDs: SET_FUNCTION accepts 0 (none), 1 (colour), 2 (AprilTag).
+ * Function IDs: SET_FUNCTION accepts 0 (none) and the capabilities set with
+ * mxs_set_capabilities (1 colour, 2 AprilTag, 3 face detection).
  * Every request is treated as coming over USB, so STREAM_START/STOP are
  * always allowed (the NOT_SUPPORTED path for UART/I2C arrives with the
  * transport flag in M4). */

@@ -66,7 +66,7 @@ CRC 錯誤的封包**不回應**：因為內容不可信，連 `seq` 都不能�
 | 0 | 無功能（只顯示畫面） | M1 |
 | 1 | 顏色 | M2 |
 | 2 | AprilTag（tag36h11） | M2 |
-| 3 | 人臉偵測 | M3 |
+| 3 | 人臉偵測（已實作，M3） | M3 |
 
 ## 5. 指令總表
 
@@ -164,6 +164,8 @@ AprilTag 的 `extra`（18 bytes）：`rotation_cdeg (i16，-18000～18000，百�
 - 四個角的順序是 tag 自己的**左上、右上、右下、左下**（在畫面上順時針）。tag 的「上」以官方 AprilRobotics tag36h11 圖片（apriltag-imgs）為準；OpenCV／ArUco 的 `DICT_APRILTAG_36h11` 產生的圖案方向相差 180°，所以 OpenCV 對同一個 tag 算出的角順序與角度會差 180°。
 - `rotation_cdeg = atan2(右上.y − 左上.y, 右上.x − 左上.x)`，影像座標（y 向下）：tag 正放是 0，在畫面上順時針轉為正、逆時針為負。
 
+人臉（功能 3）的紀錄：`id` 固定 0；`confidence = round(模型分數 × 100)`（0–100）；`extra_len` 0；依信心度由高到低排序（同分時框大的在前）；低於 `face.threshold` 的不回報，最多 `face.max_results` 筆。偵測分兩階段，第一階段（候選框）固定用 0.5 的分數門檻，所以把 `face.threshold` 設在 50 以下**不會多找到臉**，只是讓第二階段分數 0.5 以下的框也回報。
+
 AprilTag 的 `x, y` 是由單應矩陣（homography）算出的 tag 中心，可能和外接框（`width, height`）的中心略有差異；四個角不裁切，可能落在畫面外，外接框則已裁到畫面內。
 
 ### 0x20 GET_RESULTS
@@ -175,7 +177,7 @@ AprilTag 的 `x, y` 是由單應矩陣（homography）算出的 tag 中心，可
 | frame_id | u32 | 這批結果對應的畫面編號（與 FRAME 推送相同） |
 | function_id | u8 | 產生這批結果的功能 |
 | count | u8 | 0–8 |
-| records | ResultRecord ×count | 依面積（AprilTag、人臉：依信心度或面積）由大到小 |
+| records | ResultRecord ×count | 顏色依面積由大到小；AprilTag 依信心度或面積；人臉依信心度由高到低（同分時框大的在前） |
 
 回傳的是**最近一張處理完的畫面**的結果，不會等下一張。開機後還沒處理完任何畫面時回 `frame_id = 0`、`count = 0`（`function_id` 為目前功能）。
 
@@ -199,6 +201,7 @@ payload 與 GET_RESULTS 的回應相同。每處理完一張畫面推送一次�
 
 - 顏色（1）：刪除學到的顏色和它的名字
 - AprilTag（2）：tag 不需要學習，只刪除名字（`0xFFFF` 刪除所有 tag 名字）
+- 人臉偵測（3）：不需要學習、也不能取名，沒有東西可忘，直接回成功
 - 其他功能 → `BAD_PARAM`
 
 ### 0x32 SET_NAME
@@ -207,6 +210,7 @@ payload 與 GET_RESULTS 的回應相同。每處理完一張畫面推送一次�
 
 - 顏色：ID 必須已經學過，否則 `BAD_PARAM`
 - AprilTag：任何 0–586 的 tag ID 都可以取名（不需要先學習）
+- 人臉偵測（3）與其他功能：`BAD_PARAM`
 - 名字超過 48 bytes 或不是合法 UTF-8 → `BAD_LENGTH` / `BAD_PARAM`
 - 名字表已滿（所有功能合計 32 筆）→ `FULL`；改已有的名字或清除名字不受影響
 
@@ -220,6 +224,9 @@ payload 與 GET_RESULTS 的回應相同。每處理完一張畫面推送一次�
 | r, g, b | u8 ×3 | 顏色功能的學習色；其他功能填 0 |
 | name_len | u8 | |
 | name | UTF-8 | |
+
+- 顏色（1）：學到的顏色（依 ID 排序）；AprilTag（2）：有名字的 tag（依 ID 排序）
+- 人臉偵測（3）與其他功能：`BAD_PARAM`（人臉沒有學習資料）
 
 ### 0x40 GET_CONFIG / 0x41 SET_CONFIG
 

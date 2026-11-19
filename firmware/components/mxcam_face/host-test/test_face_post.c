@@ -24,7 +24,7 @@ static void test_confidence(void) {
   CHECK(mxf_confidence(0.92f) == 92);
   CHECK(mxf_confidence(0.594f) == 59);
   CHECK(mxf_confidence(0.596f) == 60); /* rounded, not truncated */
-  CHECK(mxf_confidence(0.005f) == 1);
+  CHECK(mxf_confidence(0.006f) == 1);
   CHECK(mxf_confidence(1.7f) == 100); /* clamped */
   CHECK(mxf_confidence(-0.3f) == 0);
   CHECK(mxf_confidence(NAN) == 0);

@@ -51,6 +51,24 @@ static void apply_threshold(uint8_t threshold)
     s_stage2_thr = threshold;
 }
 
+/* See MXF_GUARD_* in the header: refuse to run when esp-dl could hit a
+ * failed allocation (which aborts). Warns at most once per second. */
+static bool heap_ok(int64_t now_us)
+{
+    static int64_t s_last_warn_us;
+    static bool s_warned;
+    size_t internal = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
+    size_t psram_block = heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM);
+    if (internal >= MXF_GUARD_INTERNAL_FREE && psram_block >= MXF_GUARD_PSRAM_BLOCK) return true;
+    if (!s_warned || now_us - s_last_warn_us >= 1000000) {
+        s_warned = true;
+        s_last_warn_us = now_us;
+        ESP_LOGW(TAG, "low memory, detection skipped (internal free %u, largest PSRAM block %u)", (unsigned)internal,
+                 (unsigned)psram_block);
+    }
+    return false;
+}
+
 extern "C" bool mxf_init(void)
 {
     if (s_det) return true;
@@ -95,7 +113,7 @@ extern "C" uint8_t mxf_detect(const uint16_t *frame, uint8_t threshold, uint8_t 
 {
     int64_t t0 = esp_timer_get_time();
     uint8_t n = 0;
-    if (s_det && frame && out) {
+    if (s_det && frame && out && max_results > 0 && cap > 0 && heap_ok(t0)) {
         apply_threshold(threshold);
         dl::image::img_t img;
         img.data = const_cast<uint16_t *>(frame); /* read only */

@@ -36,7 +36,8 @@ static bool color_learned(const mxs_data_t *d, uint16_t id)
   return false;
 }
 
-/* FORGET: function_id u8, id u16 (0xFFFF = all). Absent ids succeed. */
+/* FORGET: function_id u8, id u16 (0xFFFF = all). Absent ids succeed; face
+ * detection (3) learns and names nothing, so it always succeeds. */
 static size_t handle_forget(mxs_state_t *s, const mxp_frame_t *req, uint8_t *out, size_t out_cap)
 {
   if (req->len != 3) return reply_err(req, MXP_ERR_BAD_LENGTH, out, out_cap);
@@ -48,6 +49,8 @@ static size_t handle_forget(mxs_state_t *s, const mxp_frame_t *req, uint8_t *out
     else if (id >= 1 && id <= MXST_MAX_COLORS) mxst_forget_color(s->data, (uint8_t)id);
   } else if (fn == MXP_FUNC_APRILTAG) {
     mxst_forget_names(s->data, MXST_FN_TAG, id); /* tags are not learned: only names */
+  } else if (fn == MXP_FUNC_FACE) {
+    /* nothing to forget */
   } else {
     return reply_err(req, MXP_ERR_BAD_PARAM, out, out_cap);
   }
@@ -267,7 +270,7 @@ size_t mxs_handle(mxs_state_t *s, const mxp_frame_t *req, uint32_t now_ms, uint8
     return reply(req, NULL, 0, out, out_cap);
   case MXP_CMD_SET_FUNCTION: {
     if (req->len != 1) return reply_err(req, MXP_ERR_BAD_LENGTH, out, out_cap);
-    /* Only functions that initialised (GET_INFO's list) and 0; face (3) arrives in M3. */
+    /* Only functions that initialised (GET_INFO's list) and 0. */
     if (!function_available(s, req->payload[0])) return reply_err(req, MXP_ERR_BAD_PARAM, out, out_cap);
     change_function(s, req->payload[0]);
     return reply(req, &s->function_id, 1, out, out_cap);

@@ -33,9 +33,23 @@ bool mxf_init(void);
 
 /* Returns the number of records written to out
  * (<= min(max_results, cap, MXP_MAX_RESULTS)). threshold is 0..100.
- * 0 when mxf_init has not succeeded or frame/out is NULL. elapsed_us
- * (optional) receives the time spent in detection and post-processing.
- * Not reentrant. */
+ * 0 at once when mxf_init has not succeeded, frame/out is NULL or
+ * max_results / cap is 0. elapsed_us (optional) receives the time spent in
+ * detection and post-processing (44-62 ms measured on the board for 0-2 faces).
+ *
+ * Heap guard: esp-dl allocates while it runs (internal RAM < 1 KB, PSRAM
+ * blocks for its tensors) and aborts on a failed allocation (no C++
+ * exceptions). So the detection is skipped (0 results, a warning logged at
+ * most once per second) when internal free < MXF_GUARD_INTERNAL_FREE or the
+ * largest free PSRAM block < MXF_GUARD_PSRAM_BLOCK. Residual risk: the check
+ * is not atomic with the run, so another task allocating in between, or heap
+ * fragmentation the check does not see (e.g. no internal block large enough
+ * although enough is free), can still make esp-dl abort; the margins are far
+ * above what one run needs.
+ *
+ * Pipeline task only; not reentrant. */
+#define MXF_GUARD_INTERNAL_FREE (32u * 1024u)
+#define MXF_GUARD_PSRAM_BLOCK (256u * 1024u)
 uint8_t mxf_detect(const uint16_t *frame, uint8_t threshold, uint8_t max_results, mxp_result_t *out, uint8_t cap,
                    uint32_t *elapsed_us);
 

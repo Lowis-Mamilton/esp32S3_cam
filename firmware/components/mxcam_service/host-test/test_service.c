@@ -80,7 +80,7 @@ static void test_ping_function(void)
   uint8_t two = 2, three = 3;
   call(&s, MXP_CMD_SET_FUNCTION, 12, &two, 1, 0, &r, rb, sizeof(rb));
   CHECK(r.cmd == 0x90 && r.payload[0] == 2 && s.function_id == 2);
-  /* face (3) arrives in M3 */
+  /* face (3) is not in make_info's list (face init failed): BAD_PARAM */
   call(&s, MXP_CMD_SET_FUNCTION, 13, &three, 1, 0, &r, rb, sizeof(rb));
   CHECK(r.cmd == 0xFF && r.len == 2 && r.payload[0] == MXP_CMD_SET_FUNCTION &&
         r.payload[1] == MXP_ERR_BAD_PARAM && r.seq == 13 && s.function_id == 2);
@@ -531,7 +531,8 @@ static void test_forget(void)
   /* unsupported functions */
   forget(&s, 0, 1, 8);
   CHECK(is_err(&g_r, MXP_CMD_FORGET, MXP_ERR_BAD_PARAM));
-  forget(&s, 3, 1, 9);
+  /* face (3): nothing is learned or named, so FORGET succeeds (see test_face_function) */
+  forget(&s, 4, 1, 9);
   CHECK(is_err(&g_r, MXP_CMD_FORGET, MXP_ERR_BAD_PARAM));
 }
 
@@ -858,6 +859,69 @@ static void test_results_on_function_change(void)
         res.function_id == 1 && res.count == 0);
 }
 
+/* Face detection (function 3): selectable only when it initialised (in
+ * GET_INFO's list); nothing to learn or name; FORGET succeeds (nothing to
+ * forget) without touching the data. */
+static void test_face_function(void)
+{
+  mxs_state_t s;
+  fresh(&s); /* capabilities 1, 2: face init failed */
+  uint8_t three = 3, rb[64];
+  mxp_frame_t r;
+  CHECK(is_err(req(&s, MXP_CMD_SET_FUNCTION, 1, &three, 1), MXP_CMD_SET_FUNCTION, MXP_ERR_BAD_PARAM));
+  CHECK(s.function_id == 0);
+
+  const uint8_t all[3] = { 1, 2, 3 };
+  mxs_set_capabilities(&s, all, 3);
+  const mxp_frame_t *g = req(&s, MXP_CMD_GET_INFO, 2, NULL, 0);
+  CHECK(g->cmd == 0x81 && g->len == 26 && g->payload[22] == 3 && g->payload[23] == 1 && g->payload[24] == 2 &&
+        g->payload[25] == 3);
+  g = req(&s, MXP_CMD_SET_FUNCTION, 3, &three, 1);
+  CHECK(g->cmd == 0x90 && g->len == 1 && g->payload[0] == 3 && s.function_id == 3);
+  CHECK(req(&s, MXP_CMD_GET_FUNCTION, 4, NULL, 0)->payload[0] == 3);
+
+  /* LEARN for face (even with face current) -> BAD_PARAM at once, nothing pending */
+  CHECK(learn(&s, 3, 5, 0, &r, rb, sizeof(rb)) != MXS_DEFERRED);
+  CHECK(is_err(&r, MXP_CMD_LEARN, MXP_ERR_BAD_PARAM) && !s.pending_learn.active);
+  /* SET_NAME for face -> BAD_PARAM (also clearing a name), nothing stored */
+  CHECK(is_err(set_name(&s, 3, 0, "me", 2), MXP_CMD_SET_NAME, MXP_ERR_BAD_PARAM));
+  CHECK(is_err(set_name(&s, 3, 0, "", 0), MXP_CMD_SET_NAME, MXP_ERR_BAD_PARAM));
+  CHECK(g_data.n_names == 0 && g_data.cfg.dirty == 0);
+  /* FORGET for face -> success, data untouched (not dirty) */
+  add_color(1, 200, 0, 0);
+  mxst_set_name(&g_data, 2, 7, "door", 4);
+  forget(&s, 3, 0, 6);
+  CHECK(g_r.cmd == 0xB1 && g_r.len == 0 && g_r.seq == 6);
+  forget(&s, 3, 0xFFFF, 7);
+  CHECK(g_r.cmd == 0xB1 && g_r.len == 0);
+  CHECK(g_data.n_colors == 1 && g_data.n_names == 1 && g_data.cfg.dirty == 0);
+  CHECK(is_err(req(&s, MXP_CMD_FORGET, 8, &three, 1), MXP_CMD_FORGET, MXP_ERR_BAD_LENGTH));
+
+  /* face results are cached like the others */
+  mxp_results_t in;
+  memset(&in, 0, sizeof(in));
+  in.frame_id = 42;
+  in.function_id = 3;
+  in.count = 1;
+  in.r[0].x = 160;
+  in.r[0].y = 120;
+  in.r[0].w = 60;
+  in.r[0].h = 80;
+  in.r[0].confidence = 92;
+  uint8_t packed[MXS_RESULTS_MAX];
+  size_t n = mxp_pack_results(&in, packed, sizeof(packed));
+  mxs_set_results(&s, packed, (uint16_t)n);
+  g = req(&s, MXP_CMD_GET_RESULTS, 9, NULL, 0);
+  mxp_results_t out;
+  CHECK(g->cmd == 0xA0 && mxp_unpack_results(g->payload, g->len, &out) && out.frame_id == 42 &&
+        out.function_id == 3 && out.count == 1 && out.r[0].id == 0 && out.r[0].confidence == 92);
+
+  /* face no longer available: falls back to 0 */
+  mxs_set_capabilities(&s, all, 2);
+  CHECK(s.function_id == 0);
+  CHECK(is_err(req(&s, MXP_CMD_SET_FUNCTION, 10, &three, 1), MXP_CMD_SET_FUNCTION, MXP_ERR_BAD_PARAM));
+}
+
 static void test_dirty_only_on_change(void)
 {
   mxs_state_t s;
@@ -938,6 +1002,7 @@ int main(void)
   test_finish_learn();
   test_capabilities();
   test_results_on_function_change();
+  test_face_function();
   test_dirty_only_on_change();
   test_deferred_order();
   if (g_fail) {

@@ -12,6 +12,7 @@
 #include "mxcam_camera.h"
 #include "mxcam_color.h"
 #include "mxcam_display.h"
+#include "mxcam_face.h"
 #include "mxcam_link.h"
 #include "mxcam_overlay.h"
 #include "mxcam_store.h"
@@ -38,7 +39,18 @@ static const uint16_t k_id_colors[8] = {
     ID_COLOR(0x4d8ef5), ID_COLOR(0x8f6df2), ID_COLOR(0xd45be0), ID_COLOR(0xf2609b),
 };
 
-static const char *const k_fn_names[] = { "NONE", "COLOR", "TAG" };
+/* Face boxes use the 8th ID colour (Studio --id-8). */
+#define FACE_COLOR k_id_colors[7]
+
+/* Face detection takes 44-62 ms per frame (M3 measurements). It runs on
+ * every FACE_EVERY-th frame; the frames in between show the last detection
+ * on the TFT and do not cache or push results (those are per detection).
+ * 1 = every frame: measured TFT 10-11 fps without streaming, 7 fps while
+ * streaming (docs/SPEC.md 6.1); 2 would only be needed below 7 fps. */
+#define FACE_EVERY 1
+
+static const char *const k_fn_names[] = { "NONE", "COLOR", "TAG", "FACE" };
+#define N_FN_NAMES (sizeof(k_fn_names) / sizeof(k_fn_names[0]))
 
 #ifdef MXCAM_TAG_BENCH
 /* Optional on-board benchmark (off by default; build with
@@ -257,14 +269,15 @@ static void copy_colors(frame_ctx_t *c)
     memcpy(c->colors, s_state->data->colors, sizeof(c->colors));
 }
 
-/* Boxes + ASCII labels ("ID1" / "T3") above them (inside near the top edge
- * when there is no room above). Colour id 0 (not learned) is never drawn. */
+/* Boxes + ASCII labels ("ID1" / "T3" / "FACE 92") above them (inside near
+ * the top edge when there is no room above). Colour id 0 (not learned) is
+ * never drawn. */
 static void draw_results(mxo_canvas_t *c, const mxp_results_t *res)
 {
     for (int i = 0; i < res->count; i++) {
         const mxp_result_t *r = &res->r[i];
         uint16_t col;
-        char label[8];
+        char label[12];
         if (res->function_id == MXP_FUNC_COLOR) {
             if (r->id < 1 || r->id > MXST_MAX_COLORS) continue;
             col = k_id_colors[r->id - 1];
@@ -272,6 +285,9 @@ static void draw_results(mxo_canvas_t *c, const mxp_results_t *res)
         } else if (res->function_id == MXP_FUNC_APRILTAG) {
             col = k_id_colors[r->id % 7]; /* id % 7 + 1 -> palette index id % 7 */
             snprintf(label, sizeof(label), "T%u", (unsigned)r->id);
+        } else if (res->function_id == MXP_FUNC_FACE) {
+            col = FACE_COLOR;
+            snprintf(label, sizeof(label), "FACE %u", (unsigned)r->confidence);
         } else {
             continue;
         }
@@ -302,6 +318,13 @@ static void pipeline_task(void *arg)
     unsigned tag_frames = 0;
     uint64_t proc_sum_us = 0;
     uint32_t proc_max_us = 0;
+    /* Face: per-second detection time stats; the last detection, shown on
+     * the frames skipped by FACE_EVERY. */
+    uint64_t face_sum_us = 0;
+    uint32_t face_max_us = 0;
+    unsigned face_runs = 0, face_phase = 0;
+    static mxp_result_t face_last[MXP_MAX_RESULTS];
+    uint8_t face_last_n = 0;
     uint8_t last_count = 0, last_fn = 0;
     uint32_t frame_id = 1; /* 0 means "no frame processed yet" in GET_RESULTS */
     /* Streaming schedule: next_due_ms advances by one interval per submitted
@@ -388,6 +411,7 @@ static void pipeline_task(void *arg)
             memset(&res, 0, sizeof(res));
             res.frame_id = frame_id;
             res.function_id = ctx.fn;
+            bool publish = true; /* false: TFT only (face frame skipped by FACE_EVERY) */
             if (ctx.fn == MXP_FUNC_COLOR) {
                 mxc_params_t p = { ctx.cfg.tolerance, ctx.cfg.min_area, ctx.cfg.color_max };
                 res.count = mxc_detect(frame, ctx.colors, ctx.n_colors, &p, res.r, MXP_MAX_RESULTS);
@@ -396,6 +420,26 @@ static void pipeline_task(void *arg)
                 bench_frame_start();
 #endif
                 res.count = mxt_detect(frame, res.r, MXP_MAX_RESULTS, NULL);
+            } else if (ctx.fn == MXP_FUNC_FACE) {
+                if (face_phase == 0) {
+                    uint32_t fus = 0;
+                    res.count = mxf_detect(frame, ctx.cfg.face_threshold, ctx.cfg.face_max, res.r, MXP_MAX_RESULTS,
+                                           &fus);
+                    face_sum_us += fus;
+                    if (fus > face_max_us) face_max_us = fus;
+                    face_runs++;
+                    face_last_n = res.count;
+                    memcpy(face_last, res.r, sizeof(face_last));
+                } else {
+                    res.count = face_last_n;
+                    memcpy(res.r, face_last, sizeof(face_last));
+                    publish = false;
+                }
+                face_phase = (face_phase + 1) % FACE_EVERY;
+            }
+            if (ctx.fn != MXP_FUNC_FACE) {
+                face_phase = 0;
+                face_last_n = 0;
             }
             uint32_t proc_us = (uint32_t)(esp_timer_get_time() - tp);
 #ifdef MXCAM_TAG_BENCH
@@ -419,8 +463,18 @@ static void pipeline_task(void *arg)
             face_bench(frame, &ctx.cfg); /* frame is still clean (no overlay yet) */
 #endif
 
-            size_t plen = mxp_pack_results(&res, packed, sizeof(packed));
-            if (plen > 0) {
+            size_t plen = publish ? mxp_pack_results(&res, packed, sizeof(packed)) : 0;
+            if (!publish) {
+                /* Skipped face frame: nothing new to cache or push; still
+                 * drop the old boxes if the function changed meanwhile. */
+                mxcam_link_state_lock();
+                if (s_state->function_id != ctx.fn) {
+                    res.count = 0;
+                    face_last_n = 0;
+                    face_phase = 0;
+                }
+                mxcam_link_state_unlock();
+            } else if (plen > 0) {
                 /* Cache + push under the lock that SET_FUNCTION takes: a frame
                  * processed with a function that is no longer current is
                  * dropped, and the link's drop of queued RESULTS on a
@@ -433,6 +487,8 @@ static void pipeline_task(void *arg)
                         results_push_fail++;
                 } else {
                     res.count = 0; /* stale: not cached, pushed or drawn */
+                    face_last_n = 0;
+                    face_phase = 0;
                     stale_drop++;
                 }
                 mxcam_link_state_unlock();
@@ -443,7 +499,7 @@ static void pipeline_task(void *arg)
             draw_results(&canvas, &res);
 
             char text[24];
-            snprintf(text, sizeof(text), "%s  %d FPS", ctx.fn < 3 ? k_fn_names[ctx.fn] : "?", fps);
+            snprintf(text, sizeof(text), "%s  %d FPS", ctx.fn < N_FN_NAMES ? k_fn_names[ctx.fn] : "?", fps);
             /* Panel coordinates, mirrored into the frame (the TFT shows the
              * mirror view, ADR-0010): text top-left, icon top-right. */
             mxo_draw_text_mirrored(&canvas, 2, 2, text, MXO_WHITE, MXO_BLACK);
@@ -473,12 +529,13 @@ static void pipeline_task(void *arg)
             mxcam_link_take_push_stats(&q_drop, &q_big, &tx_fail);
             unsigned proc_avg_ms = frames ? (unsigned)(proc_sum_us / (uint64_t)frames / 1000u) : 0;
             ESP_LOGI(TAG,
-                     "fps=%d fn=%s proc_ms=%u/%u results=%u stream=%d | enc_ms=%u/%u jpeg=%u sent=%u "
+                     "fps=%d fn=%s proc_ms=%u/%u face_ms=%u/%u/%u results=%u stream=%d | enc_ms=%u/%u jpeg=%u sent=%u "
                      "drop=%u reenc=%u big=%u enc_fail=%u | qdrop=%u qbig=%u txfail=%u rfail=%u | "
                      "heap=%u min=%u psram=%u stack_hw=%u enc_stack_hw=%u | grab_fail=%u bad_size=%u lcd_err=%u "
                      "stale=%u",
-                     fps, last_fn < 3 ? k_fn_names[last_fn] : "?", proc_avg_ms, (unsigned)(proc_max_us / 1000u),
-                     last_count, streaming_now ? 1 : 0, (unsigned)es.enc_avg_ms, (unsigned)es.enc_max_ms,
+                     fps, last_fn < N_FN_NAMES ? k_fn_names[last_fn] : "?", proc_avg_ms, (unsigned)(proc_max_us / 1000u),
+                     face_runs ? (unsigned)(face_sum_us / face_runs / 1000u) : 0u, (unsigned)(face_max_us / 1000u),
+                     face_runs, last_count, streaming_now ? 1 : 0, (unsigned)es.enc_avg_ms, (unsigned)es.enc_max_ms,
                      (unsigned)es.jpeg_avg, es.frames, es.send_fail, es.reenc, es.too_big, es.enc_fail,
                      (unsigned)q_drop, (unsigned)q_big, (unsigned)tx_fail, results_push_fail,
                      (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
@@ -500,6 +557,9 @@ static void pipeline_task(void *arg)
             frames = 0;
             proc_sum_us = 0;
             proc_max_us = 0;
+            face_sum_us = 0;
+            face_max_us = 0;
+            face_runs = 0;
             t0 = now;
         }
     }

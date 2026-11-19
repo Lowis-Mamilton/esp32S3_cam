@@ -6,10 +6,12 @@
 #include "esp_log.h"
 #include "esp_mac.h"
 #include "esp_psram.h"
+#include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "mxcam_camera.h"
 #include "mxcam_display.h"
+#include "mxcam_face.h"
 #include "mxcam_git.h" /* generated at every build: MXCAM_FW_GIT, MXCAM_FW_GIT_DESC */
 #include "mxcam_link.h"
 #include "mxcam_overlay.h"
@@ -91,16 +93,30 @@ void app_main(void)
      * GET_INFO (SET_FUNCTION 2 -> BAD_PARAM). LED stays blue, log only. */
     bool tag_ok = mxt_init();
     if (!tag_ok) ESP_LOGE(TAG, "AprilTag init failed (no memory?): function 2 disabled");
+    /* Face models (~80 ms, ~425 KB PSRAM). Must run HERE, before the encoder,
+     * link, pipeline and store tasks are created: while the models load,
+     * mxf_init steers every plain malloc (all tasks) to PSRAM. Only when the
+     * pipeline can run; a failure just leaves function 3 out of GET_INFO. */
+    bool face_ok = false;
+    if (display_ok && camera_ok) {
+        int64_t tf = esp_timer_get_time();
+        face_ok = mxf_init();
+        if (face_ok)
+            ESP_LOGI(TAG, "face detection ready in %u ms", (unsigned)((esp_timer_get_time() - tf) / 1000));
+        else
+            ESP_LOGE(TAG, "face detection init failed (no memory?): function 3 disabled");
+    }
 
     mxp_info_t info;
     build_info(&info);
     mxs_init(&s_state, &info, &s_data);
     /* GET_INFO lists only functions that can run; the link is not started yet,
      * so no lock is needed here. */
-    uint8_t caps[2], n_caps = 0;
+    uint8_t caps[3], n_caps = 0;
     if (display_ok && camera_ok) {
         caps[n_caps++] = MXP_FUNC_COLOR;
         if (tag_ok) caps[n_caps++] = MXP_FUNC_APRILTAG;
+        if (face_ok) caps[n_caps++] = MXP_FUNC_FACE;
     }
     mxs_set_capabilities(&s_state, caps, n_caps);
     if (encoder_start() != ESP_OK) {

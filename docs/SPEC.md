@@ -44,6 +44,7 @@
 - AprilTag 請用黑色印在白紙上並保持良好對比；低對比的 tag 會被濾掉（`min_white_black_diff` 設為 20）
 - AprilTag 的方向（旋轉角度、四個角的順序）以官方 AprilRobotics tag36h11 圖片為準；OpenCV／ArUco 產生的 tag36h11 圖案方向相差 180°。
 - AprilTag **不估算距離與 3D 姿態**（需要鏡頭校正，留待之後的版本）。
+- 人臉偵測（M3）：Espressif `human_face_detect`（MSR+MNP 兩階段）；信心度 = 分數 ×100，`face.threshold` 以下不回報。第一階段固定 0.5 的分數門檻，所以 `face.threshold` 設在 50 以下**不會多找到臉**。不需要學習、不能取名（LEARN／SET_NAME 回 `BAD_PARAM`，FORGET 回成功）。
 - 第二版候選：幾何形狀、人臉辨識（需學習）、固定類別物件偵測。
 
 ### 顏色學習流程
@@ -142,6 +143,8 @@ USB、UART、I2C 三種傳輸用同一套封包。
 - USB 連線先用 USB-Serial-JTAG（網頁燒錄最省事），在 M1 實測頻寬；不夠再改用 TinyUSB CDC
 - 鏡頭輸出 **RGB565**（辨識和螢幕直接用）；傳給網頁時才用軟體壓 JPEG，預覽上限每秒 10 張，M1 實測約 6 張（目標 ≥ 5，見 `docs/measurements/m1.md`），把 CPU 留給辨識
 - 效能設定：CPU 240 MHz、PSRAM 80 MHz、flash QIO 80 MHz（M1 起固定，作為量測基準）
+- 人臉模型放在 app 的 flash rodata（不改分割表），映像檔約 2.1 MiB（4 MB factory 分割區剩 47%）；開機時在其他 task 啟動前載入（約 80 ms、PSRAM 約 425 KB），失敗時功能 3 不列在 GET_INFO
+- 人臉偵測每張 44–62 ms（0–1 張臉，M3 Task 2 實測），**每張畫面都偵測**（不降頻）：TFT 不串流時 10–11 fps、Studio 串流時 7 fps，都高於 ≥ 5 fps 的目標（降頻的門檻：不串流時 TFT < 7 fps 才改成每 2 張偵測一次，`pipeline.c` 的 `FACE_EVERY`）
 
 ### 6.2 電腦軟體 `pc-app/`：MXCam Studio
 
