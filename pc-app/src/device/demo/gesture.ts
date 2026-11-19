@@ -60,11 +60,64 @@ export function drawGestureScene(ctx: CanvasRenderingContext2D, hands: DemoHand[
   for (const h of hands) drawHand(ctx, h)
 }
 
+/**
+ * A stand-in 2D context that records the extent of everything drawn (through translate/scale/rotate),
+ * ignoring line width. Used to centre each pose on its box, and by tests to check the box.
+ */
+export function createBoundsRecorder() {
+  type M = [number, number, number, number, number, number] // a b c d e f
+  let m: M = [1, 0, 0, 1, 0, 0]
+  const stack: M[] = []
+  const b = { minX: Infinity, minY: Infinity, maxX: -Infinity, maxY: -Infinity }
+  const mul = (n: M): M => [
+    m[0] * n[0] + m[2] * n[1], m[1] * n[0] + m[3] * n[1],
+    m[0] * n[2] + m[2] * n[3], m[1] * n[2] + m[3] * n[3],
+    m[0] * n[4] + m[2] * n[5] + m[4], m[1] * n[4] + m[3] * n[5] + m[5],
+  ]
+  const pt = (x: number, y: number) => {
+    const X = m[0] * x + m[2] * y + m[4]
+    const Y = m[1] * x + m[3] * y + m[5]
+    b.minX = Math.min(b.minX, X); b.maxX = Math.max(b.maxX, X)
+    b.minY = Math.min(b.minY, Y); b.maxY = Math.max(b.maxY, Y)
+  }
+  const ctx = {
+    save: () => void stack.push(m),
+    restore: () => void (m = stack.pop() ?? m),
+    translate: (x: number, y: number) => void (m = mul([1, 0, 0, 1, x, y])),
+    scale: (x: number, y: number) => void (m = mul([x, 0, 0, y, 0, 0])),
+    rotate: (a: number) => void (m = mul([Math.cos(a), Math.sin(a), -Math.sin(a), Math.cos(a), 0, 0])),
+    roundRect: (x: number, y: number, w: number, h: number) => {
+      pt(x, y); pt(x + w, y); pt(x, y + h); pt(x + w, y + h)
+    },
+    arc: (x: number, y: number, r: number) => {
+      pt(x - r, y - r); pt(x + r, y - r); pt(x - r, y + r); pt(x + r, y + r)
+    },
+    moveTo: pt,
+    lineTo: pt,
+    beginPath() {}, fill() {}, stroke() {}, fillRect() {},
+    createLinearGradient: () => ({ addColorStop() {} }),
+    fillStyle: '', strokeStyle: '', lineWidth: 1, lineCap: 'butt',
+  }
+  return { ctx: ctx as unknown as CanvasRenderingContext2D, bounds: () => ({ ...b }) }
+}
+
 function drawHand(ctx: CanvasRenderingContext2D, h: DemoHand) {
   const u = h.size / 90 // 1 unit = 1 px at the default size
+  // The poses differ in height (a fist is much shorter than an open hand), so measure this pose
+  // and centre its drawing on the box centre (h.x, h.y).
+  const rec = createBoundsRecorder()
+  drawPose(rec.ctx, h.gesture)
+  const lb = rec.bounds()
   ctx.save()
-  ctx.translate(h.x, h.y + 10 * u)
+  ctx.translate(h.x - ((lb.minX + lb.maxX) / 2) * u, h.y - ((lb.minY + lb.maxY) / 2) * u)
   ctx.scale(u, u)
+  drawPose(ctx, h.gesture)
+  ctx.restore()
+}
+
+/** One pose in local units, origin at the palm's top centre area. */
+function drawPose(ctx: CanvasRenderingContext2D, gesture: number) {
+  const h = { gesture }
   ctx.fillStyle = SKIN
   ctx.strokeStyle = OUTLINE
   ctx.lineWidth = 2
@@ -128,5 +181,4 @@ function drawHand(ctx: CanvasRenderingContext2D, h: DemoHand) {
     finger(12, -34)
     finger(20, -30)
   }
-  ctx.restore()
 }

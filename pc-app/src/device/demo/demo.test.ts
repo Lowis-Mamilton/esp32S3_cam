@@ -1,6 +1,6 @@
 import { expect, test } from 'vitest'
 import { defaultParams, type FunctionParams, type LearnedId } from '../types'
-import { gestureSceneAt, recognizeGestures, type DemoHand } from './gesture'
+import { createBoundsRecorder, drawGestureScene, gestureSceneAt, recognizeGestures, type DemoHand } from './gesture'
 import { DemoLearnError, colorAt, matchLearned, recognize } from './recognize'
 import { sceneAt, type SceneObject } from './scene'
 
@@ -212,4 +212,21 @@ test('recognizeGestures keeps maxHands by hand score', () => {
   const hands = [hand({ x: 50, handScore: 60 }), hand({ x: 150, handScore: 95 }), hand({ x: 250, handScore: 80 })]
   expect(recognizeGestures(hands, gp({ maxHands: 1 })).map((r) => r.x)).toEqual([150])
   expect(recognizeGestures(hands, gp({ maxHands: 2 })).map((r) => r.x)).toEqual([150, 250])
+})
+
+test('the gesture box encloses the drawn hand, for every pose and size', () => {
+  for (let gesture = 0; gesture <= 9; gesture++) {
+    for (const size of [90, 60]) {
+      const h = hand({ x: 140, y: 151, size, gesture })
+      const rec = createBoundsRecorder()
+      drawGestureScene(rec.ctx, [h])
+      const b = rec.bounds()
+      const [box] = recognizeGestures([h], gp())
+      const l = box.x - box.width / 2
+      const r = box.x + box.width / 2
+      const t = box.y - box.height / 2
+      const bt = box.y + box.height / 2
+      expect([gesture, b.minX >= l, b.maxX <= r, b.minY >= t, b.maxY <= bt]).toEqual([gesture, true, true, true, true])
+    }
+  }
 })
