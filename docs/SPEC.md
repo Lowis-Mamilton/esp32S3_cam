@@ -74,7 +74,7 @@
 | USB | OTG 孔＝原生 USB（網頁連線、燒錄）；TTL 孔＝UART0（開發者除錯訊息） |
 | 接 R4：I2C | SDA=42、SCL=41（板上 OLED 排針） |
 | 接 R4：UART | TX/RX=GPIO1/2（須拔掉跳線帽 P7、P8，電位器與 DHT11 停用） |
-| 電位轉換 | 第一版用現成 BSS138 雙向模組＋杜邦線 |
+| 電位轉換 | 驗證階段用現成 BSS138 雙向模組＋杜邦線；打樣版改成板上電位轉換（見 `docs/hardware-requirements.md`） |
 | 狀態燈 | WS2812 RGB LED（GPIO48）：藍＝待機、綠＝偵測到目標、紅＝錯誤 |
 | TF 卡 | 第一版不使用；GPIO38/39/40 保留備用 |
 
