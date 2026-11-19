@@ -85,6 +85,6 @@ direct_dependencies:
 - espressif/esp_lcd_ili9341
 - espressif/esp_new_jpeg
 - espressif/led_strip
-manifest_hash: 305fc44a6618db256d41e7558e08755cee54cf666b8d0ed7e4cc418490aec755
+manifest_hash: 68c3590d686d0402e37bfb6de32615b85038983d64a5e08a87ba9cb0053f89c8
 target: esp32s3
 version: 2.0.0

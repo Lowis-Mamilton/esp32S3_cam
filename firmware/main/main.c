@@ -39,9 +39,7 @@ static void build_info(mxp_info_t *info)
     info->frame_width = MXCAM_LCD_W;
     info->frame_height = MXCAM_LCD_H;
     info->max_results = MXP_MAX_RESULTS;
-    info->function_count = 2; /* face (3) arrives in M3 */
-    info->function_ids[0] = MXP_FUNC_COLOR;
-    info->function_ids[1] = MXP_FUNC_APRILTAG;
+    info->function_count = 0; /* filled by mxs_set_capabilities from what initialised */
 }
 
 /* Camera failed but the panel works: show why (the pipeline is not running). */
@@ -87,14 +85,22 @@ void app_main(void)
         ESP_LOGE(TAG, "camera init failed");
         boot_error = "CAMERA INIT FAILED";
     }
-    if (!mxt_init()) {
-        ESP_LOGE(TAG, "AprilTag init failed (no memory?)");
-        if (!boot_error) boot_error = "APRILTAG INIT FAILED";
-    }
+    /* Not a boot error: colour still works; AprilTag is just left out of
+     * GET_INFO (SET_FUNCTION 2 -> BAD_PARAM). LED stays blue, log only. */
+    bool tag_ok = mxt_init();
+    if (!tag_ok) ESP_LOGE(TAG, "AprilTag init failed (no memory?): function 2 disabled");
 
     mxp_info_t info;
     build_info(&info);
     mxs_init(&s_state, &info, &s_data);
+    /* GET_INFO lists only functions that can run; the link is not started yet,
+     * so no lock is needed here. */
+    uint8_t caps[2], n_caps = 0;
+    if (display_ok && camera_ok) {
+        caps[n_caps++] = MXP_FUNC_COLOR;
+        if (tag_ok) caps[n_caps++] = MXP_FUNC_APRILTAG;
+    }
+    mxs_set_capabilities(&s_state, caps, n_caps);
     if (encoder_start() != ESP_OK) {
         ESP_LOGE(TAG, "encoder start failed (no FRAME pushes)");
         if (!boot_error) boot_error = "JPEG ENCODER FAILED";
@@ -113,6 +119,9 @@ void app_main(void)
         run_pipeline = false;
         boot_error = "PIPELINE START FAILED";
         status_led_set(STATUS_LED_ERROR, s_data.cfg.led);
+        mxcam_link_state_lock();
+        mxs_set_capabilities(&s_state, NULL, 0); /* nothing can run: no LEARN waits forever */
+        mxcam_link_state_unlock();
     }
     /* Without the pipeline the worker also runs the stream/host timeout. */
     if (store_worker_start(&s_state, !run_pipeline) != ESP_OK) ESP_LOGE(TAG, "store worker start failed");

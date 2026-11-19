@@ -23,6 +23,17 @@ uint8_t pushq_pending(const pushq_t *q)
   return c;
 }
 
+uint8_t pushq_drop_pending(pushq_t *q)
+{
+  uint8_t c = 0;
+  for (int i = 0; i < q->n; i++)
+    if (q->state[i] == S_READY) {
+      q->state[i] = S_FREE;
+      c++;
+    }
+  return c;
+}
+
 /* Oldest READY slot (wrap-safe), or -1. */
 static int oldest_ready(const pushq_t *q)
 {

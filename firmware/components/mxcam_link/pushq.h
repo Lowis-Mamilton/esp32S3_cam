@@ -46,6 +46,9 @@ void pushq_abort(pushq_t *q, int idx);  /* FILLING -> FREE */
 int pushq_take(pushq_t *q);             /* oldest READY -> SENDING, or -1 */
 void pushq_done(pushq_t *q, int idx);   /* SENDING -> FREE */
 uint8_t pushq_pending(const pushq_t *q); /* READY count */
+/* Discards every READY entry (e.g. stale RESULTS after a function change);
+ * SENDING and FILLING slots are untouched. Returns how many were dropped. */
+uint8_t pushq_drop_pending(pushq_t *q);
 
 #ifdef __cplusplus
 }

@@ -22,21 +22,25 @@ extern "C" {
  * (12 Mbit/s full speed) budget and encodes fast on the otherwise idle core 0. */
 #define MXS_DEFAULT_JPEG_QUALITY 60
 
-/* mxs_handle returns this instead of a size when the response is deferred
- * (LEARN on function 1): nothing is sent now; the pipeline later completes the
- * request via mxs_take_pending_learn() + mxs_complete_learn(), or it is
- * cancelled (mxs_peek_cancelled()). */
+/* mxs_handle returns this instead of a size when the response is deferred:
+ * nothing is sent now.
+ * - LEARN (function 1): the pipeline claims it (mxs_take_pending_learn) and
+ *   completes it on the next frame (mxs_finish_learn / mxs_complete_learn);
+ *   a SET_FUNCTION change or host timeout cancels it (BAD_PARAM). Either way
+ *   the response packet is queued in the state's deferred outbox and the link
+ *   sends it (mxs_peek_deferred / mxs_ack_deferred) — never the pipeline.
+ * - SAVE / FACTORY_RESET: the save worker claims them with
+ *   mxs_take_pending_store(), does the NVS work outside the state lock and
+ *   answers with mxs_complete_store(). They are never cancelled. */
 #define MXS_DEFERRED ((size_t)-1)
-/* SAVE / FACTORY_RESET are deferred the same way: the save worker claims them
- * with mxs_take_pending_store(), does the NVS work outside the state lock and
- * answers with mxs_complete_store(). They are never cancelled. */
+#define MXS_DEFERRED_QUEUE 4
+#define MXS_DEFERRED_PKT 12 /* LEARN 0xB0 (10 B) or ERROR (11 B) */
 
 /* Largest packed results payload: 6 + 8 x (12 + 18). */
 #define MXS_RESULTS_MAX (6 + MXP_MAX_RESULTS * (12 + MXP_RESULT_EXTRA_MAX))
 /* Largest response packet mxs_handle produces: GET_LEARNED for AprilTag with
  * 32 names of 48 bytes (1 + 32 x 54 payload bytes). Size `out` with this. */
 #define MXS_RESPONSE_MAX (MXP_OVERHEAD + 1 + MXST_MAX_NAMES * (6 + MXP_NAME_MAX))
-#define MXS_CANCEL_QUEUE 4
 
 /* Results the pipeline passes to mxs_complete_learn() (> 0 is the learned id). */
 #define MXS_LEARN_NO_COLOR 0 /* region has no usable colour -> BAD_PARAM */
@@ -48,6 +52,11 @@ typedef struct {
   uint8_t seq;
   mxp_learn_req_t req;
 } mxs_pending_learn_t;
+
+typedef struct {
+  uint8_t seq, len;
+  uint8_t pkt[MXS_DEFERRED_PKT];
+} mxs_deferred_pkt_t;
 
 typedef struct {
   bool active;  /* a SAVE / FACTORY_RESET is outstanding: further ones get BUSY */
@@ -75,8 +84,9 @@ typedef struct {
   uint32_t last_request_ms;
   bool has_request; /* at least one valid request received */
   mxs_pending_learn_t pending_learn;
-  uint8_t cancel_seq[MXS_CANCEL_QUEUE]; /* seqs of cancelled learns whose error is not sent yet */
-  uint8_t cancel_count;
+  mxs_deferred_pkt_t outbox[MXS_DEFERRED_QUEUE]; /* deferred responses not sent yet, oldest first */
+  uint8_t outbox_count;
+  bool results_invalidated; /* function changed: drop queued RESULTS pushes */
 } mxs_state_t;
 
 /* `data` must outlive the state; its dirty flag is cleared (freshly loaded). */
@@ -92,31 +102,37 @@ size_t mxs_handle(mxs_state_t *s, const mxp_frame_t *req, uint32_t now_ms, uint8
                   size_t out_cap);
 
 /* Pipeline claims the queued LEARN (once). The learn stays active (BUSY for new
- * ones) until mxs_complete_learn(). */
+ * ones) until it is completed or cancelled. */
 bool mxs_take_pending_learn(mxs_state_t *s, uint8_t *seq, mxp_learn_req_t *req);
-/* Builds the LEARN response for `seq` (0xB0 with the id, or ERROR BAD_PARAM /
- * FULL) and clears the pending learn. Returns 0 if no learn with that seq is
- * pending or out is too small. */
-size_t mxs_complete_learn(mxs_state_t *s, uint8_t seq, int result, uint8_t *out, size_t out_cap);
-/* A LEARN (queued OR claimed) is cancelled by a SET_FUNCTION change or a
- * host/stream timeout: its ERROR BAD_PARAM (original seq) is queued (up to
- * MXS_CANCEL_QUEUE, oldest dropped on overflow) and the learn is cleared, so a
- * claimed-but-never-completed learn cannot wedge LEARN as BUSY. A late
- * mxs_complete_learn() for a cancelled learn returns 0. The pipeline MUST call
- * mxs_complete_learn() on every path and send nothing if it returns 0.
- *
- * Delivery: peek the front packet (0 if none; seq in *seq), send it, and only
- * after a successful send call mxs_ack_cancelled(); a failed send is retried at
- * the next flush. The link flushes after every handle and on idle wakeups. */
-size_t mxs_peek_cancelled(const mxs_state_t *s, uint8_t *seq, uint8_t *out, size_t out_cap);
-void mxs_ack_cancelled(mxs_state_t *s);
+/* Queues the LEARN response for the claimed learn `seq` (0xB0 with the id for
+ * result > 0, ERROR BAD_PARAM for MXS_LEARN_NO_COLOR, FULL for MXS_LEARN_FULL)
+ * and clears it. false (nothing queued) if no learn with that seq is claimed,
+ * e.g. it was cancelled meanwhile. */
+bool mxs_complete_learn(mxs_state_t *s, uint8_t seq, int result);
+
+/* Deferred response delivery (link): peek the front packet (0 if none or
+ * out_cap is too small; seq in *seq), send it, and only after a successful
+ * send call mxs_ack_deferred(); a failed send is retried at the next flush.
+ * The outbox holds MXS_DEFERRED_QUEUE packets, the oldest is dropped on
+ * overflow. */
+size_t mxs_peek_deferred(const mxs_state_t *s, uint8_t *seq, uint8_t *out, size_t out_cap);
+void mxs_ack_deferred(mxs_state_t *s);
+
+/* Functions that actually work (set at boot from what initialised; GET_INFO
+ * lists them, SET_FUNCTION accepts only them and 0). If the current function
+ * is no longer available it falls back to 0. */
+void mxs_set_capabilities(mxs_state_t *s, const uint8_t *ids, uint8_t n);
+
+/* true once after a function change: queued RESULTS pushes are stale. The
+ * link calls it under the state lock after every request. */
+bool mxs_take_results_invalidated(mxs_state_t *s);
 
 /* Pipeline-side LEARN completion: if `seq` is still the claimed learn, learns
  * `rgb` (NULL = the region had no usable colour) into data via
- * mxst_learn_color with the current tolerance, marks data dirty on success
- * and returns the response packet (like mxs_complete_learn). Returns 0 and
- * changes nothing when the learn was cancelled meanwhile. */
-size_t mxs_finish_learn(mxs_state_t *s, uint8_t seq, const uint8_t *rgb, uint8_t *out, size_t out_cap);
+ * mxst_learn_color with the current tolerance (dirty only if the colours
+ * changed) and queues the response like mxs_complete_learn. false and no
+ * change when the learn was cancelled meanwhile. */
+bool mxs_finish_learn(mxs_state_t *s, uint8_t seq, const uint8_t *rgb);
 
 /* Save worker: claims the pending SAVE / FACTORY_RESET (once). For SAVE,
  * *snapshot receives a copy of the data to write (may be NULL for a reset). */
@@ -128,7 +144,10 @@ bool mxs_take_pending_store(mxs_state_t *s, uint8_t *cmd, uint8_t *seq, mxs_data
 size_t mxs_complete_store(mxs_state_t *s, uint8_t seq, bool ok, uint8_t *out, size_t out_cap);
 
 /* Pipeline: stores the packed results of the latest processed frame for
- * GET_RESULTS (ignored when len > MXS_RESULTS_MAX). */
+ * GET_RESULTS (ignored when len > MXS_RESULTS_MAX). The caller must drop a
+ * frame processed with another function than s->function_id (checked under
+ * the same lock). A function change resets the cache to "no records" for the
+ * new function with the last frame_id. */
 void mxs_set_results(mxs_state_t *s, const uint8_t *packed, uint16_t len);
 
 /* Stops streaming when no request arrived for more than 3000 ms (and cancels a

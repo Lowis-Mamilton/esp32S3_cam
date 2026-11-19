@@ -27,7 +27,7 @@ static void worker_task(void *arg)
         if (s_tick) mxs_tick(s_state, (uint32_t)(esp_timer_get_time() / 1000));
         bool got = mxs_take_pending_store(s_state, &cmd, &seq, &snap);
         mxcam_link_state_unlock();
-        if (s_tick) mxcam_link_flush_cancelled();
+        if (s_tick) mxcam_link_flush_deferred();
         if (!got) continue;
 
         int64_t t0 = esp_timer_get_time();

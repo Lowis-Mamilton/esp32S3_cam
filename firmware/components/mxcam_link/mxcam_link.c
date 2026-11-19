@@ -111,23 +111,36 @@ bool mxcam_link_respond(uint8_t cmd, uint8_t seq, const uint8_t *payload, uint16
     return n > 0 && mxcam_link_send(buf, n);
 }
 
-void mxcam_link_flush_cancelled(void)
+void mxcam_link_flush_deferred(void)
 {
-    uint8_t out[32], seq;
-    /* One flusher at a time, so ack always pops the packet that was sent. */
+    uint8_t out[MXS_DEFERRED_PKT], seq;
+    /* One flusher at a time (RX or TX task), so ack always pops the packet that was sent. */
     if (!s_flush_mutex || xSemaphoreTake(s_flush_mutex, 0) != pdTRUE) return;
-    for (int i = 0; i < MXS_CANCEL_QUEUE; i++) {
+    for (int i = 0; i < MXS_DEFERRED_QUEUE; i++) {
         size_t n = 0;
         mxcam_link_state_lock();
-        if (s_state) n = mxs_peek_cancelled(s_state, &seq, out, sizeof(out));
+        if (s_state) n = mxs_peek_deferred(s_state, &seq, out, sizeof(out));
         mxcam_link_state_unlock();
         if (n == 0) break;
         if (!mxcam_link_send(out, n)) break; /* kept queued: retried at the next flush */
         mxcam_link_state_lock();
-        mxs_ack_cancelled(s_state);
+        mxs_ack_deferred(s_state);
         mxcam_link_state_unlock();
     }
     xSemaphoreGive(s_flush_mutex);
+}
+
+void mxcam_link_kick_deferred(void)
+{
+    /* The TX task flushes the outbox on every wakeup. Non-blocking. */
+    if (s_tx_task) xTaskNotifyGive(s_tx_task);
+}
+
+void mxcam_link_drop_results_locked(void)
+{
+    portENTER_CRITICAL(&s_push_lock);
+    pushq_drop_pending(&s_results_kind.q);
+    portEXIT_CRITICAL(&s_push_lock);
 }
 
 static push_kind_t *kind_for(uint8_t cmd)
@@ -181,6 +194,8 @@ static void tx_task(void *arg)
     push_kind_t *order[2] = { &s_results_kind, &s_frame_kind }; /* small, latency-sensitive first */
     for (;;) {
         ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+        /* Deferred responses (LEARN results / cancels) first: small and awaited. */
+        mxcam_link_flush_deferred();
         for (;;) {
             push_kind_t *k = NULL;
             int idx = -1;
@@ -219,19 +234,21 @@ static void rx_task(void *arg)
 
     for (;;) {
         int n = usb_serial_jtag_read_bytes(rx, sizeof(rx), pdMS_TO_TICKS(100));
-        /* Cancelled deferred LEARNs (timeout / function change) go out here,
-         * also on idle wakeups (n <= 0). */
-        mxcam_link_flush_cancelled();
+        /* Deferred responses (LEARN results, cancels after a timeout or
+         * function change) go out here too, also on idle wakeups (n <= 0). */
+        mxcam_link_flush_deferred();
         for (int i = 0; i < n; i++) {
             mxp_frame_t req;
             if (!mxp_decoder_feed(&dec, rx[i], &req)) continue;
             mxcam_link_state_lock();
             size_t m = mxs_handle(s_state, &req, now_ms(), out, sizeof(out));
+            /* Function changed: queued RESULTS were computed for the old one. */
+            if (mxs_take_results_invalidated(s_state)) mxcam_link_drop_results_locked();
             mxcam_link_state_unlock();
             /* MXS_DEFERRED: the pipeline answers later (mxcam_link_send/respond).
              * A send failure: host will time out and retry. */
             if (m > 0 && m != MXS_DEFERRED) mxcam_link_send(out, m);
-            mxcam_link_flush_cancelled();
+            mxcam_link_flush_deferred();
         }
     }
 }

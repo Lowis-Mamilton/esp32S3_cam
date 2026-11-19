@@ -41,14 +41,22 @@ bool mxcam_link_send(const uint8_t *data, size_t len);
 bool mxcam_link_push(uint8_t cmd, const uint8_t *payload, uint16_t len);
 
 /* Sends a response packet (cmd is the response byte, e.g. 0xB0) through the
- * budgeted path; for deferred responses, callable from any task. Returns false
+ * budgeted path; callable from any core-0 task (it blocks up to ~200 ms). Returns false
  * (and logs) when the payload exceeds MXCAM_LINK_RESPOND_MAX_PAYLOAD or the send fails. */
 #define MXCAM_LINK_RESPOND_MAX_PAYLOAD 100
 bool mxcam_link_respond(uint8_t cmd, uint8_t seq, const uint8_t *payload, uint16_t len);
 
-/* Sends the BAD_PARAM for a cancelled deferred LEARN, if any. The RX task calls
- * this itself; call it too after anything that may cancel (e.g. mxs_tick). */
-void mxcam_link_flush_cancelled(void);
+/* Sends queued deferred responses (mxs_peek_deferred: LEARN results and
+ * cancellations), acking each after a successful send. The RX task calls it
+ * after every request and on idle wakeups (<= 100 ms), the TX task on every
+ * wakeup. Blocking (sends); never call it from the pipeline. */
+void mxcam_link_flush_deferred(void);
+/* Non-blocking: wakes the TX task, which flushes the deferred responses. For
+ * the pipeline after it queued one (mxs_finish_learn). */
+void mxcam_link_kick_deferred(void);
+/* Drops queued (not yet sending) RESULTS pushes. Call with the state lock held
+ * when mxs_take_results_invalidated() reports a function change. */
+void mxcam_link_drop_results_locked(void);
 
 /* Since the last call: pushes dropped by the queue policy, dropped for exceeding
  * the size cap, and failed to send. */

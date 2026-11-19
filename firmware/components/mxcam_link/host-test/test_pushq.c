@@ -110,6 +110,29 @@ static void test_budget(void)
   CHECK(PUSHQ_MAX_FRAME_PAYLOAD == 48 * 1024);
 }
 
+/* Function change: queued (READY) entries are discarded, one being sent and one
+ * being filled are left alone. */
+static void test_drop_pending(void)
+{
+  pushq_t q;
+  pushq_init(&q, 3, 2);
+  bool d;
+  int a = put(&q, &d);
+  int s = pushq_take(&q); /* a is SENDING */
+  CHECK(s == a);
+  put(&q, &d);
+  CHECK(pushq_pending(&q) == 1);
+  int f = pushq_acquire(&q, &d); /* FILLING */
+  CHECK(pushq_drop_pending(&q) == 1);
+  CHECK(pushq_pending(&q) == 0 && pushq_take(&q) == -1);
+  pushq_commit(&q, f); /* the filler finishes normally */
+  CHECK(pushq_pending(&q) == 1);
+  pushq_done(&q, s);
+  CHECK(pushq_drop_pending(&q) == 1 && pushq_drop_pending(&q) == 0);
+  /* all slots are usable again */
+  CHECK(put(&q, &d) >= 0 && put(&q, &d) >= 0 && !d);
+}
+
 int main(void)
 {
   test_frame_policy();
@@ -117,6 +140,7 @@ int main(void)
   test_latest_wins();
   test_abort_and_order();
   test_budget();
+  test_drop_pending();
   if (g_fail) {
     printf("%d of %d checks FAILED\n", g_fail, g_checks);
     return 1;

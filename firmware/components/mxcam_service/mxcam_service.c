@@ -42,6 +42,7 @@ static size_t handle_forget(mxs_state_t *s, const mxp_frame_t *req, uint8_t *out
   if (req->len != 3) return reply_err(req, MXP_ERR_BAD_LENGTH, out, out_cap);
   uint8_t fn = req->payload[0];
   uint16_t id = get_u16(req->payload + 1);
+  uint8_t nc = s->data->n_colors, nn = s->data->n_names; /* forgetting only ever removes */
   if (fn == MXP_FUNC_COLOR) {
     if (id == 0xFFFF) mxst_forget_color(s->data, 0xFF);
     else if (id >= 1 && id <= MXST_MAX_COLORS) mxst_forget_color(s->data, (uint8_t)id);
@@ -50,7 +51,7 @@ static size_t handle_forget(mxs_state_t *s, const mxp_frame_t *req, uint8_t *out
   } else {
     return reply_err(req, MXP_ERR_BAD_PARAM, out, out_cap);
   }
-  mark_dirty(s);
+  if (s->data->n_colors != nc || s->data->n_names != nn) mark_dirty(s);
   return reply(req, NULL, 0, out, out_cap);
 }
 
@@ -70,6 +71,10 @@ static size_t handle_set_name(mxs_state_t *s, const mxp_frame_t *req, uint8_t *o
   } else {
     return reply_err(req, MXP_ERR_BAD_PARAM, out, out_cap);
   }
+  uint8_t old_len = 0;
+  const char *old = mxst_get_name(s->data, sn.function_id, sn.id, &old_len);
+  bool same = old ? (old_len == sn.name_len && memcmp(old, sn.name, sn.name_len) == 0) : sn.name_len == 0;
+  if (same) return reply(req, NULL, 0, out, out_cap);
   /* key and UTF-8 were checked above, so false means the name table is full */
   if (!mxst_set_name(s->data, sn.function_id, sn.id, sn.name, sn.name_len))
     return reply_err(req, MXP_ERR_FULL, out, out_cap);
@@ -153,24 +158,93 @@ static size_t handle_set_config(mxs_state_t *s, const mxp_frame_t *req, uint8_t 
   mxp_config_t cfg;
   if (!mxp_unpack_config(req->payload, req->len, &cfg)) /* config_version != 1 */
     return reply_err(req, MXP_ERR_BAD_PARAM, out, out_cap);
-  s->data->cfg = cfg; /* clamped / fallen back by the codec */
-  mark_dirty(s);
+  /* Compare the packed forms (no struct padding), dirty excluded. */
+  uint8_t a[MXP_CONFIG_SIZE], b[MXP_CONFIG_SIZE];
+  mxp_config_t cur = s->data->cfg;
+  cur.dirty = 0;
+  mxp_pack_config(&cur, a);
+  mxp_pack_config(&cfg, b); /* cfg.dirty is 0 from unpack */
+  if (memcmp(a, b, sizeof(a)) != 0) {
+    cfg.dirty = s->data->cfg.dirty;
+    s->data->cfg = cfg; /* clamped / fallen back by the codec */
+    mark_dirty(s);
+  }
   uint8_t c[MXP_CONFIG_SIZE];
   mxp_pack_config(&s->data->cfg, c);
   return reply(req, c, MXP_CONFIG_SIZE, out, out_cap);
 }
 
-/* Cancel the pending LEARN (queued or claimed); its BAD_PARAM goes out via mxs_peek_cancelled. */
+/* Queue a deferred response packet (sent by the link's flush). Full: the
+ * oldest is dropped (the host times out on it). */
+static void outbox_push_packet(mxs_state_t *s, uint8_t seq, uint8_t cmd, const uint8_t *payload,
+                               uint16_t len, bool is_error, uint8_t code)
+{
+  if (s->outbox_count == MXS_DEFERRED_QUEUE) {
+    memmove(&s->outbox[0], &s->outbox[1], sizeof(s->outbox[0]) * (MXS_DEFERRED_QUEUE - 1));
+    s->outbox_count--;
+  }
+  mxs_deferred_pkt_t *o = &s->outbox[s->outbox_count];
+  size_t n = is_error ? mxp_encode_error(seq, cmd, code, o->pkt, sizeof(o->pkt))
+                      : mxp_encode(MXP_RESPONSE(cmd), seq, payload, len, o->pkt, sizeof(o->pkt));
+  if (n == 0) return; /* cannot happen: packets are at most 11 bytes */
+  o->len = (uint8_t)n;
+  o->seq = seq;
+  s->outbox_count++;
+}
+
+/* Cancel the pending LEARN (queued or claimed); its BAD_PARAM is queued. */
 static void cancel_learn(mxs_state_t *s)
 {
   if (s->pending_learn.active) {
-    if (s->cancel_count == MXS_CANCEL_QUEUE) { /* full: drop the oldest */
-      memmove(s->cancel_seq, s->cancel_seq + 1, MXS_CANCEL_QUEUE - 1);
-      s->cancel_count--;
-    }
-    s->cancel_seq[s->cancel_count++] = s->pending_learn.seq;
+    outbox_push_packet(s, s->pending_learn.seq, MXP_CMD_LEARN, NULL, 0, true, MXP_ERR_BAD_PARAM);
     s->pending_learn.active = false;
   }
+}
+
+static bool function_available(const mxs_state_t *s, uint8_t fn)
+{
+  if (fn == MXP_FUNC_NONE) return true;
+  for (int i = 0; i < s->info.function_count; i++)
+    if (s->info.function_ids[i] == fn) return true;
+  return false;
+}
+
+static uint32_t cached_frame_id(const mxs_state_t *s)
+{
+  if (s->results_len < 4) return 0;
+  return (uint32_t)s->results[0] | ((uint32_t)s->results[1] << 8) | ((uint32_t)s->results[2] << 16) |
+         ((uint32_t)s->results[3] << 24);
+}
+
+/* Function switch: cancel a LEARN, reset GET_RESULTS to "no records" for the
+ * new function (keeping the last frame_id) and flag pending RESULTS pushes. */
+static void change_function(mxs_state_t *s, uint8_t fn)
+{
+  if (s->function_id == fn) return;
+  cancel_learn(s);
+  mxp_results_t none;
+  memset(&none, 0, sizeof(none));
+  none.frame_id = cached_frame_id(s);
+  none.function_id = fn;
+  size_t n = mxp_pack_results(&none, s->results, sizeof(s->results));
+  s->results_len = (uint16_t)n;
+  s->results_invalidated = true;
+  s->function_id = fn;
+}
+
+void mxs_set_capabilities(mxs_state_t *s, const uint8_t *ids, uint8_t n)
+{
+  if (n > sizeof(s->info.function_ids)) n = sizeof(s->info.function_ids);
+  s->info.function_count = n;
+  if (n) memcpy(s->info.function_ids, ids, n);
+  if (!function_available(s, s->function_id)) change_function(s, MXP_FUNC_NONE);
+}
+
+bool mxs_take_results_invalidated(mxs_state_t *s)
+{
+  bool v = s->results_invalidated;
+  s->results_invalidated = false;
+  return v;
 }
 
 size_t mxs_handle(mxs_state_t *s, const mxp_frame_t *req, uint32_t now_ms, uint8_t *out,
@@ -193,10 +267,9 @@ size_t mxs_handle(mxs_state_t *s, const mxp_frame_t *req, uint32_t now_ms, uint8
     return reply(req, NULL, 0, out, out_cap);
   case MXP_CMD_SET_FUNCTION: {
     if (req->len != 1) return reply_err(req, MXP_ERR_BAD_LENGTH, out, out_cap);
-    /* Face (3) arrives in M3. */
-    if (req->payload[0] > MXP_FUNC_APRILTAG) return reply_err(req, MXP_ERR_BAD_PARAM, out, out_cap);
-    if (s->function_id != req->payload[0]) cancel_learn(s);
-    s->function_id = req->payload[0];
+    /* Only functions that initialised (GET_INFO's list) and 0; face (3) arrives in M3. */
+    if (!function_available(s, req->payload[0])) return reply_err(req, MXP_ERR_BAD_PARAM, out, out_cap);
+    change_function(s, req->payload[0]);
     return reply(req, &s->function_id, 1, out, out_cap);
   }
   case MXP_CMD_GET_FUNCTION:
@@ -268,41 +341,34 @@ bool mxs_take_pending_learn(mxs_state_t *s, uint8_t *seq, mxp_learn_req_t *req)
   return true;
 }
 
-size_t mxs_complete_learn(mxs_state_t *s, uint8_t seq, int result, uint8_t *out, size_t out_cap)
+bool mxs_complete_learn(mxs_state_t *s, uint8_t seq, int result)
 {
-  /* Only a claimed learn can be completed; a cancelled one is gone (returns 0). */
-  if (!s->pending_learn.active || !s->pending_learn.claimed || s->pending_learn.seq != seq) return 0;
-  size_t n;
+  /* Only a claimed learn can be completed; a cancelled one is gone. */
+  if (!s->pending_learn.active || !s->pending_learn.claimed || s->pending_learn.seq != seq) return false;
   if (result > 0 && result <= 255) {
     uint8_t id = (uint8_t)result;
-    n = mxp_encode(MXP_RESPONSE(MXP_CMD_LEARN), seq, &id, 1, out, out_cap);
+    outbox_push_packet(s, seq, MXP_CMD_LEARN, &id, 1, false, 0);
   } else {
     uint8_t code = result == MXS_LEARN_FULL ? MXP_ERR_FULL : MXP_ERR_BAD_PARAM;
-    n = mxp_encode_error(seq, MXP_CMD_LEARN, code, out, out_cap);
+    outbox_push_packet(s, seq, MXP_CMD_LEARN, NULL, 0, true, code);
   }
-  if (n > 0) s->pending_learn.active = false;
-  return n;
+  s->pending_learn.active = false;
+  return true;
 }
 
-size_t mxs_finish_learn(mxs_state_t *s, uint8_t seq, const uint8_t *rgb, uint8_t *out, size_t out_cap)
+bool mxs_finish_learn(mxs_state_t *s, uint8_t seq, const uint8_t *rgb)
 {
-  if (!s->pending_learn.active || !s->pending_learn.claimed || s->pending_learn.seq != seq) return 0;
+  if (!s->pending_learn.active || !s->pending_learn.claimed || s->pending_learn.seq != seq) return false;
   int result = MXS_LEARN_NO_COLOR;
-  mxc_learned_t colors[MXST_MAX_COLORS]; /* restored if the response cannot be built */
-  uint8_t n_colors = s->data->n_colors;
-  memcpy(colors, s->data->colors, sizeof(colors));
   if (rgb) {
+    mxc_learned_t before[MXST_MAX_COLORS];
+    uint8_t n_before = s->data->n_colors;
+    memcpy(before, s->data->colors, sizeof(before));
     int r = mxst_learn_color(s->data, rgb, s->data->cfg.tolerance);
     result = r > 0 ? r : (r == MXST_LEARN_FULL ? MXS_LEARN_FULL : MXS_LEARN_NO_COLOR);
+    if (s->data->n_colors != n_before || memcmp(before, s->data->colors, sizeof(before)) != 0) mark_dirty(s);
   }
-  size_t n = mxs_complete_learn(s, seq, result, out, out_cap);
-  if (n == 0) {
-    memcpy(s->data->colors, colors, sizeof(colors));
-    s->data->n_colors = n_colors;
-  } else if (result > 0) {
-    mark_dirty(s);
-  }
-  return n;
+  return mxs_complete_learn(s, seq, result);
 }
 
 bool mxs_take_pending_store(mxs_state_t *s, uint8_t *cmd, uint8_t *seq, mxs_data_t *snapshot)
@@ -340,19 +406,19 @@ void mxs_set_results(mxs_state_t *s, const uint8_t *packed, uint16_t len)
   s->results_len = len;
 }
 
-size_t mxs_peek_cancelled(const mxs_state_t *s, uint8_t *seq, uint8_t *out, size_t out_cap)
+size_t mxs_peek_deferred(const mxs_state_t *s, uint8_t *seq, uint8_t *out, size_t out_cap)
 {
-  if (s->cancel_count == 0) return 0;
-  size_t n = mxp_encode_error(s->cancel_seq[0], MXP_CMD_LEARN, MXP_ERR_BAD_PARAM, out, out_cap);
-  if (n > 0) *seq = s->cancel_seq[0];
-  return n;
+  if (s->outbox_count == 0 || out_cap < s->outbox[0].len) return 0;
+  memcpy(out, s->outbox[0].pkt, s->outbox[0].len);
+  *seq = s->outbox[0].seq;
+  return s->outbox[0].len;
 }
 
-void mxs_ack_cancelled(mxs_state_t *s)
+void mxs_ack_deferred(mxs_state_t *s)
 {
-  if (s->cancel_count == 0) return;
-  memmove(s->cancel_seq, s->cancel_seq + 1, (size_t)s->cancel_count - 1);
-  s->cancel_count--;
+  if (s->outbox_count == 0) return;
+  memmove(&s->outbox[0], &s->outbox[1], sizeof(s->outbox[0]) * (size_t)(s->outbox_count - 1));
+  s->outbox_count--;
 }
 
 void mxs_tick(mxs_state_t *s, uint32_t now_ms)

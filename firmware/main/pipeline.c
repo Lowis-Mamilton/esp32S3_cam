@@ -40,13 +40,96 @@ static const uint16_t k_id_colors[8] = {
 
 static const char *const k_fn_names[] = { "NONE", "COLOR", "TAG" };
 
+#ifdef MXCAM_TAG_BENCH
+/* Optional on-board benchmark (off by default; build with
+ * -DMXCAM_TAG_BENCH, e.g. target_compile_definitions in main/CMakeLists.txt):
+ * in TAG mode it cycles through detector variants every BENCH_MS and logs one
+ * "bench" line per variant (TFT fps, stage times, internal heap minimum).
+ * Used for the Task 6 measurements; it changes the detector settings, so
+ * never ship it enabled. */
+#include "mxt_alloc.h"
+#define BENCH_MS 8000
+typedef struct {
+    const char *name;
+    uint8_t half;
+    float dec;
+    uint8_t psram;
+    uint8_t wb;
+    uint8_t refine;
+    uint8_t minpix;
+    uint8_t nmax;
+    uint8_t mse;
+} bench_t;
+static const bench_t k_bench[] = {
+    { "d2 wb20 (default)", 0, 2, 1, 20, 1, 5, 10, 10 },
+    { "d2 wb30", 0, 2, 1, 30, 1, 5, 10, 10 },
+    { "d3 wb20", 0, 3, 1, 20, 1, 5, 10, 10 },
+    { "half wb20", 1, 1, 1, 20, 1, 5, 10, 10 },
+    { "d2 wb5 (upstream)", 0, 2, 1, 5, 1, 5, 10, 10 },
+};
+#define N_BENCH (int)(sizeof(k_bench) / sizeof(k_bench[0]))
+static int s_bi = -1;
+static int64_t s_bstart;
+static unsigned s_bframes;
+static uint64_t s_bsum;
+static uint32_t s_bmax;
+static uint64_t s_bst[9];
+
+static void bench_frame_start(void)
+{
+    int64_t now = esp_timer_get_time();
+    if (s_bi >= 0 && now - s_bstart < BENCH_MS * 1000LL) return;
+    if (s_bi >= 0 && s_bframes > 0) {
+        double secs = (double)(now - s_bstart) / 1e6;
+        unsigned f = s_bframes;
+        ESP_LOGI("bench", "[%s] tft_fps=%.1f proc_ms=%u/%u gray=%u dec=%u thr=%u uf=%u clu=%u fit=%u decode=%u oth=%u nqx10=%u imin=%u",
+                 k_bench[s_bi].name, f / secs, (unsigned)(s_bsum / f / 1000), (unsigned)(s_bmax / 1000),
+                 (unsigned)(s_bst[0] / f), (unsigned)(s_bst[1] / f), (unsigned)(s_bst[2] / f), (unsigned)(s_bst[3] / f),
+                 (unsigned)(s_bst[4] / f), (unsigned)(s_bst[5] / f), (unsigned)(s_bst[6] / f), (unsigned)(s_bst[7] / f),
+                 (unsigned)(s_bst[8] * 10 / f), (unsigned)heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL));
+        heap_caps_monitor_local_minimum_free_size_stop();
+    }
+    s_bi = (s_bi + 1) % N_BENCH;
+    const bench_t *b = &k_bench[s_bi];
+    mxt_alloc_set_mode(b->psram ? MXT_ALLOC_PSRAM : MXT_ALLOC_DEFAULT);
+    mxt_set_quad_decimate(b->dec);
+    mxt_tuning_t t;
+    mxt_get_tuning(&t);
+    t.half_res = b->half;
+    t.min_white_black_diff = b->wb;
+    t.refine_edges = b->refine;
+    t.min_cluster_pixels = b->minpix;
+    t.max_nmaxima = b->nmax;
+    t.max_line_fit_mse = b->mse;
+    mxt_set_tuning(&t);
+    heap_caps_monitor_local_minimum_free_size_start();
+    s_bstart = now;
+    s_bframes = 0;
+    s_bsum = 0;
+    s_bmax = 0;
+    memset(s_bst, 0, sizeof(s_bst));
+}
+
+static void bench_frame_end(uint32_t proc_us)
+{
+    mxt_profile_t p;
+    mxt_last_profile(&p);
+    s_bframes++;
+    s_bsum += proc_us;
+    if (proc_us > s_bmax) s_bmax = proc_us;
+    uint32_t v[9] = { p.gray_us, p.decimate_us, p.threshold_us, p.unionfind_us, p.clusters_us,
+                      p.fitquads_us, p.decode_us, p.other_us, p.nquads };
+    for (int i = 0; i < 9; i++) s_bst[i] += v[i];
+}
+#endif
+
 static mxs_state_t *s_state;
 static const char *s_boot_error;
 
 /* Per-frame copy of what the pipeline needs from the shared state. */
 typedef struct {
     uint32_t now_ms;
-    bool connected, want_frames, want_results, streaming;
+    bool connected, want_frames, streaming;
     uint8_t fps, quality, fn;
     mxp_config_t cfg;
     mxc_learned_t colors[MXST_MAX_COLORS];
@@ -95,11 +178,13 @@ static void pipeline_task(void *arg)
     int64_t t0 = esp_timer_get_time();
     int frames = 0, fps = 0;
     /* Cumulative error counters, logged once per second. */
-    unsigned grab_fail = 0, bad_size = 0, lcd_err = 0, results_push_fail = 0;
+    unsigned grab_fail = 0, bad_size = 0, lcd_err = 0, results_push_fail = 0, stale_drop = 0;
+    uint64_t tag_sum[5] = { 0 }; /* gray, decimate+threshold, unionfind+clusters, fit, decode */
+    unsigned tag_frames = 0;
     uint64_t proc_sum_us = 0;
     uint32_t proc_max_us = 0;
     uint8_t last_count = 0, last_fn = 0;
-    uint32_t frame_id = 0;
+    uint32_t frame_id = 1; /* 0 means "no frame processed yet" in GET_RESULTS */
     /* Streaming schedule: next_due_ms advances by one interval per submitted
      * frame (not "now + interval") so the average rate matches max_fps even
      * when the frame period does not divide the interval. */
@@ -108,7 +193,6 @@ static void pipeline_task(void *arg)
     static frame_ctx_t ctx;
     static mxp_results_t res;
     static uint8_t packed[MXS_RESULTS_MAX];
-    uint8_t learn_out[32];
 
     for (;;) {
         camera_fb_t *fb = mxcam_camera_grab();
@@ -135,7 +219,6 @@ static void pipeline_task(void *arg)
             mxs_tick(s_state, ctx.now_ms);
             ctx.connected = mxs_host_connected(s_state, ctx.now_ms);
             ctx.want_frames = mxs_wants_frames(s_state);
-            ctx.want_results = mxs_wants_results(s_state);
             ctx.streaming = s_state->streaming;
             ctx.fps = mxs_effective_fps(s_state);
             ctx.quality = mxs_effective_quality(s_state);
@@ -162,16 +245,17 @@ static void pipeline_task(void *arg)
 
             int64_t tp = esp_timer_get_time();
             /* Deferred LEARN, claimed above: sample this frame. Every claimed
-             * learn is completed (mxs_finish_learn returns 0 if it was
-             * cancelled meanwhile, and then nothing is sent). */
+             * learn is completed; the response is queued in the state's
+             * outbox and sent by the link (core 0), so this core never
+             * blocks on USB. A learn cancelled meanwhile changes nothing. */
             if (learn) {
                 uint8_t rgb[3];
                 bool ok = mxc_sample(frame, lreq.x, lreq.y, lreq.w, lreq.h, rgb);
                 mxcam_link_state_lock();
-                size_t n = mxs_finish_learn(s_state, lseq, ok ? rgb : NULL, learn_out, sizeof(learn_out));
+                bool queued = mxs_finish_learn(s_state, lseq, ok ? rgb : NULL);
                 copy_colors(&ctx); /* detect the new colour on this very frame */
                 mxcam_link_state_unlock();
-                if (n > 0) mxcam_link_send(learn_out, n);
+                if (queued) mxcam_link_kick_deferred();
                 if (ok)
                     ESP_LOGI(TAG, "learn seq=%u rgb=%u,%u,%u", lseq, rgb[0], rgb[1], rgb[2]);
                 else
@@ -185,9 +269,25 @@ static void pipeline_task(void *arg)
                 mxc_params_t p = { ctx.cfg.tolerance, ctx.cfg.min_area, ctx.cfg.color_max };
                 res.count = mxc_detect(frame, ctx.colors, ctx.n_colors, &p, res.r, MXP_MAX_RESULTS);
             } else if (ctx.fn == MXP_FUNC_APRILTAG) {
+#ifdef MXCAM_TAG_BENCH
+                bench_frame_start();
+#endif
                 res.count = mxt_detect(frame, res.r, MXP_MAX_RESULTS, NULL);
             }
             uint32_t proc_us = (uint32_t)(esp_timer_get_time() - tp);
+#ifdef MXCAM_TAG_BENCH
+            if (ctx.fn == MXP_FUNC_APRILTAG) bench_frame_end(proc_us);
+#endif
+            if (ctx.fn == MXP_FUNC_APRILTAG) {
+                mxt_profile_t pr;
+                mxt_last_profile(&pr);
+                tag_sum[0] += pr.gray_us;
+                tag_sum[1] += pr.decimate_us + pr.threshold_us;
+                tag_sum[2] += pr.unionfind_us + pr.clusters_us;
+                tag_sum[3] += pr.fitquads_us;
+                tag_sum[4] += pr.decode_us;
+                tag_frames++;
+            }
             proc_sum_us += proc_us;
             if (proc_us > proc_max_us) proc_max_us = proc_us;
             last_count = res.count;
@@ -195,12 +295,21 @@ static void pipeline_task(void *arg)
 
             size_t plen = mxp_pack_results(&res, packed, sizeof(packed));
             if (plen > 0) {
+                /* Cache + push under the lock that SET_FUNCTION takes: a frame
+                 * processed with a function that is no longer current is
+                 * dropped, and the link's drop of queued RESULTS on a
+                 * function change cannot interleave with this push. The push
+                 * itself is non-blocking (copy into a slot). */
                 mxcam_link_state_lock();
-                mxs_set_results(s_state, packed, (uint16_t)plen);
+                if (s_state->function_id == ctx.fn) {
+                    mxs_set_results(s_state, packed, (uint16_t)plen);
+                    if (mxs_wants_results(s_state) && !mxcam_link_push(MXP_CMD_PUSH_RESULTS, packed, (uint16_t)plen))
+                        results_push_fail++;
+                } else {
+                    res.count = 0; /* stale: not cached, pushed or drawn */
+                    stale_drop++;
+                }
                 mxcam_link_state_unlock();
-                /* Non-blocking; RESULTS keeps only the latest. */
-                if (ctx.want_results && !mxcam_link_push(MXP_CMD_PUSH_RESULTS, packed, (uint16_t)plen))
-                    results_push_fail++;
             }
             frame_id++;
 
@@ -237,7 +346,8 @@ static void pipeline_task(void *arg)
             ESP_LOGI(TAG,
                      "fps=%d fn=%s proc_ms=%u/%u results=%u stream=%d | enc_ms=%u/%u jpeg=%u sent=%u "
                      "drop=%u reenc=%u big=%u enc_fail=%u | qdrop=%u qbig=%u txfail=%u rfail=%u | "
-                     "heap=%u min=%u psram=%u stack_hw=%u enc_stack_hw=%u | grab_fail=%u bad_size=%u lcd_err=%u",
+                     "heap=%u min=%u psram=%u stack_hw=%u enc_stack_hw=%u | grab_fail=%u bad_size=%u lcd_err=%u "
+                     "stale=%u",
                      fps, last_fn < 3 ? k_fn_names[last_fn] : "?", proc_avg_ms, (unsigned)(proc_max_us / 1000u),
                      last_count, streaming_now ? 1 : 0, (unsigned)es.enc_avg_ms, (unsigned)es.enc_max_ms,
                      (unsigned)es.jpeg_avg, es.frames, es.send_fail, es.reenc, es.too_big, es.enc_fail,
@@ -246,7 +356,18 @@ static void pipeline_task(void *arg)
                      (unsigned)heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL),
                      (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM),
                      (unsigned)uxTaskGetStackHighWaterMark(NULL), (unsigned)es.stack_hw, grab_fail, bad_size,
-                     lcd_err);
+                     lcd_err, stale_drop);
+            if (tag_frames) {
+                /* AprilTag stage averages (ms x10): gray, decimate+threshold,
+                 * unionfind+clusters, quad fit, decode+refine. */
+                unsigned f = tag_frames;
+                ESP_LOGI(TAG, "tag_ms_x10 gray=%u thr=%u seg=%u fit=%u decode=%u",
+                         (unsigned)(tag_sum[0] / f / 100), (unsigned)(tag_sum[1] / f / 100),
+                         (unsigned)(tag_sum[2] / f / 100), (unsigned)(tag_sum[3] / f / 100),
+                         (unsigned)(tag_sum[4] / f / 100));
+                memset(tag_sum, 0, sizeof(tag_sum));
+                tag_frames = 0;
+            }
             frames = 0;
             proc_sum_us = 0;
             proc_max_us = 0;

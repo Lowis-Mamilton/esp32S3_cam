@@ -26,6 +26,9 @@ static mxp_info_t make_info(void)
   i.frame_width = 320;
   i.frame_height = 240;
   i.max_results = 8;
+  i.function_count = 2;
+  i.function_ids[0] = 1;
+  i.function_ids[1] = 2;
   return i;
 }
 
@@ -211,6 +214,15 @@ static void decode(const uint8_t *out, size_t n, mxp_frame_t *r, uint8_t *rb, si
   CHECK(got);
 }
 
+/* Pops the front deferred response packet (as the link flush does). */
+static size_t pop_deferred(mxs_state_t *s, uint8_t *out, size_t cap)
+{
+  uint8_t seq = 0;
+  size_t n = mxs_peek_deferred(s, &seq, out, cap);
+  if (n > 0) mxs_ack_deferred(s);
+  return n;
+}
+
 static size_t learn(mxs_state_t *s, uint8_t func, uint8_t seq, uint32_t now, mxp_frame_t *r,
                     uint8_t *rb, size_t rb_cap)
 {
@@ -263,7 +275,8 @@ static void test_learn(void)
   CHECK(!mxs_take_pending_learn(&s, &seq, &req)); /* claimed once */
   /* still busy while the pipeline works on it */
   CHECK(learn(&s, 1, 11, 0, &r, rb, sizeof(rb)) != MXS_DEFERRED && r.payload[1] == MXP_ERR_BUSY);
-  n = mxs_complete_learn(&s, seq, 4, out, sizeof(out));
+  CHECK(mxs_complete_learn(&s, seq, 4));
+  n = pop_deferred(&s, out, sizeof(out));
   CHECK(n > 0);
   decode(out, n, &r, rb, sizeof(rb));
   CHECK(r.cmd == 0xB0 && r.seq == 9 && r.len == 1 && r.payload[0] == 4);
@@ -272,16 +285,18 @@ static void test_learn(void)
   /* NO_COLOR -> BAD_PARAM, FULL -> FULL */
   CHECK(learn(&s, 1, 20, 0, &r, rb, sizeof(rb)) == MXS_DEFERRED);
   CHECK(mxs_take_pending_learn(&s, &seq, &req));
-  n = mxs_complete_learn(&s, seq, MXS_LEARN_NO_COLOR, out, sizeof(out));
+  CHECK(mxs_complete_learn(&s, seq, MXS_LEARN_NO_COLOR));
+  n = pop_deferred(&s, out, sizeof(out));
   decode(out, n, &r, rb, sizeof(rb));
   CHECK(r.cmd == 0xFF && r.seq == 20 && r.payload[0] == MXP_CMD_LEARN && r.payload[1] == MXP_ERR_BAD_PARAM);
   CHECK(learn(&s, 1, 21, 0, &r, rb, sizeof(rb)) == MXS_DEFERRED);
   CHECK(mxs_take_pending_learn(&s, &seq, &req));
-  n = mxs_complete_learn(&s, seq, MXS_LEARN_FULL, out, sizeof(out));
+  CHECK(mxs_complete_learn(&s, seq, MXS_LEARN_FULL));
+  n = pop_deferred(&s, out, sizeof(out));
   decode(out, n, &r, rb, sizeof(rb));
   CHECK(r.cmd == 0xFF && r.seq == 21 && r.payload[1] == MXP_ERR_FULL);
   CHECK(!s.pending_learn.active);
-  CHECK(mxs_complete_learn(&s, 21, 1, out, sizeof(out)) == 0); /* nothing pending */
+  CHECK(!mxs_complete_learn(&s, 21, 1)); /* nothing pending */
 }
 
 static void test_learn_cancel(void)
@@ -301,28 +316,28 @@ static void test_learn_cancel(void)
   call(&s, MXP_CMD_SET_FUNCTION, 6, &zero, 1, 10, &r, rb, sizeof(rb));
   CHECK(r.cmd == 0x90);
   CHECK(!s.pending_learn.active);
-  size_t n = mxs_peek_cancelled(&s, &seq, out, sizeof(out));
+  size_t n = mxs_peek_deferred(&s, &seq, out, sizeof(out));
   CHECK(n > 0 && seq == 31);
   decode(out, n, &r, rb, sizeof(rb));
   CHECK(r.cmd == 0xFF && r.seq == 31 && r.payload[0] == MXP_CMD_LEARN && r.payload[1] == MXP_ERR_BAD_PARAM);
   /* peek does not consume: a failed send is retried by the next flush */
-  CHECK(mxs_peek_cancelled(&s, &seq, out, sizeof(out)) == n && seq == 31);
-  mxs_ack_cancelled(&s);
-  CHECK(mxs_peek_cancelled(&s, &seq, out, sizeof(out)) == 0);
+  CHECK(mxs_peek_deferred(&s, &seq, out, sizeof(out)) == n && seq == 31);
+  mxs_ack_deferred(&s);
+  CHECK(mxs_peek_deferred(&s, &seq, out, sizeof(out)) == 0);
 
   /* stream/host timeout cancels it too */
   s.function_id = 1;
   CHECK(learn(&s, 1, 32, 1000, &r, rb, sizeof(rb)) == MXS_DEFERRED);
   mxs_tick(&s, 3999);
   CHECK(s.pending_learn.active);
-  CHECK(mxs_peek_cancelled(&s, &seq, out, sizeof(out)) == 0);
+  CHECK(mxs_peek_deferred(&s, &seq, out, sizeof(out)) == 0);
   mxs_tick(&s, 4001);
   CHECK(!s.pending_learn.active);
-  n = mxs_peek_cancelled(&s, &seq, out, sizeof(out));
+  n = mxs_peek_deferred(&s, &seq, out, sizeof(out));
   CHECK(n > 0 && seq == 32);
   decode(out, n, &r, rb, sizeof(rb));
   CHECK(r.cmd == 0xFF && r.seq == 32 && r.payload[1] == MXP_ERR_BAD_PARAM);
-  mxs_ack_cancelled(&s);
+  mxs_ack_deferred(&s);
 
   /* a CLAIMED learn is cancelled too (BAD_PARAM queued), so it cannot wedge
    * LEARN as BUSY; a new LEARN is accepted afterwards. */
@@ -332,13 +347,13 @@ static void test_learn_cancel(void)
   CHECK(mxs_take_pending_learn(&s, &seq, &req));
   call(&s, MXP_CMD_SET_FUNCTION, 7, &zero, 1, 5001, &r, rb, sizeof(rb));
   CHECK(!s.pending_learn.active);
-  n = mxs_peek_cancelled(&s, &seq, out, sizeof(out));
+  n = mxs_peek_deferred(&s, &seq, out, sizeof(out));
   CHECK(n > 0 && seq == 33);
-  mxs_ack_cancelled(&s);
-  CHECK(mxs_complete_learn(&s, 33, 2, out, sizeof(out)) == 0); /* late completion is ignored */
+  mxs_ack_deferred(&s);
+  CHECK(!mxs_complete_learn(&s, 33, 2)); /* late completion is ignored */
   s.function_id = 1;
   CHECK(learn(&s, 1, 34, 5002, &r, rb, sizeof(rb)) == MXS_DEFERRED);
-  CHECK(mxs_complete_learn(&s, 34, 2, out, sizeof(out)) == 0); /* not claimed yet */
+  CHECK(!mxs_complete_learn(&s, 34, 2)); /* not claimed yet */
   CHECK(s.pending_learn.active);
 
   /* two cancels before a flush are both delivered, in order */
@@ -350,11 +365,11 @@ static void test_learn_cancel(void)
   s.function_id = 1;
   CHECK(learn(&s, 1, 41, 2, &r, rb, sizeof(rb)) == MXS_DEFERRED);
   call(&s, MXP_CMD_SET_FUNCTION, 9, &zero, 1, 3, &r, rb, sizeof(rb));
-  CHECK(mxs_peek_cancelled(&s, &seq, out, sizeof(out)) > 0 && seq == 40);
-  mxs_ack_cancelled(&s);
-  CHECK(mxs_peek_cancelled(&s, &seq, out, sizeof(out)) > 0 && seq == 41);
-  mxs_ack_cancelled(&s);
-  CHECK(mxs_peek_cancelled(&s, &seq, out, sizeof(out)) == 0);
+  CHECK(mxs_peek_deferred(&s, &seq, out, sizeof(out)) > 0 && seq == 40);
+  mxs_ack_deferred(&s);
+  CHECK(mxs_peek_deferred(&s, &seq, out, sizeof(out)) > 0 && seq == 41);
+  mxs_ack_deferred(&s);
+  CHECK(mxs_peek_deferred(&s, &seq, out, sizeof(out)) == 0);
 }
 
 /* ---- M2 commands ---- */
@@ -709,9 +724,10 @@ static void test_finish_learn(void)
   req(&s, MXP_CMD_SET_FUNCTION, 1, &one, 1);
 
   CHECK(learn(&s, 1, 70, 0, &r, rb, sizeof(rb)) == MXS_DEFERRED);
-  CHECK(mxs_finish_learn(&s, 70, red, out, sizeof(out)) == 0); /* not claimed yet */
+  CHECK(!mxs_finish_learn(&s, 70, red)); /* not claimed yet */
   CHECK(mxs_take_pending_learn(&s, &seq, &lr));
-  size_t n = mxs_finish_learn(&s, seq, red, out, sizeof(out));
+  CHECK(mxs_finish_learn(&s, seq, red));
+  size_t n = pop_deferred(&s, out, sizeof(out));
   decode(out, n, &r, rb, sizeof(rb));
   CHECK(r.cmd == 0xB0 && r.seq == 70 && r.len == 1 && r.payload[0] == 1);
   CHECK(g_data.n_colors == 1 && g_data.cfg.dirty == 1);
@@ -720,15 +736,18 @@ static void test_finish_learn(void)
   g_data.cfg.dirty = 0;
   CHECK(learn(&s, 1, 71, 0, &r, rb, sizeof(rb)) == MXS_DEFERRED);
   CHECK(mxs_take_pending_learn(&s, &seq, &lr));
-  n = mxs_finish_learn(&s, seq, red, out, sizeof(out));
+  CHECK(mxs_finish_learn(&s, seq, red));
+  n = pop_deferred(&s, out, sizeof(out));
   decode(out, n, &r, rb, sizeof(rb));
-  CHECK(r.cmd == 0xB0 && r.payload[0] == 1 && g_data.n_colors == 1 && g_data.cfg.dirty == 1);
+  /* identical rgb: nothing changed, so not dirty */
+  CHECK(r.cmd == 0xB0 && r.payload[0] == 1 && g_data.n_colors == 1 && g_data.cfg.dirty == 0);
 
   /* no colour in the region -> BAD_PARAM, data untouched */
   g_data.cfg.dirty = 0;
   CHECK(learn(&s, 1, 72, 0, &r, rb, sizeof(rb)) == MXS_DEFERRED);
   CHECK(mxs_take_pending_learn(&s, &seq, &lr));
-  n = mxs_finish_learn(&s, seq, NULL, out, sizeof(out));
+  CHECK(mxs_finish_learn(&s, seq, NULL));
+  n = pop_deferred(&s, out, sizeof(out));
   decode(out, n, &r, rb, sizeof(rb));
   CHECK(is_err(&r, MXP_CMD_LEARN, MXP_ERR_BAD_PARAM) && r.seq == 72 && g_data.cfg.dirty == 0);
 
@@ -736,17 +755,139 @@ static void test_finish_learn(void)
   CHECK(learn(&s, 1, 73, 0, &r, rb, sizeof(rb)) == MXS_DEFERRED);
   CHECK(mxs_take_pending_learn(&s, &seq, &lr));
   req(&s, MXP_CMD_SET_FUNCTION, 2, &zero, 1);
-  CHECK(mxs_finish_learn(&s, seq, green, out, sizeof(out)) == 0);
+  CHECK(!mxs_finish_learn(&s, seq, green));
   CHECK(g_data.n_colors == 1);
+  n = pop_deferred(&s, out, sizeof(out)); /* only the cancel's BAD_PARAM */
+  decode(out, n, &r, rb, sizeof(rb));
+  CHECK(is_err(&r, MXP_CMD_LEARN, MXP_ERR_BAD_PARAM) && r.seq == 73);
+  CHECK(pop_deferred(&s, out, sizeof(out)) == 0);
 
   /* full -> FULL */
   req(&s, MXP_CMD_SET_FUNCTION, 3, &one, 1);
+  g_data.n_colors = 1;
   for (uint8_t id = 2; id <= 7; id++) add_color(id, 0, 0, 0); /* placeholders: black never matches */
   CHECK(learn(&s, 1, 74, 0, &r, rb, sizeof(rb)) == MXS_DEFERRED);
   CHECK(mxs_take_pending_learn(&s, &seq, &lr));
-  n = mxs_finish_learn(&s, seq, green, out, sizeof(out));
+  CHECK(mxs_finish_learn(&s, seq, green));
+  n = pop_deferred(&s, out, sizeof(out));
   decode(out, n, &r, rb, sizeof(rb));
   CHECK(is_err(&r, MXP_CMD_LEARN, MXP_ERR_FULL) && r.seq == 74);
+}
+
+static void test_capabilities(void)
+{
+  mxs_state_t s;
+  fresh(&s);
+  uint8_t one = 1, two = 2, zero = 0;
+  /* only colour works (e.g. AprilTag init failed) */
+  const uint8_t only_color[1] = { 1 };
+  mxs_set_capabilities(&s, only_color, 1);
+  CHECK(is_err(req(&s, MXP_CMD_SET_FUNCTION, 1, &two, 1), MXP_CMD_SET_FUNCTION, MXP_ERR_BAD_PARAM));
+  CHECK(req(&s, MXP_CMD_SET_FUNCTION, 2, &one, 1)->cmd == 0x90 && s.function_id == 1);
+  const mxp_frame_t *r = req(&s, MXP_CMD_GET_INFO, 3, NULL, 0);
+  CHECK(r->cmd == 0x81 && r->len == 24 && r->payload[22] == 1 && r->payload[23] == 1);
+  /* nothing works (no pipeline): the current function falls back to 0, LEARN is refused at once */
+  mxs_set_capabilities(&s, NULL, 0);
+  CHECK(s.function_id == 0);
+  CHECK(is_err(req(&s, MXP_CMD_SET_FUNCTION, 4, &one, 1), MXP_CMD_SET_FUNCTION, MXP_ERR_BAD_PARAM));
+  CHECK(req(&s, MXP_CMD_SET_FUNCTION, 5, &zero, 1)->cmd == 0x90);
+  uint8_t lp[9] = { 1, 0, 0, 0, 0, 10, 0, 10, 0 };
+  CHECK(is_err(req(&s, MXP_CMD_LEARN, 6, lp, 9), MXP_CMD_LEARN, MXP_ERR_BAD_PARAM));
+  r = req(&s, MXP_CMD_GET_INFO, 7, NULL, 0);
+  CHECK(r->len == 23 && r->payload[22] == 0);
+}
+
+static void test_results_on_function_change(void)
+{
+  mxs_state_t s;
+  fresh(&s);
+  uint8_t one = 1, two = 2;
+  req(&s, MXP_CMD_SET_FUNCTION, 1, &two, 1);
+  CHECK(mxs_take_results_invalidated(&s)); /* 0 -> 2 is a change */
+  CHECK(!mxs_take_results_invalidated(&s));
+  mxp_results_t in;
+  memset(&in, 0, sizeof(in));
+  in.frame_id = 777;
+  in.function_id = 2;
+  in.count = 1;
+  in.r[0].id = 5;
+  uint8_t packed[MXS_RESULTS_MAX];
+  size_t n = mxp_pack_results(&in, packed, sizeof(packed));
+  mxs_set_results(&s, packed, (uint16_t)n);
+  /* same function again: cache kept */
+  req(&s, MXP_CMD_SET_FUNCTION, 2, &two, 1);
+  CHECK(!mxs_take_results_invalidated(&s));
+  const mxp_frame_t *r = req(&s, MXP_CMD_GET_RESULTS, 3, NULL, 0);
+  CHECK(r->len == n);
+  /* change: count 0, new function, last frame_id kept; pending pushes must go */
+  req(&s, MXP_CMD_SET_FUNCTION, 4, &one, 1);
+  CHECK(mxs_take_results_invalidated(&s));
+  r = req(&s, MXP_CMD_GET_RESULTS, 5, NULL, 0);
+  mxp_results_t res;
+  CHECK(r->cmd == 0xA0 && mxp_unpack_results(r->payload, r->len, &res) && res.frame_id == 777 &&
+        res.function_id == 1 && res.count == 0);
+}
+
+static void test_dirty_only_on_change(void)
+{
+  mxs_state_t s;
+  fresh(&s);
+  add_color(1, 200, 0, 0);
+  forget(&s, 1, 5, 1); /* absent colour */
+  CHECK(g_r.cmd == 0xB1 && g_data.cfg.dirty == 0);
+  forget(&s, 2, 9, 2); /* absent tag name */
+  CHECK(g_r.cmd == 0xB1 && g_data.cfg.dirty == 0);
+  uint8_t c[MXP_CONFIG_SIZE];
+  mxp_pack_config(&g_data.cfg, c);
+  CHECK(req(&s, MXP_CMD_SET_CONFIG, 3, c, sizeof(c))->cmd == 0xC1 && g_data.cfg.dirty == 0); /* identical */
+  CHECK(g_r.payload[15] == 0);
+  CHECK(set_name(&s, 2, 4, "", 0)->cmd == 0xB2 && g_data.cfg.dirty == 0); /* clearing an absent name */
+  CHECK(set_name(&s, 2, 4, "door", 4)->cmd == 0xB2 && g_data.cfg.dirty == 1);
+  g_data.cfg.dirty = 0;
+  CHECK(set_name(&s, 2, 4, "door", 4)->cmd == 0xB2 && g_data.cfg.dirty == 0); /* same name */
+  c[1] = 31;
+  CHECK(req(&s, MXP_CMD_SET_CONFIG, 4, c, sizeof(c))->cmd == 0xC1 && g_data.cfg.dirty == 1);
+  g_data.cfg.dirty = 0;
+  forget(&s, 1, 0xFFFF, 5);
+  CHECK(g_data.cfg.dirty == 1 && g_data.n_colors == 0);
+  g_data.cfg.dirty = 0;
+  forget(&s, 1, 0xFFFF, 6); /* nothing left */
+  CHECK(g_data.cfg.dirty == 0);
+}
+
+static void test_deferred_order(void)
+{
+  mxs_state_t s;
+  fresh(&s);
+  uint8_t one = 1, zero = 0, seq = 0, out[64], rb[64];
+  mxp_frame_t r;
+  mxp_learn_req_t lr;
+  const uint8_t red[3] = { 230, 20, 20 };
+  /* a learn result and a cancel queue up in order; nothing is lost if not flushed */
+  req(&s, MXP_CMD_SET_FUNCTION, 1, &one, 1);
+  CHECK(learn(&s, 1, 80, 0, &r, rb, sizeof(rb)) == MXS_DEFERRED);
+  CHECK(mxs_take_pending_learn(&s, &seq, &lr));
+  CHECK(mxs_finish_learn(&s, seq, red));
+  CHECK(learn(&s, 1, 81, 0, &r, rb, sizeof(rb)) == MXS_DEFERRED);
+  req(&s, MXP_CMD_SET_FUNCTION, 2, &zero, 1);
+  size_t n = mxs_peek_deferred(&s, &seq, out, sizeof(out));
+  CHECK(n > 0 && seq == 80);
+  CHECK(mxs_peek_deferred(&s, &seq, out, sizeof(out)) == n && seq == 80); /* not consumed by peek */
+  decode(out, n, &r, rb, sizeof(rb));
+  CHECK(r.cmd == 0xB0 && r.seq == 80 && r.payload[0] == 1);
+  mxs_ack_deferred(&s);
+  n = pop_deferred(&s, out, sizeof(out));
+  decode(out, n, &r, rb, sizeof(rb));
+  CHECK(is_err(&r, MXP_CMD_LEARN, MXP_ERR_BAD_PARAM) && r.seq == 81);
+  CHECK(pop_deferred(&s, out, sizeof(out)) == 0);
+  /* too small a buffer: 0, the packet stays queued */
+  req(&s, MXP_CMD_SET_FUNCTION, 3, &one, 1);
+  CHECK(learn(&s, 1, 82, 0, &r, rb, sizeof(rb)) == MXS_DEFERRED);
+  CHECK(mxs_take_pending_learn(&s, &seq, &lr));
+  CHECK(mxs_finish_learn(&s, seq, NULL));
+  CHECK(!s.pending_learn.active);
+  CHECK(mxs_peek_deferred(&s, &seq, out, 4) == 0);
+  CHECK(mxs_peek_deferred(&s, &seq, out, sizeof(out)) > 0 && seq == 82);
 }
 
 int main(void)
@@ -765,6 +906,10 @@ int main(void)
   test_config();
   test_save_reset();
   test_finish_learn();
+  test_capabilities();
+  test_results_on_function_change();
+  test_dirty_only_on_change();
+  test_deferred_order();
   if (g_fail) {
     printf("%d of %d checks FAILED\n", g_fail, g_checks);
     return 1;

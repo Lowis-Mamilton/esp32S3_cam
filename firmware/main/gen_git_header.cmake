@@ -4,8 +4,12 @@
 #   MXCAM_FW_GIT       7 chars for GET_INFO: short hash, or 6 chars + '+'
 #                      when the work tree is dirty; "unknown" without git
 #   MXCAM_FW_GIT_DESC  for the boot log: "<hash>" or "<hash>-dirty"
+# --no-optional-locks: never take index.lock (an IDE may run git at the same
+# time); safe.directory: CI containers check out as another user.
+get_filename_component(REPO "${REPO}" ABSOLUTE)
+set(GIT git --no-optional-locks -c "safe.directory=${REPO}" -C "${REPO}")
 execute_process(
-    COMMAND git -C "${REPO}" rev-parse --short=7 HEAD
+    COMMAND ${GIT} rev-parse --short=7 HEAD
     OUTPUT_VARIABLE hash
     OUTPUT_STRIP_TRAILING_WHITESPACE
     ERROR_QUIET
@@ -17,7 +21,7 @@ else()
     string(SUBSTRING "${hash}" 0 7 hash)
     # Tracked changes only (untracked files, e.g. editor leftovers, do not count).
     execute_process(
-        COMMAND git -C "${REPO}" status --porcelain --untracked-files=no
+        COMMAND ${GIT} status --porcelain --untracked-files=no
         OUTPUT_VARIABLE changes
         OUTPUT_STRIP_TRAILING_WHITESPACE
         ERROR_QUIET
