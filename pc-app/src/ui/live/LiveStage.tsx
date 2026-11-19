@@ -194,8 +194,8 @@ export default function LiveStage({ ref, connected, fps, kbps, fn, canLearn, onL
     <div className="stage-wrap">
       <div ref={stageRef} className={`stage${canLearn ? ' learnable' : ''}`} onMouseDown={onMouseDown}>
         <canvas ref={canvasRef} width={FRAME_W} height={FRAME_H} />
-        <div className="overlay" aria-hidden="true">
-          <div className="boxes">
+        <div className="ls-overlay" aria-hidden="true">
+          <div className="ls-boxes">
             {shown.map((r, i) => {
               // Result x/y are the box centre.
               const a = toScreen(vp, r.x - r.width / 2, r.y - r.height / 2)
@@ -207,10 +207,10 @@ export default function LiveStage({ ref, connected, fps, kbps, fn, canLearn, onL
                 width: b.px - a.px,
                 height: b.py - a.py,
               } as CSSProperties
-              return <div key={i} className={`box${r.kind === 'color' && r.id === 0 ? ' unlearned' : ''}`} style={style} />
+              return <div key={i} className={`ls-box${r.kind === 'color' && r.id === 0 ? ' unlearned' : ''}`} style={style} />
             })}
           </div>
-          <div className="tabs">
+          <div className="ls-labels">
             {shown.map((r, i) => {
               const a = toScreen(vp, r.x - r.width / 2, r.y - r.height / 2)
               const bottom = toScreen(vp, r.x, r.y + r.height / 2).py
@@ -223,14 +223,14 @@ export default function LiveStage({ ref, connected, fps, kbps, fn, canLearn, onL
               top = clamp(top, 0, Math.max(0, vp.height - TAB_H))
               const style = { '--c': idColorVar(r), left, top, width: w } as CSSProperties
               return (
-                <span key={i} className="tab" style={style}>
+                <span key={i} className="ls-label" style={style}>
                   {text}
                 </span>
               )
             })}
           </div>
-          <div className="crosshair" style={{ left: centre.px, top: centre.py }} />
-          {dragBox && <div className="drag-rect" style={dragBox} />}
+          <div className="ls-crosshair" style={{ left: centre.px, top: centre.py }} />
+          {dragBox && <div className="ls-drag" style={dragBox} />}
         </div>
         <div className="stage-stats">
           {fps.toFixed(1)} {t('fps')}
@@ -249,7 +249,7 @@ export default function LiveStage({ ref, connected, fps, kbps, fn, canLearn, onL
             {t('learnCenter')}
           </button>
           {toast ? (
-            <span role="status" className={`toast${toast.error ? ' error' : ''}`}>
+            <span role="status" className={`ls-msg${toast.error ? ' error' : ''}`}>
               {toast.text}
             </span>
           ) : (

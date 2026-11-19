@@ -249,3 +249,16 @@ test('StrictMode fresh load where the granted port fails to open shows 未連線
   expect(screen.getByText('未連線')).toBeInTheDocument()
   expect(screen.queryByText('已斷線')).not.toBeInTheDocument()
 })
+
+test('live-stage overlay classes are namespaced and do not collide with the right-panel tablist', async () => {
+  localStorage.setItem('mxcam.demo', '1')
+  const { container } = renderApp({ serial: idleSerial })
+  await screen.findByText('DEMO')
+  const tablist = screen.getByRole('tablist')
+  expect(tablist.closest('.stage')).toBeNull()
+  expect(tablist.className).toBe('tabs')
+  const stage = container.querySelector('.stage')!
+  expect(stage.querySelector('.tabs, .tab, .box, .boxes, .overlay, .crosshair, .toast')).toBeNull()
+  expect(stage.querySelector('.ls-overlay')).not.toBeNull()
+  expect(stage.querySelector('.ls-labels')).not.toBeNull()
+})

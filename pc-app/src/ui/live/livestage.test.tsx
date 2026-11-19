@@ -138,7 +138,7 @@ test('boxes carry labels and ID colours; fps/KBs shown, KB/s hidden when null', 
   const { container } = setup({ results, learned: [{ id: 1, name: '紅色積木' }], fps: 9.9, kbps: null })
   expect(screen.getByText('ID1 紅色積木')).toBeTruthy()
   expect(screen.getByText('顏色')).toBeTruthy()
-  const boxes = container.querySelectorAll<HTMLElement>('.box')
+  const boxes = container.querySelectorAll<HTMLElement>('.ls-box')
   expect(boxes[0].style.getPropertyValue('--c')).toBe('var(--id-1)')
   expect(boxes[0].style.left).toBe('20px')
   expect(boxes[0].style.width).toBe('80px')
@@ -149,7 +149,7 @@ test('boxes carry labels and ID colours; fps/KBs shown, KB/s hidden when null', 
 test('box is positioned from its centre x/y (frame rect 140..180 x 110..130)', () => {
   stubRect(640, 480) // scale 2
   const { container } = setup({ results: [{ id: 1, kind: 'color', x: 160, y: 120, width: 40, height: 20 }] })
-  const box = container.querySelector<HTMLElement>('.box')!
+  const box = container.querySelector<HTMLElement>('.ls-box')!
   expect(box.style.left).toBe('280px')
   expect(box.style.top).toBe('220px')
   expect(box.style.width).toBe('80px')
@@ -159,7 +159,7 @@ test('box is positioned from its centre x/y (frame rect 140..180 x 110..130)', (
 test('crosshair is shown even when learning is unavailable (real device)', () => {
   stubRect(640, 480)
   const { container } = setup({ canLearn: false })
-  const ch = container.querySelector<HTMLElement>('.crosshair')!
+  const ch = container.querySelector<HTMLElement>('.ls-crosshair')!
   expect(ch.style.left).toBe('320px')
   expect(ch.style.top).toBe('240px')
 })
@@ -172,12 +172,12 @@ test('tabs render in a layer after all boxes so no box covers a tab', () => {
       { id: 2, kind: 'color', x: 110, y: 110, width: 80, height: 80 },
     ],
   })
-  const boxes = container.querySelector('.boxes')!
-  const tabs = container.querySelector('.tabs')!
-  expect(boxes.querySelectorAll('.box').length).toBe(2)
-  expect(tabs.querySelectorAll('.tab').length).toBe(2)
+  const boxes = container.querySelector('.ls-boxes')!
+  const tabs = container.querySelector('.ls-labels')!
+  expect(boxes.querySelectorAll('.ls-box').length).toBe(2)
+  expect(tabs.querySelectorAll('.ls-label').length).toBe(2)
   expect(boxes.compareDocumentPosition(tabs) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
-  expect(boxes.querySelector('.tab')).toBeNull()
+  expect(boxes.querySelector('.ls-label')).toBeNull()
 })
 
 test('tabs stay inside the stage at the right edge and for negative box origins', () => {
@@ -188,7 +188,7 @@ test('tabs stay inside the stage at the right edge and for negative box origins'
       { id: 2, kind: 'color', x: 10, y: 5, width: 60, height: 40 }, // left < 0, top < 0
     ],
   })
-  const tabs = [...container.querySelectorAll<HTMLElement>('.tab')]
+  const tabs = [...container.querySelectorAll<HTMLElement>('.ls-label')]
   for (const tab of tabs) {
     const left = parseFloat(tab.style.left)
     const top = parseFloat(tab.style.top)

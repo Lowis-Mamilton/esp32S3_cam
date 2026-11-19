@@ -289,26 +289,26 @@ button {
   image-rendering: auto;
 }
 /* Overlay lives in CSS pixels on top of the 320x240 canvas so lines and text stay sharp. */
-.overlay {
+.ls-overlay {
   position: absolute;
   inset: 0;
   overflow: hidden;
   pointer-events: none;
 }
-.box {
+.ls-box {
   position: absolute;
   border: 2px solid var(--c);
   box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.45);
 }
-.box.unlearned {
+.ls-box.unlearned {
   border-width: 1px;
 }
-.tabs {
+.ls-labels {
   position: absolute;
   inset: 0;
   z-index: 2;
 }
-.tab {
+.ls-label {
   position: absolute;
   height: 18px;
   padding: 0 6px;
@@ -319,12 +319,12 @@ button {
   white-space: nowrap;
   overflow: hidden;
 }
-.boxes {
+.ls-boxes {
   position: absolute;
   inset: 0;
   z-index: 1;
 }
-.crosshair {
+.ls-crosshair {
   position: absolute;
   z-index: 3;
   width: 36px;
@@ -335,19 +335,19 @@ button {
     linear-gradient(var(--accent), var(--accent)) center / 100% 2px no-repeat;
   filter: drop-shadow(0 0 1px #000) drop-shadow(0 0 1px #000);
 }
-.drag-rect {
+.ls-drag {
   position: absolute;
   border: 1.5px dashed var(--accent);
   background: var(--accent-soft);
 }
-.toast {
+.ls-msg {
   padding: 4px 12px;
   border-radius: var(--radius);
   background: var(--surface-2);
   border: 1px solid var(--line);
   font-size: 13px;
 }
-.toast.error {
+.ls-msg.error {
   border-color: var(--danger);
   color: var(--danger);
 }
