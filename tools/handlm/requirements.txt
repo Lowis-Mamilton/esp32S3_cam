@@ -1,0 +1,14 @@
+# Python 3.11 (ESP-PPQ needs >=3.11,<3.13). Install torch from the CPU index, e.g.
+#   uv venv --python 3.11 .venv
+#   uv pip install --python .venv/Scripts/python.exe "esp-ppq[cpu]==1.3.14" --torch-backend=cpu
+#   uv pip install --python .venv/Scripts/python.exe -r requirements.txt
+esp-ppq==1.3.14
+torch==2.15.0
+onnx==1.19.1
+onnxruntime==1.32.0
+onnxsim==0.8.1
+numpy==2.4.6
+pillow==13.0.0
+tflite2onnx==0.4.1
+tflite==2.18.0
+ai-edge-litert==2.3.0
