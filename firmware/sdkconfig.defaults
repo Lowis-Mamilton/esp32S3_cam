@@ -10,6 +10,10 @@ CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y
 CONFIG_SPIRAM_SPEED_80M=y
 CONFIG_ESPTOOLPY_FLASHMODE_QIO=y
 CONFIG_ESPTOOLPY_FLASHFREQ_80M=y
+# 64-byte data cache lines (cache size stays 32 KB, no extra internal RAM).
+# Measured faster for every function (ADR-0019 addendum, m8a.md "speed-up
+# 2"): gesture detection 174 -> 137 ms, face 47 -> 39 ms, AprilTag ~5%.
+CONFIG_ESP32S3_DATA_CACHE_LINE_64B=y
 CONFIG_SPIRAM_ALLOW_BSS_SEG_EXTERNAL_MEMORY=y
 # AprilTag (mxcam_tag, vendored apriltag) mallocs freely; plain malloc may use
 # PSRAM and only requests <= 4 KB are tried in internal RAM first, so its large

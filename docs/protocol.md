@@ -427,4 +427,4 @@ ResultRecord 格式同第 7 節，每隻手一筆：
 
 ### 速度
 
-一隻手約 5 次／秒、兩隻手約 3.4 次／秒（`max_hands` 2 但只有一隻手時約 3.2 次／秒；實測見 `docs/measurements/m8a.md`）。
+一隻手約 5.5 次／秒、兩隻手約 4 次／秒（`max_hands` 2 但只有一隻手時約 3.9 次／秒；實測見 `docs/measurements/m8a.md`）。
