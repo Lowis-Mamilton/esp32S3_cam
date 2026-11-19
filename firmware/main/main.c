@@ -110,8 +110,8 @@ void app_main(void)
             ESP_LOGE(TAG, "face detection init failed (no memory?): function 3 disabled");
     }
     /* Gesture models (hand detector + classifier, ADR-0019): same rule as
-     * mxf_init, right after it and before any task is created. Not listed in
-     * GET_INFO yet (M8a Task 4 wires function 8 into the pipeline). */
+     * mxf_init, right after it and before any task is created. A failure
+     * just leaves function 8 out of GET_INFO. */
     bool gesture_ok = false;
     if (display_ok && camera_ok) {
         size_t gi0 = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
@@ -126,18 +126,20 @@ void app_main(void)
         else
             ESP_LOGE(TAG, "gesture init failed (no memory?): function 8 disabled");
     }
-    (void)gesture_ok;
+    ESP_LOGI(TAG, "gesture config: hand_threshold %u, gesture_threshold %u, max_hands %u",
+             s_data.gesture_cfg.hand_threshold, s_data.gesture_cfg.gesture_threshold, s_data.gesture_cfg.max_hands);
 
     mxp_info_t info;
     build_info(&info);
     mxs_init(&s_state, &info, &s_data);
     /* GET_INFO lists only functions that can run; the link is not started yet,
      * so no lock is needed here. */
-    uint8_t caps[3], n_caps = 0;
+    uint8_t caps[MXP_INFO_MAX_FUNCS], n_caps = 0;
     if (display_ok && camera_ok) {
         caps[n_caps++] = MXP_FUNC_COLOR;
         if (tag_ok) caps[n_caps++] = MXP_FUNC_APRILTAG;
         if (face_ok) caps[n_caps++] = MXP_FUNC_FACE;
+        if (gesture_ok) caps[n_caps++] = MXP_FUNC_GESTURE;
     }
     mxs_set_capabilities(&s_state, caps, n_caps);
     if (encoder_start() != ESP_OK) {

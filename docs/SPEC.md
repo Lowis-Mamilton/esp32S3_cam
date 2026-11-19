@@ -167,6 +167,7 @@ USB、UART、I2C 三種傳輸用同一套封包。
 - 人臉模型放在 app 的 flash rodata（不改分割表），映像檔約 2.1 MiB（4 MB factory 分割區剩 47%）；開機時在其他 task 啟動前載入（約 80 ms、PSRAM 約 425 KB），失敗時功能 3 不列在 GET_INFO（見 ADR-0011）
 - 人臉偵測無串流 44–58 ms（0–2 張臉），串流時最多約 62 ms（M3 實測），**每張畫面都偵測**（不降頻）：TFT 不串流時 10–11 fps、Studio 串流時 7 fps，都高於 ≥ 5 fps 的目標（降頻的門檻：不串流時 TFT < 7 fps 才改成每 2 張偵測一次，`pipeline.c` 的 `FACE_EVERY`）
 - 手勢模型（`hand_detect` espdet_pico 224×224＋`hand_gesture_recognition` MobileNetV2 0.5，約 1.28 MB）也放 app 的 flash rodata，映像檔 3,526,000 B（factory 4 MB 剩 16%，上限 3,774,873 B）；開機時緊接在人臉之後、其他 task 啟動前載入（實測 332 ms、PSRAM 1.74 MiB、內部 RAM 0），開機完成時 PSRAM 剩約 3.9 MiB（見 ADR-0019、`docs/measurements/m8a.md`）
+- 手勢辨識**每張畫面都辨識**（不降頻、不另開 task，ADR-0019），TFT／預覽的速度＝辨識速度。實測（M8a Task 4）：沒有手時每張 174 ms，TFT 與結果約 4.8 fps（Studio 串流畫面時 181 ms、4.5 fps；「暫停預覽」只收結果時 4.8 fps，只快約 6%）；一隻手每張約 260 ms、兩隻手約 349 ms（測試畫面），推算約 3.4／2.6 fps（真手實測見 Task 7、`docs/measurements/m8a.md`）
 
 ### 6.2 電腦軟體 `pc-app/`：MXCam Studio
 

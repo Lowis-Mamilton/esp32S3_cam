@@ -14,6 +14,7 @@
 #include "mxcam_color.h"
 #include "mxcam_display.h"
 #include "mxcam_face.h"
+#include "mxcam_gesture.h"
 #include "mxcam_link.h"
 #include "mxcam_overlay.h"
 #include "mxcam_store.h"
@@ -50,8 +51,18 @@ static const uint16_t k_id_colors[8] = {
  * streaming (docs/SPEC.md 6.1); 2 would only be needed below 7 fps. */
 #define FACE_EVERY 1
 
-static const char *const k_fn_names[] = { "NONE", "COLOR", "TAG", "FACE" };
-#define N_FN_NAMES (sizeof(k_fn_names) / sizeof(k_fn_names[0]))
+/* Function name for the TFT's top-left text and the 1 Hz log (ASCII). */
+static const char *fn_name(uint8_t fn)
+{
+    switch (fn) {
+    case MXP_FUNC_NONE: return "NONE";
+    case MXP_FUNC_COLOR: return "COLOR";
+    case MXP_FUNC_APRILTAG: return "TAG";
+    case MXP_FUNC_FACE: return "FACE";
+    case MXP_FUNC_GESTURE: return "GESTURE";
+    default: return "?";
+    }
+}
 
 #ifdef MXCAM_TAG_BENCH
 /* Optional on-board benchmark (off by default; build with
@@ -263,6 +274,7 @@ typedef struct {
     bool connected, want_frames, streaming;
     uint8_t fps, quality, fn;
     mxp_config_t cfg;
+    mxp_gesture_config_t gesture;
     mxc_learned_t colors[MXST_MAX_COLORS];
     uint8_t n_colors;
 } frame_ctx_t;
@@ -273,9 +285,9 @@ static void copy_colors(frame_ctx_t *c)
     memcpy(c->colors, s_state->data->colors, sizeof(c->colors));
 }
 
-/* Boxes + ASCII labels ("ID1" / "T3" / "FACE 92") above them (inside near
- * the top edge when there is no room above). Colour id 0 (not learned) is
- * never drawn. */
+/* Boxes + ASCII labels ("ID1" / "T3" / "FACE 92" / "LIKE 92") above them
+ * (inside near the top edge when there is no room above). Colour id 0 (not
+ * learned) is never drawn; gesture id 0 (hand, no gesture) is white. */
 static void draw_results(mxo_canvas_t *c, const mxp_results_t *res)
 {
     for (int i = 0; i < res->count; i++) {
@@ -292,6 +304,9 @@ static void draw_results(mxo_canvas_t *c, const mxp_results_t *res)
         } else if (res->function_id == MXP_FUNC_FACE) {
             col = FACE_COLOR;
             snprintf(label, sizeof(label), "FACE %u", (unsigned)r->confidence);
+        } else if (res->function_id == MXP_FUNC_GESTURE) {
+            col = r->id >= 1 && r->id <= MXP_GESTURE_MAX ? k_id_colors[(r->id - 1) % 8] : MXO_WHITE;
+            mxh_label(r->id, r->confidence, label, sizeof(label));
         } else {
             continue;
         }
@@ -329,6 +344,10 @@ static void pipeline_task(void *arg)
     unsigned face_runs = 0, face_phase = 0;
     static mxp_result_t face_last[MXP_MAX_RESULTS];
     uint8_t face_last_n = 0;
+    /* Gesture: per-second recognition stats (every frame, ADR-0019). */
+    uint64_t gest_sum_us = 0, gest_det_us = 0, gest_cls_us = 0;
+    uint32_t gest_max_us = 0;
+    unsigned gest_runs = 0, gest_skip = 0;
     uint8_t last_count = 0, last_fn = 0;
     uint32_t frame_id = 1; /* 0 means "no frame processed yet" in GET_RESULTS */
     /* Streaming schedule: next_due_ms advances by one interval per submitted
@@ -370,6 +389,7 @@ static void pipeline_task(void *arg)
             ctx.quality = mxs_effective_quality(s_state);
             ctx.fn = s_state->function_id;
             ctx.cfg = s_state->data->cfg;
+            ctx.gesture = s_state->data->gesture_cfg;
             copy_colors(&ctx);
             learn = mxs_take_pending_learn(s_state, &lseq, &lreq);
             mxcam_link_state_unlock();
@@ -415,7 +435,7 @@ static void pipeline_task(void *arg)
             memset(&res, 0, sizeof(res));
             res.frame_id = frame_id;
             res.function_id = ctx.fn;
-            bool publish = true; /* false: TFT only (face frame skipped by FACE_EVERY) */
+            bool publish = true; /* false: TFT only (face frame skipped by FACE_EVERY, gesture skip) */
             if (ctx.fn == MXP_FUNC_COLOR) {
                 mxc_params_t p = { ctx.cfg.tolerance, ctx.cfg.min_area, ctx.cfg.color_max };
                 res.count = mxc_detect(frame, ctx.colors, ctx.n_colors, &p, res.r, MXP_MAX_RESULTS);
@@ -440,6 +460,23 @@ static void pipeline_task(void *arg)
                     publish = false;
                 }
                 face_phase = (face_phase + 1) % FACE_EVERY;
+            } else if (ctx.fn == MXP_FUNC_GESTURE) {
+                mxh_stats_t gs;
+                int n = mxh_detect(frame, ctx.gesture.hand_threshold, ctx.gesture.gesture_threshold,
+                                   ctx.gesture.max_hands, res.r, MXP_MAX_RESULTS, &gs);
+                if (n == MXH_SKIPPED) {
+                    /* Heap guard tripped: no new result, not "no hands". */
+                    res.count = 0;
+                    publish = false;
+                    gest_skip++;
+                } else {
+                    res.count = (uint8_t)n;
+                    gest_sum_us += gs.total_us;
+                    gest_det_us += gs.detect_us;
+                    gest_cls_us += gs.classify_us;
+                    if (gs.total_us > gest_max_us) gest_max_us = gs.total_us;
+                    gest_runs++;
+                }
             }
             if (ctx.fn != MXP_FUNC_FACE) {
                 face_phase = 0;
@@ -472,8 +509,9 @@ static void pipeline_task(void *arg)
 
             size_t plen = publish ? mxp_pack_results(&res, packed, sizeof(packed)) : 0;
             if (!publish) {
-                /* Skipped face frame: nothing new to cache or push; still
-                 * drop the old boxes if the function changed meanwhile. */
+                /* Skipped face frame or gesture heap-guard skip: nothing new
+                 * to cache or push; still drop the old boxes if the function
+                 * changed meanwhile. */
                 mxcam_link_state_lock();
                 if (s_state->function_id != ctx.fn) {
                     res.count = 0;
@@ -506,7 +544,7 @@ static void pipeline_task(void *arg)
             draw_results(&canvas, &res);
 
             char text[24];
-            snprintf(text, sizeof(text), "%s  %d FPS", ctx.fn < N_FN_NAMES ? k_fn_names[ctx.fn] : "?", fps);
+            snprintf(text, sizeof(text), "%s  %d FPS", fn_name(ctx.fn), fps);
             /* Panel coordinates, mirrored into the frame (the TFT shows the
              * mirror view, ADR-0010): text top-left, icon top-right. */
             mxo_draw_text_mirrored(&canvas, 2, 2, text, MXO_WHITE, MXO_BLACK);
@@ -540,7 +578,7 @@ static void pipeline_task(void *arg)
                      "drop=%u reenc=%u big=%u enc_fail=%u | qdrop=%u qbig=%u txfail=%u rfail=%u | "
                      "heap=%u min=%u psram=%u stack_hw=%u enc_stack_hw=%u | grab_fail=%u bad_size=%u lcd_err=%u "
                      "stale=%u",
-                     fps, last_fn < N_FN_NAMES ? k_fn_names[last_fn] : "?", proc_avg_ms, (unsigned)(proc_max_us / 1000u),
+                     fps, fn_name(last_fn), proc_avg_ms, (unsigned)(proc_max_us / 1000u),
                      face_runs ? (unsigned)(face_sum_us / face_runs / 1000u) : 0u, (unsigned)(face_max_us / 1000u),
                      face_runs, last_count, streaming_now ? 1 : 0, (unsigned)es.enc_avg_ms, (unsigned)es.enc_max_ms,
                      (unsigned)es.jpeg_avg, es.frames, es.send_fail, es.reenc, es.too_big, es.enc_fail,
@@ -560,6 +598,17 @@ static void pipeline_task(void *arg)
                          (unsigned)(tag_sum[4] / f / 100));
                 memset(tag_sum, 0, sizeof(tag_sum));
                 tag_frames = 0;
+            }
+            if (gest_runs || gest_skip) {
+                /* Gesture recognition (ms): total avg/max/runs, detect and
+                 * classify averages, heap-guard skips this second. */
+                unsigned g = gest_runs ? gest_runs : 1;
+                ESP_LOGI(TAG, "gest_ms=%u/%u/%u det=%u cls=%u skip=%u", (unsigned)(gest_sum_us / g / 1000u),
+                         (unsigned)(gest_max_us / 1000u), gest_runs, (unsigned)(gest_det_us / g / 1000u),
+                         (unsigned)(gest_cls_us / g / 1000u), gest_skip);
+                gest_sum_us = gest_det_us = gest_cls_us = 0;
+                gest_max_us = 0;
+                gest_runs = gest_skip = 0;
             }
             frames = 0;
             proc_sum_us = 0;
