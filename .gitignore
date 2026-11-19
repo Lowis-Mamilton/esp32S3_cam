@@ -7,3 +7,4 @@ pc-app/dist/
 .vscode/
 __pycache__/
 build/
+.superpowers/cvenv/
