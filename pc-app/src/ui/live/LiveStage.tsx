@@ -1,3 +1,4 @@
+import { Crosshair } from 'lucide-react'
 import { useCallback, useEffect, useImperativeHandle, useLayoutEffect, useRef, useState, useSyncExternalStore, type CSSProperties, type MouseEvent as ReactMouseEvent, type Ref } from 'react'
 import type { ResultsStore } from '../../device/resultsStore'
 import { LearnError, NotConnectedError, NotSupportedError, type FrameSource, type LearnedId } from '../../device/types'
@@ -261,7 +262,8 @@ export default function LiveStage({ ref, connected, fps, kbps, fn, canLearn, onL
           <>
             {/* The centre square in screen space, converted to the true image. */}
             <button type="button" className="btn ls-block" onClick={() => void learn(mirror ? mirrorRegion(CENTRE) : CENTRE)}>
-              {t('learnCenter')}
+              <Crosshair className="ls-block-icon" size={18} aria-hidden="true" />
+              <span className="ls-block-label">{t('learnCenter')}</span>
             </button>
             {toast ? (
               <span role="status" className={`ls-msg${toast.error ? ' error' : ''}`}>
