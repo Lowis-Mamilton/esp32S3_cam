@@ -98,7 +98,12 @@ void mxs_init(mxs_state_t *s, const mxp_info_t *info, mxs_data_t *data);
 /* Handle one request, write the response packet to out and return its size
  * (0 if out_cap is too small; MXS_RESPONSE_MAX always suffices).
  * Function IDs: SET_FUNCTION accepts 0 (none) and the capabilities set with
- * mxs_set_capabilities (1 colour, 2 AprilTag, 3 face detection).
+ * mxs_set_capabilities (1 colour, 2 AprilTag, 3 face detection, 8 gesture).
+ * GET/SET_FUNC_CONFIG (protocol.md 9) serve the functions that have a func
+ * config and are in that list (today: 8 gesture -> data->gesture_cfg), any
+ * time, whatever the current function; SET marks dirty only when a value
+ * changes. Gesture (8) is named like AprilTag (SET_NAME / GET_LEARNED /
+ * FORGET for ids 1-9, protocol.md 10) and LEARN 8 is BAD_PARAM.
  * Every request is treated as coming over USB, so STREAM_START/STOP are
  * always allowed (the NOT_SUPPORTED path for UART/I2C arrives with the
  * transport flag in M4). */

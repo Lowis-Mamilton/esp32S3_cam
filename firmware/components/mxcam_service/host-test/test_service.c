@@ -984,6 +984,221 @@ static void test_deferred_order(void)
   CHECK(mxs_peek_deferred(&s, &seq, out, sizeof(out)) > 0 && seq == 82);
 }
 
+/* ---- M8a: gesture (function 8) ---- */
+static const uint8_t k_caps_gesture[4] = { 1, 2, 3, 8 };
+
+static mxs_state_t *fresh_gesture(mxs_state_t *s)
+{
+  fresh(s);
+  mxs_set_capabilities(s, k_caps_gesture, sizeof(k_caps_gesture));
+  return s;
+}
+
+static const mxp_frame_t *get_fcfg(mxs_state_t *s, uint8_t fn)
+{
+  return req(s, MXP_CMD_GET_FUNC_CONFIG, 20, &fn, 1);
+}
+
+static const mxp_frame_t *set_fcfg(mxs_state_t *s, const uint8_t *p, uint16_t len)
+{
+  return req(s, MXP_CMD_SET_FUNC_CONFIG, 21, p, len);
+}
+
+static void test_get_info_nine_functions(void)
+{
+  mxs_state_t s;
+  fresh(&s);
+  const uint8_t nine[9] = { 1, 2, 3, 4, 5, 6, 7, 8, 9 };
+  mxs_set_capabilities(&s, nine, 9);
+  const mxp_frame_t *r = req(&s, MXP_CMD_GET_INFO, 1, NULL, 0);
+  CHECK(r->cmd == 0x81 && r->len == 23 + 9 && r->payload[22] == 9);
+  for (int i = 0; i < 9; i++) CHECK(r->len == 32 && r->payload[23 + i] == i + 1);
+  /* the whole GET_INFO list (MXP_INFO_MAX_FUNCS) fits too */
+  uint8_t many[MXP_INFO_MAX_FUNCS];
+  for (int i = 0; i < MXP_INFO_MAX_FUNCS; i++) many[i] = (uint8_t)(i + 1);
+  mxs_set_capabilities(&s, many, MXP_INFO_MAX_FUNCS);
+  r = req(&s, MXP_CMD_GET_INFO, 2, NULL, 0);
+  CHECK(r->cmd == 0x81 && r->len == 23 + MXP_INFO_MAX_FUNCS && r->payload[22] == MXP_INFO_MAX_FUNCS);
+}
+
+static void test_func_config_gesture_get_default(void)
+{
+  mxs_state_t s;
+  fresh_gesture(&s);
+  const mxp_frame_t *r = get_fcfg(&s, 8);
+  mxp_gesture_config_t def;
+  mxp_gesture_config_defaults(&def);
+  uint8_t want[MXP_FUNC_CONFIG_SIZE];
+  mxp_pack_gesture_config(&def, want); /* 08 01 28 3c 01 00 00 00 00 00 today */
+  CHECK(r->cmd == 0xC4 && r->seq == 20 && r->len == MXP_FUNC_CONFIG_SIZE &&
+        memcmp(r->payload, want, sizeof(want)) == 0);
+  CHECK(r->payload[0] == 8 && r->payload[1] == 1 && r->payload[3] == 60 && r->payload[4] == 1);
+  for (int i = 5; i < MXP_FUNC_CONFIG_SIZE; i++) CHECK(r->payload[i] == 0);
+  CHECK(g_data.cfg.dirty == 0);
+}
+
+static void test_func_config_gesture_set_clamps_and_dirty(void)
+{
+  mxs_state_t s;
+  fresh_gesture(&s);
+  uint32_t gen = s.data_gen;
+  const uint8_t p[MXP_FUNC_CONFIG_SIZE] = { 8, 1, 5, 150, 0, 7, 7, 7, 7, 7 };
+  const mxp_frame_t *r = set_fcfg(&s, p, sizeof(p));
+  static const uint8_t want[MXP_FUNC_CONFIG_SIZE] = { 8, 1, 10, 100, 1, 0, 0, 0, 0, 0 };
+  CHECK(r->cmd == 0xC5 && r->seq == 21 && r->len == MXP_FUNC_CONFIG_SIZE &&
+        memcmp(r->payload, want, sizeof(want)) == 0);
+  CHECK(g_data.gesture_cfg.hand_threshold == 10 && g_data.gesture_cfg.gesture_threshold == 100 &&
+        g_data.gesture_cfg.max_hands == 1);
+  CHECK(g_data.cfg.dirty == 1 && s.data_gen == gen + 1);
+  /* GET_CONFIG reports dirty */
+  CHECK(req(&s, MXP_CMD_GET_CONFIG, 22, NULL, 0)->payload[15] == 1);
+  /* the same values again (clamping to the current ones): no change */
+  g_data.cfg.dirty = 0;
+  r = set_fcfg(&s, p, sizeof(p));
+  CHECK(r->cmd == 0xC5 && memcmp(r->payload, want, sizeof(want)) == 0);
+  CHECK(s.data_gen == gen + 1 && g_data.cfg.dirty == 0);
+  r = set_fcfg(&s, want, sizeof(want));
+  CHECK(r->cmd == 0xC5 && s.data_gen == gen + 1 && g_data.cfg.dirty == 0);
+  /* GET returns the applied values */
+  r = get_fcfg(&s, 8);
+  CHECK(r->cmd == 0xC4 && memcmp(r->payload, want, sizeof(want)) == 0);
+  /* a real change bumps again; works whatever the current function is */
+  const uint8_t two[MXP_FUNC_CONFIG_SIZE] = { 8, 1, 30, 50, 2, 0, 0, 0, 0, 0 };
+  CHECK(s.function_id == 0);
+  r = set_fcfg(&s, two, sizeof(two));
+  CHECK(r->cmd == 0xC5 && memcmp(r->payload, two, sizeof(two)) == 0);
+  CHECK(s.data_gen == gen + 2 && g_data.cfg.dirty == 1 && g_data.gesture_cfg.max_hands == 2);
+}
+
+static void test_func_config_errors(void)
+{
+  mxs_state_t s;
+  fresh_gesture(&s);
+  uint32_t gen = s.data_gen;
+  uint8_t two[2] = { 8, 0 };
+  CHECK(is_err(req(&s, MXP_CMD_GET_FUNC_CONFIG, 1, NULL, 0), MXP_CMD_GET_FUNC_CONFIG, MXP_ERR_BAD_LENGTH));
+  CHECK(is_err(req(&s, MXP_CMD_GET_FUNC_CONFIG, 2, two, 2), MXP_CMD_GET_FUNC_CONFIG, MXP_ERR_BAD_LENGTH));
+  CHECK(is_err(get_fcfg(&s, 0), MXP_CMD_GET_FUNC_CONFIG, MXP_ERR_BAD_PARAM));
+  CHECK(is_err(get_fcfg(&s, 1), MXP_CMD_GET_FUNC_CONFIG, MXP_ERR_BAD_PARAM));
+  CHECK(is_err(get_fcfg(&s, 3), MXP_CMD_GET_FUNC_CONFIG, MXP_ERR_BAD_PARAM));
+  CHECK(is_err(get_fcfg(&s, 4), MXP_CMD_GET_FUNC_CONFIG, MXP_ERR_BAD_PARAM)); /* until M6 Task 4 */
+  CHECK(is_err(get_fcfg(&s, 200), MXP_CMD_GET_FUNC_CONFIG, MXP_ERR_BAD_PARAM));
+
+  uint8_t p[MXP_FUNC_CONFIG_SIZE + 1] = { 8, 1, 50, 70, 2, 0, 0, 0, 0, 0, 0 };
+  CHECK(is_err(set_fcfg(&s, NULL, 0), MXP_CMD_SET_FUNC_CONFIG, MXP_ERR_BAD_LENGTH));
+  uint8_t line[MXP_FUNC_CONFIG_SIZE] = { 4, 1, 0, 0, 60, 8, 4, 80, 30, 0 };
+  CHECK(is_err(set_fcfg(&s, line, sizeof(line)), MXP_CMD_SET_FUNC_CONFIG, MXP_ERR_BAD_PARAM));
+  uint8_t one = 1;
+  CHECK(is_err(set_fcfg(&s, &one, 1), MXP_CMD_SET_FUNC_CONFIG, MXP_ERR_BAD_PARAM));
+  CHECK(is_err(set_fcfg(&s, p, 1), MXP_CMD_SET_FUNC_CONFIG, MXP_ERR_BAD_LENGTH));
+  CHECK(is_err(set_fcfg(&s, p, 9), MXP_CMD_SET_FUNC_CONFIG, MXP_ERR_BAD_LENGTH));
+  CHECK(is_err(set_fcfg(&s, p, 11), MXP_CMD_SET_FUNC_CONFIG, MXP_ERR_BAD_LENGTH));
+  p[1] = 2;
+  CHECK(is_err(set_fcfg(&s, p, 10), MXP_CMD_SET_FUNC_CONFIG, MXP_ERR_BAD_PARAM));
+  p[1] = 0;
+  CHECK(is_err(set_fcfg(&s, p, 10), MXP_CMD_SET_FUNC_CONFIG, MXP_ERR_BAD_PARAM));
+  /* the length is checked before the layout version */
+  CHECK(is_err(set_fcfg(&s, p, 9), MXP_CMD_SET_FUNC_CONFIG, MXP_ERR_BAD_LENGTH));
+  CHECK(s.data_gen == gen && g_data.cfg.dirty == 0);
+  mxp_gesture_config_t def;
+  mxp_gesture_config_defaults(&def);
+  CHECK(memcmp(&g_data.gesture_cfg, &def, sizeof(def)) == 0);
+
+  /* gesture not in GET_INFO's list (model failed to load): BAD_PARAM both ways */
+  fresh(&s); /* capabilities 1, 2 */
+  p[1] = 1;
+  CHECK(is_err(get_fcfg(&s, 8), MXP_CMD_GET_FUNC_CONFIG, MXP_ERR_BAD_PARAM));
+  CHECK(is_err(set_fcfg(&s, p, 10), MXP_CMD_SET_FUNC_CONFIG, MXP_ERR_BAD_PARAM));
+  CHECK(is_err(set_fcfg(&s, p, 9), MXP_CMD_SET_FUNC_CONFIG, MXP_ERR_BAD_PARAM)); /* BAD_PARAM before length */
+  CHECK(g_data.cfg.dirty == 0);
+}
+
+static void test_gesture_names(void)
+{
+  mxs_state_t s;
+  fresh_gesture(&s);
+  mxst_set_name(&g_data, 2, 7, "door", 4);
+  CHECK(set_name(&s, 8, 7, "\xE5\x89\x8D\xE9\x80\xB2", 6)->cmd == 0xB2 && g_r.len == 0); /* 前進 */
+  uint8_t l = 0;
+  const char *nm = mxst_get_name(&g_data, 8, 7, &l);
+  CHECK(nm && l == 6 && memcmp(nm, "\xE5\x89\x8D\xE9\x80\xB2", 6) == 0 && g_data.cfg.dirty == 1);
+  CHECK(is_err(set_name(&s, 8, 0, "x", 1), MXP_CMD_SET_NAME, MXP_ERR_BAD_PARAM));
+  CHECK(is_err(set_name(&s, 8, 10, "x", 1), MXP_CMD_SET_NAME, MXP_ERR_BAD_PARAM));
+  CHECK(set_name(&s, 8, 9, "down", 4)->cmd == 0xB2);
+  CHECK(set_name(&s, 8, 1, "one", 3)->cmd == 0xB2);
+  CHECK(g_data.n_names == 4);
+
+  /* GET_LEARNED 8: named gestures by id, rgb 0 */
+  uint8_t fn = 8;
+  const mxp_frame_t *r = req(&s, MXP_CMD_GET_LEARNED, 2, &fn, 1);
+  static const uint8_t want[] = { 3, 1, 0, 0, 0, 0, 3, 'o', 'n', 'e',
+                                  7, 0, 0, 0, 0, 6, 0xE5, 0x89, 0x8D, 0xE9, 0x80, 0xB2,
+                                  9, 0, 0, 0, 0, 4, 'd', 'o', 'w', 'n' };
+  CHECK(r->cmd == 0xB3 && r->len == sizeof(want) && memcmp(r->payload, want, sizeof(want)) == 0);
+
+  /* FORGET 8: one name, absent names (success, not dirty), then all gesture names */
+  g_data.cfg.dirty = 0;
+  forget(&s, 8, 7, 3);
+  CHECK(g_r.cmd == 0xB1 && g_r.len == 0 && mxst_get_name(&g_data, 8, 7, NULL) == NULL && g_data.cfg.dirty == 1);
+  g_data.cfg.dirty = 0;
+  forget(&s, 8, 3, 4);
+  CHECK(g_r.cmd == 0xB1 && g_data.cfg.dirty == 0 && g_data.n_names == 3);
+  forget(&s, 8, 0xFFFF, 5);
+  CHECK(g_r.cmd == 0xB1 && g_data.n_names == 1 && mxst_get_name(&g_data, 2, 7, NULL) != NULL &&
+        g_data.cfg.dirty == 1);
+  r = req(&s, MXP_CMD_GET_LEARNED, 6, &fn, 1);
+  CHECK(r->cmd == 0xB3 && r->len == 1 && r->payload[0] == 0);
+}
+
+static void test_learn_gesture_rejected(void)
+{
+  mxs_state_t s;
+  fresh_gesture(&s);
+  uint8_t eight = 8, rb[64];
+  mxp_frame_t r;
+  CHECK(req(&s, MXP_CMD_SET_FUNCTION, 1, &eight, 1)->cmd == 0x90 && s.function_id == 8);
+  CHECK(learn(&s, 8, 2, 0, &r, rb, sizeof(rb)) != MXS_DEFERRED);
+  CHECK(is_err(&r, MXP_CMD_LEARN, MXP_ERR_BAD_PARAM) && !s.pending_learn.active);
+}
+
+static void test_factory_reset_gesture_defaults(void)
+{
+  mxs_state_t s;
+  fresh_gesture(&s);
+  const uint8_t p[MXP_FUNC_CONFIG_SIZE] = { 8, 1, 30, 50, 2, 0, 0, 0, 0, 0 };
+  CHECK(set_fcfg(&s, p, sizeof(p))->cmd == 0xC5);
+  CHECK(set_name(&s, 8, 6, "go", 2)->cmd == 0xB2);
+  uint8_t cmd = 0, seq = 0, rb[64];
+  mxp_frame_t r;
+  CHECK(deferred(&s, MXP_CMD_FACTORY_RESET, 30) == MXS_DEFERRED);
+  CHECK(mxs_take_pending_store(&s, &cmd, &seq, NULL) && cmd == MXP_CMD_FACTORY_RESET);
+  CHECK(mxs_complete_store(&s, 30, true));
+  pop_decoded(&s, &r, rb, sizeof(rb));
+  CHECK(r.cmd == 0xC3);
+  mxp_gesture_config_t def;
+  mxp_gesture_config_defaults(&def);
+  CHECK(memcmp(&g_data.gesture_cfg, &def, sizeof(def)) == 0 && g_data.n_names == 0);
+  uint8_t want[MXP_FUNC_CONFIG_SIZE];
+  mxp_pack_gesture_config(&def, want);
+  const mxp_frame_t *g = get_fcfg(&s, 8);
+  CHECK(g->cmd == 0xC4 && memcmp(g->payload, want, sizeof(want)) == 0);
+}
+
+static void test_save_snapshot_includes_gesture(void)
+{
+  mxs_state_t s;
+  fresh_gesture(&s);
+  static mxs_data_t snap;
+  const uint8_t p[MXP_FUNC_CONFIG_SIZE] = { 8, 1, 55, 65, 2, 0, 0, 0, 0, 0 };
+  CHECK(set_fcfg(&s, p, sizeof(p))->cmd == 0xC5);
+  uint8_t cmd = 0, seq = 0;
+  CHECK(deferred(&s, MXP_CMD_SAVE, 31) == MXS_DEFERRED);
+  CHECK(mxs_take_pending_store(&s, &cmd, &seq, &snap) && cmd == MXP_CMD_SAVE);
+  CHECK(snap.gesture_cfg.hand_threshold == 55 && snap.gesture_cfg.gesture_threshold == 65 &&
+        snap.gesture_cfg.max_hands == 2);
+  CHECK(mxs_complete_store(&s, 31, true) && g_data.cfg.dirty == 0);
+}
+
 int main(void)
 {
   test_info();
@@ -1005,6 +1220,14 @@ int main(void)
   test_face_function();
   test_dirty_only_on_change();
   test_deferred_order();
+  test_get_info_nine_functions();
+  test_func_config_gesture_get_default();
+  test_func_config_gesture_set_clamps_and_dirty();
+  test_func_config_errors();
+  test_gesture_names();
+  test_learn_gesture_rejected();
+  test_factory_reset_gesture_defaults();
+  test_save_snapshot_includes_gesture();
   if (g_fail) {
     printf("%d of %d checks FAILED\n", g_fail, g_checks);
     return 1;

@@ -37,7 +37,8 @@ static bool color_learned(const mxs_data_t *d, uint16_t id)
 }
 
 /* FORGET: function_id u8, id u16 (0xFFFF = all). Absent ids succeed; face
- * detection (3) learns and names nothing, so it always succeeds. */
+ * detection (3) learns and names nothing, so it always succeeds; AprilTag (2)
+ * and gesture (8) only have names. */
 static size_t handle_forget(mxs_state_t *s, const mxp_frame_t *req, uint8_t *out, size_t out_cap)
 {
   if (req->len != 3) return reply_err(req, MXP_ERR_BAD_LENGTH, out, out_cap);
@@ -49,6 +50,8 @@ static size_t handle_forget(mxs_state_t *s, const mxp_frame_t *req, uint8_t *out
     else if (id >= 1 && id <= MXST_MAX_COLORS) mxst_forget_color(s->data, (uint8_t)id);
   } else if (fn == MXP_FUNC_APRILTAG) {
     mxst_forget_names(s->data, MXST_FN_TAG, id); /* tags are not learned: only names */
+  } else if (fn == MXP_FUNC_GESTURE) {
+    mxst_forget_names(s->data, MXST_FN_GESTURE, id); /* fixed gestures: only names */
   } else if (fn == MXP_FUNC_FACE) {
     /* nothing to forget */
   } else {
@@ -71,6 +74,8 @@ static size_t handle_set_name(mxs_state_t *s, const mxp_frame_t *req, uint8_t *o
     if (!color_learned(s->data, sn.id)) return reply_err(req, MXP_ERR_BAD_PARAM, out, out_cap);
   } else if (sn.function_id == MXP_FUNC_APRILTAG) {
     if (sn.id > MXST_TAG_ID_MAX) return reply_err(req, MXP_ERR_BAD_PARAM, out, out_cap);
+  } else if (sn.function_id == MXP_FUNC_GESTURE) {
+    if (sn.id < 1 || sn.id > MXST_GESTURE_ID_MAX) return reply_err(req, MXP_ERR_BAD_PARAM, out, out_cap);
   } else {
     return reply_err(req, MXP_ERR_BAD_PARAM, out, out_cap);
   }
@@ -85,7 +90,8 @@ static size_t handle_set_name(mxs_state_t *s, const mxp_frame_t *req, uint8_t *o
   return reply(req, NULL, 0, out, out_cap);
 }
 
-/* GET_LEARNED: colours (by id, with rgb and name) or named tags (by id, rgb 0). */
+/* GET_LEARNED: colours (by id, with rgb and name) or named tags / gestures
+ * (by id, rgb 0). */
 static size_t handle_get_learned(mxs_state_t *s, const mxp_frame_t *req, uint8_t *out, size_t out_cap)
 {
   if (req->len != 1) return reply_err(req, MXP_ERR_BAD_LENGTH, out, out_cap);
@@ -103,9 +109,10 @@ static size_t handle_get_learned(mxs_state_t *s, const mxp_frame_t *req, uint8_t
       if (nm) memcpy(it->name, nm, it->name_len);
       else it->name_len = 0;
     }
-  } else if (fn == MXP_FUNC_APRILTAG) {
+  } else if (fn == MXP_FUNC_APRILTAG || fn == MXP_FUNC_GESTURE) {
+    uint8_t name_fn = fn == MXP_FUNC_APRILTAG ? MXST_FN_TAG : MXST_FN_GESTURE;
     for (int i = 0; i < d->n_names; i++) {
-      if (d->names[i].fn != MXST_FN_TAG) continue;
+      if (d->names[i].fn != name_fn) continue;
       mxp_learned_t *it = &items[n++];
       memset(it, 0, sizeof(*it));
       it->id = d->names[i].id;
@@ -175,6 +182,63 @@ static size_t handle_set_config(mxs_state_t *s, const mxp_frame_t *req, uint8_t 
   uint8_t c[MXP_CONFIG_SIZE];
   mxp_pack_config(&s->data->cfg, c);
   return reply(req, c, MXP_CONFIG_SIZE, out, out_cap);
+}
+
+/* GET_FUNC_CONFIG / SET_FUNC_CONFIG (protocol.md 9, ADR-0016). Errors in
+ * order: GET not 1 byte / SET empty -> BAD_LENGTH; function without a func
+ * config or not in GET_INFO's list -> BAD_PARAM; SET length != the layout's
+ * (MXP_FUNC_CONFIG_SIZE) -> BAD_LENGTH; wrong layout_version -> BAD_PARAM.
+ * A function's config is readable and writable whatever the current function
+ * is. To add a function (M6: line 4, track 5) add a case to fcfg_get and
+ * fcfg_set (and to the store's record list). */
+static bool function_available(const mxs_state_t *s, uint8_t fn);
+
+/* Packs fn's current config; false = fn has no func config. */
+static bool fcfg_get(const mxs_data_t *d, uint8_t fn, uint8_t out[MXP_FUNC_CONFIG_SIZE])
+{
+  switch (fn) {
+  case MXP_FUNC_GESTURE:
+    mxp_pack_gesture_config(&d->gesture_cfg, out);
+    return true;
+  default:
+    return false;
+  }
+}
+
+/* Applies a whole SET_FUNC_CONFIG packet (clamped by the codec) of a function
+ * fcfg_get knows; false = wrong layout_version, nothing changed. */
+static bool fcfg_set(mxs_data_t *d, const uint8_t p[MXP_FUNC_CONFIG_SIZE])
+{
+  switch (p[0]) {
+  case MXP_FUNC_GESTURE:
+    return mxp_unpack_gesture_config(p, MXP_FUNC_CONFIG_SIZE, &d->gesture_cfg);
+  default:
+    return false;
+  }
+}
+
+static size_t handle_get_func_config(mxs_state_t *s, const mxp_frame_t *req, uint8_t *out, size_t out_cap)
+{
+  if (req->len != 1) return reply_err(req, MXP_ERR_BAD_LENGTH, out, out_cap);
+  uint8_t c[MXP_FUNC_CONFIG_SIZE];
+  if (!function_available(s, req->payload[0]) || !fcfg_get(s->data, req->payload[0], c))
+    return reply_err(req, MXP_ERR_BAD_PARAM, out, out_cap);
+  return reply(req, c, MXP_FUNC_CONFIG_SIZE, out, out_cap);
+}
+
+static size_t handle_set_func_config(mxs_state_t *s, const mxp_frame_t *req, uint8_t *out, size_t out_cap)
+{
+  if (req->len == 0) return reply_err(req, MXP_ERR_BAD_LENGTH, out, out_cap);
+  uint8_t before[MXP_FUNC_CONFIG_SIZE], after[MXP_FUNC_CONFIG_SIZE];
+  uint8_t fn = req->payload[0];
+  if (!function_available(s, fn) || !fcfg_get(s->data, fn, before))
+    return reply_err(req, MXP_ERR_BAD_PARAM, out, out_cap);
+  if (req->len != MXP_FUNC_CONFIG_SIZE) return reply_err(req, MXP_ERR_BAD_LENGTH, out, out_cap);
+  if (!fcfg_set(s->data, req->payload)) return reply_err(req, MXP_ERR_BAD_PARAM, out, out_cap);
+  /* Compare the packed forms: dirty only when an applied value changed. */
+  fcfg_get(s->data, fn, after);
+  if (memcmp(before, after, sizeof(after)) != 0) mark_dirty(s);
+  return reply(req, after, MXP_FUNC_CONFIG_SIZE, out, out_cap);
 }
 
 /* Queue a deferred response packet (sent by the link's flush). Full: the
@@ -260,7 +324,7 @@ size_t mxs_handle(mxs_state_t *s, const mxp_frame_t *req, uint32_t now_ms, uint8
   switch (req->cmd) {
   case MXP_CMD_GET_INFO: {
     if (req->len != 0) return reply_err(req, MXP_ERR_BAD_LENGTH, out, out_cap);
-    uint8_t buf[23 + 8];
+    uint8_t buf[23 + MXP_INFO_MAX_FUNCS];
     size_t n = mxp_pack_info(&s->info, buf, sizeof(buf));
     if (n == 0) return reply_err(req, MXP_ERR_INTERNAL, out, out_cap);
     return reply(req, buf, (uint16_t)n, out, out_cap);
@@ -320,6 +384,10 @@ size_t mxs_handle(mxs_state_t *s, const mxp_frame_t *req, uint32_t now_ms, uint8
   }
   case MXP_CMD_SET_CONFIG:
     return handle_set_config(s, req, out, out_cap);
+  case MXP_CMD_GET_FUNC_CONFIG:
+    return handle_get_func_config(s, req, out, out_cap);
+  case MXP_CMD_SET_FUNC_CONFIG:
+    return handle_set_func_config(s, req, out, out_cap);
   case MXP_CMD_SAVE:
   case MXP_CMD_FACTORY_RESET:
     return handle_store_op(s, req, out, out_cap);

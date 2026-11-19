@@ -15,12 +15,14 @@ void mxst_defaults(mxs_data_t *d) {
   d->cfg.i2c_address = 0x5A;
   d->cfg.led = 50;
   d->cfg.dirty = 0;
+  mxp_gesture_config_defaults(&d->gesture_cfg);
 }
 
 static bool name_key_ok(uint8_t fn, uint16_t id) {
   if (fn == MXST_FN_COLOR) return id >= 1 && id <= MXST_MAX_COLORS;
   if (fn == MXST_FN_TAG) return id <= MXST_TAG_ID_MAX;
   if (fn == MXST_FN_FACE) return true;
+  if (fn == MXST_FN_GESTURE) return id >= 1 && id <= MXST_GESTURE_ID_MAX;
   return false;
 }
 
@@ -119,10 +121,18 @@ int mxst_learn_color(mxs_data_t *d, const uint8_t rgb[3], uint8_t tolerance) {
   return id;
 }
 
+/* Gesture config v1 ranges (protocol.md 10); deserialize gets them from the
+ * clamping mxp_unpack_gesture_config. */
+static bool gesture_cfg_valid(const mxp_gesture_config_t *g) {
+  return g->hand_threshold >= 10 && g->hand_threshold <= 95 && g->gesture_threshold <= 100 &&
+         g->max_hands >= 1 && g->max_hands <= 2;
+}
+
 /* The same content rules deserialize enforces (so a save never writes a blob
  * the next boot would throw away). */
 static bool data_valid(const mxs_data_t *d) {
   if (d->n_colors > MXST_MAX_COLORS || d->n_names > MXST_MAX_NAMES) return false;
+  if (!gesture_cfg_valid(&d->gesture_cfg)) return false;
   for (int i = 0; i < d->n_colors; i++) {
     if (!color_id_ok(d->colors[i].id)) return false;
     for (int j = 0; j < i; j++)
@@ -139,11 +149,14 @@ static bool data_valid(const mxs_data_t *d) {
 }
 
 static const uint8_t MAGIC[4] = {'M', 'X', 'S', 'T'};
-#define MXST_VERSION 1
+#define MXST_VERSION_V1 1
+#define MXST_VERSION 2 /* written by serialize */
+#define MXST_N_FCFG 1  /* records serialize writes (gesture) */
 
 size_t mxst_serialize(const mxs_data_t *d, uint8_t *out, size_t cap) {
   if (!data_valid(d)) return 0;
-  size_t need = 4 + 1 + MXP_CONFIG_SIZE + 1 + (size_t)d->n_colors * 4 + 1 + 2;
+  size_t need = 4 + 1 + MXP_CONFIG_SIZE + 1 + (size_t)d->n_colors * 4 + 1 + 1 +
+                MXST_N_FCFG * MXP_FUNC_CONFIG_SIZE + 2;
   for (int i = 0; i < d->n_names; i++) need += 4u + d->names[i].len;
   if (need > cap) return 0;
   size_t o = 0;
@@ -170,15 +183,41 @@ size_t mxst_serialize(const mxs_data_t *d, uint8_t *out, size_t cap) {
     memcpy(out + o, n->name, n->len);
     o += n->len;
   }
+  out[o++] = MXST_N_FCFG;
+  o += mxp_pack_gesture_config(&d->gesture_cfg, out + o);
   uint16_t crc = mxp_crc16(out, o);
   out[o++] = (uint8_t)(crc & 0xFF);
   out[o++] = (uint8_t)(crc >> 8);
   return o;
 }
 
+/* v2 func config record list at p[*o]. Unknown functions / layout versions
+ * are skipped; a known function twice or too many records -> false. Add a
+ * function here (and to serialize) without bumping the blob version. */
+static bool read_fcfg_list(const uint8_t *p, size_t *o, size_t end, mxs_data_t *t) {
+  if (*o + 1 > end) return false;
+  uint8_t n = p[(*o)++];
+  if (n > MXST_MAX_FCFG || *o + (size_t)n * MXP_FUNC_CONFIG_SIZE > end) return false;
+  bool seen_gesture = false;
+  for (int i = 0; i < n; i++, *o += MXP_FUNC_CONFIG_SIZE) {
+    const uint8_t *r = p + *o;
+    switch (r[0]) {
+    case MXP_FUNC_GESTURE:
+      if (seen_gesture) return false;
+      seen_gesture = true;
+      /* false = another layout version: keep the default */
+      mxp_unpack_gesture_config(r, MXP_FUNC_CONFIG_SIZE, &t->gesture_cfg);
+      break;
+    default:
+      break; /* not known to this firmware */
+    }
+  }
+  return true;
+}
+
 bool mxst_deserialize(const uint8_t *p, size_t len, mxs_data_t *out) {
   if (!p || len < 4 + 1 + MXP_CONFIG_SIZE + 1 + 1 + 2) return false;
-  if (memcmp(p, MAGIC, 4) != 0 || p[4] != MXST_VERSION) return false;
+  if (memcmp(p, MAGIC, 4) != 0 || (p[4] != MXST_VERSION_V1 && p[4] != MXST_VERSION)) return false;
   uint16_t want = (uint16_t)(p[len - 2] | (p[len - 1] << 8));
   if (mxp_crc16(p, len - 2) != want) return false;
   size_t end = len - 2, o = 5;
@@ -220,6 +259,7 @@ bool mxst_deserialize(const uint8_t *p, size_t len, mxs_data_t *out) {
     o += nl;
     t.n_names = (uint8_t)(i + 1);
   }
+  if (p[4] >= 2 && !read_fcfg_list(p, &o, end, &t)) return false;
   if (o != end) return false;
   *out = t;
   return true;

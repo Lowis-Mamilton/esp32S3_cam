@@ -25,7 +25,10 @@ extern "C" {
 #define MXST_FN_COLOR 1
 #define MXST_FN_TAG 2
 #define MXST_FN_FACE 3
+#define MXST_FN_GESTURE 8
 #define MXST_TAG_ID_MAX 586
+#define MXST_GESTURE_ID_MAX 9 /* gesture names: ids 1-9 (protocol.md 10) */
+#define MXST_MAX_FCFG 16      /* func config records a blob may hold */
 
 typedef struct {
   uint8_t fn;
@@ -40,29 +43,43 @@ typedef struct {
   uint8_t n_colors;
   mxs_name_t names[MXST_MAX_NAMES];
   uint8_t n_names;
+  mxp_gesture_config_t gesture_cfg; /* function 8 (GET/SET_FUNC_CONFIG) */
 } mxs_data_t;
 
-/* Blob layout (all little-endian):
- *   "MXST"(4) | version u8 = 1 | config (18, dirty forced 0) |
+/* Blob layout v2 (all little-endian):
+ *   "MXST"(4) | version u8 = 2 | config (18, dirty forced 0) |
  *   n_colors u8, n x { id u8, rgb[3] } |
  *   n_names u8, n x { fn u8, id u16, len u8, bytes[len] } |
+ *   n_fcfg u8, n x { the SET_FUNC_CONFIG packet: function_id u8,
+ *                    layout_version u8, body[8] } |
  *   CRC16 (mxp_crc16) over everything before it, u16.
- * Worst case: 4+1+18+1+7*4+1+32*(4+48)+2 = 1719 bytes. */
+ * v1 (version 1) is the same without the n_fcfg list; it is still read (func
+ * configs get their defaults). Reading the list: a record of a function this
+ * firmware does not know, or of a layout version it cannot read, is skipped
+ * (that function keeps its default); a known function_id twice, or
+ * n_fcfg > MXST_MAX_FCFG, rejects the whole blob. serialize writes version 2
+ * with one record per known function (today: gesture).
+ * Worst case: 1719 (v1) + 1 + 16*10 = 1880 bytes. */
 #define MXST_BLOB_MAX                                                                  \
-  (4 + 1 + MXP_CONFIG_SIZE + 1 + MXST_MAX_COLORS * 4 + 1 + MXST_MAX_NAMES * (4 + MXP_NAME_MAX) + 2)
+  (4 + 1 + MXP_CONFIG_SIZE + 1 + MXST_MAX_COLORS * 4 + 1 + MXST_MAX_NAMES * (4 + MXP_NAME_MAX) + \
+   1 + MXST_MAX_FCFG * MXP_FUNC_CONFIG_SIZE + 2)
 
-/* Defaults = protocol.md 7 config defaults, 0 colours, 0 names. */
+/* Defaults = protocol.md 7 config defaults, 0 colours, 0 names, func configs
+ * at their defaults (gesture: mxp_gesture_config_defaults). */
 void mxst_defaults(mxs_data_t *d);
 
-/* Returns bytes written, or 0 when cap is too small or d has invalid content. */
+/* Returns bytes written, or 0 when cap is too small or d has invalid content
+ * (including func config values outside their protocol ranges). */
 size_t mxst_serialize(const mxs_data_t *d, uint8_t *out, size_t cap);
 
-/* Rejects bad magic/version/CRC/truncation/trailing bytes/out-of-range values.
+/* Reads v1 and v2. Rejects bad magic/version/CRC/truncation/trailing
+ * bytes/out-of-range values (see the record list rules above).
  * *out is modified only on success. */
 bool mxst_deserialize(const uint8_t *p, size_t len, mxs_data_t *out);
 
 /* Name table. len 0 removes; an existing (fn,id) is replaced. false when the
- * table is full, fn/id invalid (fn 1/2/3; colour id 1-7; tag id 0-586),
+ * table is full, fn/id invalid (fn 1/2/3/8; colour id 1-7; tag id 0-586;
+ * face any id; gesture id 1-9),
  * len > MXP_NAME_MAX or the bytes are not valid UTF-8 (mxp_utf8_valid). */
 bool mxst_set_name(mxs_data_t *d, uint8_t fn, uint16_t id, const char *utf8, uint8_t len);
 /* NULL when absent; *len_out (optional) receives the byte length. */
@@ -83,7 +100,7 @@ void mxst_forget_names(mxs_data_t *d, uint8_t fn, uint16_t id);
 int mxst_learn_color(mxs_data_t *d, const uint8_t rgb[3], uint8_t tolerance);
 
 #ifdef ESP_PLATFORM
-/* Not reentrant (static 1.7 KB blob buffers): call load/save/erase from one
+/* Not reentrant (static 1.9 KB blob buffers): call load/save/erase from one
  * task at a time (boot code, then the save worker). Stack: load copies an
  * mxs_data_t (~1.9 KB) on the stack, so give the caller >= 4 KB; save/erase
  * need ~3 KB (NVS internals).
