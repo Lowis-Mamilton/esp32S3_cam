@@ -24,12 +24,10 @@ static const char *TAG = "encoder";
 
 static uint8_t *s_stage;   /* RGB565 copy of the frame to encode */
 static uint8_t *s_payload; /* FRAME header + JPEG */
-static uint8_t *s_tx;      /* encoded packet */
 static TaskHandle_t s_task;
 static atomic_bool s_busy;
 static uint32_t s_frame_id, s_ts_ms;
 static uint8_t s_quality;
-static uint8_t s_push_seq;
 
 static portMUX_TYPE s_stats_lock = portMUX_INITIALIZER_UNLOCKED;
 static unsigned s_frames, s_send_fail, s_enc_fail;
@@ -56,9 +54,8 @@ static void encoder_task(void *arg)
             mxp_frame_header_t h = { s_frame_id, s_ts_ms, MXCAM_LCD_W, MXCAM_LCD_H };
             mxp_pack_frame_header(&h, s_payload);
             memcpy(s_payload + MXP_FRAME_HEADER_SIZE, jpg, jlen);
-            size_t n = mxp_encode(MXP_CMD_PUSH_FRAME, s_push_seq++, s_payload,
-                                  (uint16_t)(jlen + MXP_FRAME_HEADER_SIZE), s_tx, MAX_PAYLOAD + MXP_OVERHEAD);
-            sent = n > 0 && mxcam_link_send(s_tx, n);
+            /* Non-blocking: the link TX task owns the port and the push seq. */
+            sent = mxcam_link_push(MXP_CMD_PUSH_FRAME, s_payload, (uint16_t)(jlen + MXP_FRAME_HEADER_SIZE));
         }
         free(jpg); /* fmt2jpg(NULL) is fine too; free(NULL) is a no-op */
 
@@ -81,8 +78,7 @@ esp_err_t encoder_start(void)
 {
     s_stage = heap_caps_malloc(FRAME_BYTES, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     s_payload = heap_caps_malloc(MAX_PAYLOAD, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    s_tx = heap_caps_malloc(MAX_PAYLOAD + MXP_OVERHEAD, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    if (!s_stage || !s_payload || !s_tx) {
+    if (!s_stage || !s_payload) {
         ESP_LOGE(TAG, "PSRAM buffers allocation failed");
         return ESP_ERR_NO_MEM;
     }

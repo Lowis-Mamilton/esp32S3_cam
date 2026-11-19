@@ -29,6 +29,23 @@ void mxcam_link_state_unlock(void);
  * have been queued, which host decoders resync from via the CRC. */
 bool mxcam_link_send(const uint8_t *data, size_t len);
 
+/* Non-blocking push (FRAME 0x60 / RESULTS 0x61): copies the payload into a slot
+ * and returns at once (false: bad cmd/len or link not started). FRAME keeps at
+ * most 2 pending (the oldest is dropped), RESULTS only the latest. A dedicated
+ * TX task (core 0, prio 4) encodes with the link's own push seq and sends. */
+bool mxcam_link_push(uint8_t cmd, const uint8_t *payload, uint16_t len);
+
+/* Sends a response packet (cmd is the response byte, e.g. 0xB0) through the
+ * budgeted path; for deferred responses, callable from any task. Payload <= 100 B. */
+void mxcam_link_respond(uint8_t cmd, uint8_t seq, const uint8_t *payload, uint16_t len);
+
+/* Sends the BAD_PARAM for a cancelled deferred LEARN, if any. The RX task calls
+ * this itself; call it too after anything that may cancel (e.g. mxs_tick). */
+void mxcam_link_flush_cancelled(void);
+
+/* Pushes discarded by the queue policy / failed to send since the last call. */
+void mxcam_link_take_push_stats(uint32_t *dropped, uint32_t *tx_fail);
+
 #ifdef __cplusplus
 }
 #endif

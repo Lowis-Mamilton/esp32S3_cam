@@ -177,6 +177,144 @@ static void test_timeout(void)
   CHECK(!s.streaming);
 }
 
+/* ---- deferred LEARN ---- */
+static void learn_payload(uint8_t func, uint8_t *p)
+{
+  p[0] = func;
+  uint16_t v[4] = { 100, 80, 20, 20 };
+  for (int i = 0; i < 4; i++) {
+    p[1 + 2 * i] = (uint8_t)v[i];
+    p[2 + 2 * i] = (uint8_t)(v[i] >> 8);
+  }
+}
+
+static void decode(const uint8_t *out, size_t n, mxp_frame_t *r, uint8_t *rb, size_t cap)
+{
+  mxp_decoder_t d;
+  mxp_decoder_init(&d, rb, cap);
+  bool got = false;
+  for (size_t i = 0; i < n; i++) got = mxp_decoder_feed(&d, out[i], r);
+  CHECK(got);
+}
+
+static size_t learn(mxs_state_t *s, uint8_t func, uint8_t seq, uint32_t now, mxp_frame_t *r,
+                    uint8_t *rb, size_t rb_cap)
+{
+  uint8_t p[9], out[64];
+  learn_payload(func, p);
+  mxp_frame_t req = { MXP_CMD_LEARN, seq, 9, p };
+  size_t n = mxs_handle(s, &req, now, out, sizeof(out));
+  if (n != MXS_DEFERRED && n > 0) decode(out, n, r, rb, rb_cap);
+  return n;
+}
+
+static void test_learn(void)
+{
+  mxp_info_t info = make_info();
+  mxs_state_t s;
+  mxs_init(&s, &info);
+  uint8_t rb[64], out[64];
+  mxp_frame_t r;
+
+  /* active function is not colour -> BAD_PARAM immediately */
+  CHECK(learn(&s, 1, 1, 0, &r, rb, sizeof(rb)) != MXS_DEFERRED);
+  CHECK(r.cmd == 0xFF && r.payload[0] == MXP_CMD_LEARN && r.payload[1] == MXP_ERR_BAD_PARAM && r.seq == 1);
+
+  s.function_id = 1;
+  /* wrong function in request */
+  CHECK(learn(&s, 2, 2, 0, &r, rb, sizeof(rb)) != MXS_DEFERRED);
+  CHECK(r.cmd == 0xFF && r.payload[1] == MXP_ERR_BAD_PARAM && r.seq == 2);
+  /* bad length */
+  uint8_t p[9] = { 1 };
+  mxp_frame_t bad = { MXP_CMD_LEARN, 3, 5, p };
+  size_t n = mxs_handle(&s, &bad, 0, out, sizeof(out));
+  CHECK(n != MXS_DEFERRED && n > 0);
+  decode(out, n, &r, rb, sizeof(rb));
+  CHECK(r.cmd == 0xFF && r.payload[1] == MXP_ERR_BAD_LENGTH);
+  CHECK(!s.pending_learn.active);
+
+  /* valid -> DEFERRED, seq remembered */
+  CHECK(learn(&s, 1, 9, 0, &r, rb, sizeof(rb)) == MXS_DEFERRED);
+  CHECK(s.pending_learn.active && s.pending_learn.seq == 9);
+  /* second while pending -> BUSY */
+  CHECK(learn(&s, 1, 10, 0, &r, rb, sizeof(rb)) != MXS_DEFERRED);
+  CHECK(r.cmd == 0xFF && r.payload[1] == MXP_ERR_BUSY && r.seq == 10);
+
+  /* take / complete */
+  uint8_t seq = 0;
+  mxp_learn_req_t req;
+  CHECK(mxs_take_pending_learn(&s, &seq, &req));
+  CHECK(seq == 9 && req.function_id == 1 && req.x == 100 && req.y == 80 && req.w == 20 && req.h == 20);
+  CHECK(!mxs_take_pending_learn(&s, &seq, &req)); /* claimed once */
+  /* still busy while the pipeline works on it */
+  CHECK(learn(&s, 1, 11, 0, &r, rb, sizeof(rb)) != MXS_DEFERRED && r.payload[1] == MXP_ERR_BUSY);
+  n = mxs_complete_learn(&s, seq, 4, out, sizeof(out));
+  CHECK(n > 0);
+  decode(out, n, &r, rb, sizeof(rb));
+  CHECK(r.cmd == 0xB0 && r.seq == 9 && r.len == 1 && r.payload[0] == 4);
+  CHECK(!s.pending_learn.active);
+
+  /* NO_COLOR -> BAD_PARAM, FULL -> FULL */
+  CHECK(learn(&s, 1, 20, 0, &r, rb, sizeof(rb)) == MXS_DEFERRED);
+  CHECK(mxs_take_pending_learn(&s, &seq, &req));
+  n = mxs_complete_learn(&s, seq, MXS_LEARN_NO_COLOR, out, sizeof(out));
+  decode(out, n, &r, rb, sizeof(rb));
+  CHECK(r.cmd == 0xFF && r.seq == 20 && r.payload[0] == MXP_CMD_LEARN && r.payload[1] == MXP_ERR_BAD_PARAM);
+  CHECK(learn(&s, 1, 21, 0, &r, rb, sizeof(rb)) == MXS_DEFERRED);
+  CHECK(mxs_take_pending_learn(&s, &seq, &req));
+  n = mxs_complete_learn(&s, seq, MXS_LEARN_FULL, out, sizeof(out));
+  decode(out, n, &r, rb, sizeof(rb));
+  CHECK(r.cmd == 0xFF && r.seq == 21 && r.payload[1] == MXP_ERR_FULL);
+  CHECK(!s.pending_learn.active);
+  CHECK(mxs_complete_learn(&s, 21, 1, out, sizeof(out)) == 0); /* nothing pending */
+}
+
+static void test_learn_cancel(void)
+{
+  mxp_info_t info = make_info();
+  mxs_state_t s;
+  mxs_init(&s, &info);
+  uint8_t rb[64], out[64], seq = 0;
+  mxp_frame_t r;
+  uint8_t zero = 0;
+
+  /* SET_FUNCTION change cancels an unclaimed learn; the response carries
+   * BAD_PARAM and the original seq. */
+  s.function_id = 1;
+  CHECK(learn(&s, 1, 31, 0, &r, rb, sizeof(rb)) == MXS_DEFERRED);
+  call(&s, MXP_CMD_SET_FUNCTION, 6, &zero, 1, 10, &r, rb, sizeof(rb));
+  CHECK(r.cmd == 0x90);
+  CHECK(!s.pending_learn.active);
+  size_t n = mxs_take_cancelled(&s, &seq, out, sizeof(out));
+  CHECK(n > 0 && seq == 31);
+  decode(out, n, &r, rb, sizeof(rb));
+  CHECK(r.cmd == 0xFF && r.seq == 31 && r.payload[0] == MXP_CMD_LEARN && r.payload[1] == MXP_ERR_BAD_PARAM);
+  CHECK(mxs_take_cancelled(&s, &seq, out, sizeof(out)) == 0); /* only once */
+
+  /* stream/host timeout cancels it too */
+  s.function_id = 1;
+  CHECK(learn(&s, 1, 32, 1000, &r, rb, sizeof(rb)) == MXS_DEFERRED);
+  mxs_tick(&s, 3999);
+  CHECK(s.pending_learn.active);
+  CHECK(mxs_take_cancelled(&s, &seq, out, sizeof(out)) == 0);
+  mxs_tick(&s, 4001);
+  CHECK(!s.pending_learn.active);
+  n = mxs_take_cancelled(&s, &seq, out, sizeof(out));
+  CHECK(n > 0 && seq == 32);
+  decode(out, n, &r, rb, sizeof(rb));
+  CHECK(r.cmd == 0xFF && r.seq == 32 && r.payload[1] == MXP_ERR_BAD_PARAM);
+
+  /* a learn already claimed by the pipeline is not cancelled (it completes it) */
+  s.function_id = 1;
+  CHECK(learn(&s, 1, 33, 5000, &r, rb, sizeof(rb)) == MXS_DEFERRED);
+  mxp_learn_req_t req;
+  CHECK(mxs_take_pending_learn(&s, &seq, &req));
+  call(&s, MXP_CMD_SET_FUNCTION, 7, &zero, 1, 5001, &r, rb, sizeof(rb));
+  CHECK(s.pending_learn.active);
+  CHECK(mxs_take_cancelled(&s, &seq, out, sizeof(out)) == 0);
+  CHECK(mxs_complete_learn(&s, 33, 2, out, sizeof(out)) > 0);
+}
+
 int main(void)
 {
   test_info();
@@ -184,6 +322,8 @@ int main(void)
   test_errors();
   test_stream();
   test_timeout();
+  test_learn();
+  test_learn_cancel();
   if (g_fail) {
     printf("%d of %d checks FAILED\n", g_fail, g_checks);
     return 1;
