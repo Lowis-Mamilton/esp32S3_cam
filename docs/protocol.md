@@ -77,14 +77,15 @@ CRC 錯誤的封包**不回應**：因為內容不可信，連 `seq` 都不能�
 | 0x10 | SET_FUNCTION | M1 |
 | 0x11 | GET_FUNCTION | M1 |
 | 0x20 | GET_RESULTS | M2 |
-| 0x30–0x34 | LEARN / FORGET / SET_NAME / GET_COLOR / SET_COLOR | M2 |
+| 0x30–0x33 | LEARN / FORGET / SET_NAME / GET_LEARNED | M2 |
+| 0x34 | 保留 | — |
 | 0x40–0x43 | GET_CONFIG / SET_CONFIG / SAVE / FACTORY_RESET | M2 |
 | 0x50 | STREAM_START（僅 USB） | M1 |
 | 0x51 | STREAM_STOP（僅 USB） | M1 |
 | 0x60 | 推送 FRAME | M1 |
 | 0x61 | 推送 RESULTS | M2 |
 
-M2 以後的指令，payload 在各自的里程碑定稿。
+M2 的指令細節見第 7 節；M3 以後新增的指令在各自的里程碑定稿。
 
 ## 6. M1 指令細節
 
@@ -140,3 +141,102 @@ STREAM_START 請求：
 | timestamp_ms | u32 | 開機後經過的毫秒數 |
 | width, height | u16 ×2 | JPEG 的尺寸 |
 | jpeg | 其餘 bytes | 一張完整的 JPEG |
+
+## 7. M2 指令細節
+
+M2 定稿於 2026-11-19（決策見 ADR-0007～0009）。
+
+### 共用：辨識結果紀錄（ResultRecord）
+
+| 欄位 | 型別 | 說明 |
+|---|---|---|
+| id | u16 | 顏色：學到的 ID（1–7），0 = 沒學過；AprilTag：tag ID（0–586）；人臉：0 |
+| x, y | i16 ×2 | 框的**中心**，320×240 座標 |
+| width, height | u16 ×2 | 框的寬高（已裁到畫面內） |
+| confidence | u8 | 0–100；沒有意義時填 `255` |
+| extra_len | u8 | 後面附加資料的長度 |
+| extra | u8[extra_len] | 依功能而定（見下） |
+
+AprilTag 的 `extra`（18 bytes）：`rotation_cdeg (i16，-18000～18000，百分之一度)`，接著四個角 `x0,y0,x1,y1,x2,y2,x3,y3 (i16 ×8)`。顏色和人臉的 `extra_len` 是 0。
+
+### 0x20 GET_RESULTS
+
+請求：空。回應 `0xA0`：
+
+| 欄位 | 型別 | 說明 |
+|---|---|---|
+| frame_id | u32 | 這批結果對應的畫面編號（與 FRAME 推送相同） |
+| function_id | u8 | 產生這批結果的功能 |
+| count | u8 | 0–8 |
+| records | ResultRecord ×count | 依面積（AprilTag、人臉：依信心度或面積）由大到小 |
+
+回傳的是**最近一張處理完的畫面**的結果，不會等下一張。
+
+### 0x61 推送 RESULTS（僅 USB，需 STREAM_START 的 flags bit1）
+
+payload 與 GET_RESULTS 的回應相同。每處理完一張畫面推送一次（沒有變化也推送），沒有限速以外的節流。
+
+### 0x30 LEARN
+
+請求：`function_id (u8)`，`x, y, width, height (u16 ×4)` —— 要學習的區域，**左上角**座標（320×240）。
+
+- 只有顏色（1）支援；其他功能回 `BAD_PARAM`
+- MXCam 在**下一張畫面**取區域內的顏色，因此回應最多晚一張畫面（約 100 ms）才送出；主機的逾時應 ≥ 1 秒
+- 回應 `0xB0`：`id (u8)` —— 分配到的 ID（同一個顏色已學過就是原本的 ID）
+- 錯誤：區域沒有顏色（太暗、太灰）→ `BAD_PARAM`；已經學滿 7 個 → `FULL (0x07)`
+
+### 0x31 FORGET
+
+請求：`function_id (u8)`，`id (u16)` —— `0xFFFF` 表示全部忘記。回應 `0xB1`：空。ID 不存在也回成功（冪等）。
+
+### 0x32 SET_NAME
+
+請求：`function_id (u8)`，`id (u16)`，`name_len (u8)`，`name (UTF-8，最多 48 bytes)`。`name_len = 0` 表示清除名字。回應 `0xB2`：空。
+
+- 顏色：ID 必須已經學過，否則 `BAD_PARAM`
+- AprilTag：任何 0–586 的 tag ID 都可以取名（不需要先學習）
+- 名字超過 48 bytes 或不是合法 UTF-8 → `BAD_LENGTH` / `BAD_PARAM`
+
+### 0x33 GET_LEARNED
+
+請求：`function_id (u8)`。回應 `0xB3`：`count (u8)`，接著每一筆：
+
+| 欄位 | 型別 | 說明 |
+|---|---|---|
+| id | u16 | |
+| r, g, b | u8 ×3 | 顏色功能的學習色；其他功能填 0 |
+| name_len | u8 | |
+| name | UTF-8 | |
+
+### 0x40 GET_CONFIG / 0x41 SET_CONFIG
+
+設定是一個固定版面的結構（Config v1，18 bytes），SET_CONFIG 整包取代，回應 `0xC1` 是套用後的整包（範圍外的值會被夾限）。GET_CONFIG 回應 `0xC0` 是目前的整包。
+
+| 欄位 | 型別 | 預設 | 範圍 |
+|---|---|---|---|
+| config_version | u8 | 1 | 固定 1 |
+| color.tolerance | u8 | 30 | 0–100 |
+| color.min_area | u16 | 100 | 0–65535 |
+| color.max_results | u8 | 4 | 1–8 |
+| color.show_names | u8 | 1 | 0/1 |
+| tag.show_names | u8 | 1 | 0/1 |
+| face.threshold | u8 | 60 | 0–100 |
+| face.max_results | u8 | 4 | 1–8 |
+| uart_baud | u32 | 115200 | 115200 / 9600 |
+| i2c_address | u8 | 0x5A | 0x08–0x77 |
+| led_brightness | u8 | 50 | 0–100 |
+| dirty | u8 | — | 唯讀：1 = 有還沒存進 flash 的變更（SET_CONFIG 時忽略） |
+| reserved | u8 ×2 | 0 | |
+
+UART 鮑率、I2C 位址的變更**存檔並重開機後**才生效（避免改到一半斷線）。
+
+### 0x42 SAVE / 0x43 FACTORY_RESET
+
+- SAVE：把學習資料、名字和 Config 寫進 NVS。回應 `0xC2`：空。之後 `dirty` = 0。
+- FACTORY_RESET：清除 NVS 中的學習資料、名字和 Config，回到預設值（不重開機）。回應 `0xC3`：空。
+
+### 新增錯誤碼
+
+| 碼 | 名稱 | 意義 |
+|---|---|---|
+| 0x07 | FULL | 學習數量已達上限 |

@@ -75,3 +75,4 @@ CI（`.github/workflows/ci.yml`）：firmware、pc-app、arduino-lib、host-test
 
 - 與使用者的對話回覆用繁體中文。
 - 使用者的全域規則：要建功能、改行為、做設計、選架構之前，先問清楚細節（grilling），不要直接動工；結論記錄到 `docs/SPEC.md` 或 `docs/adr/`。
+- 本專案例外（使用者 2026-11-19 指示）：之後的設計問題**直接採用建議答案**，不用停下來問；但仍要把每個決定和理由寫進 `docs/SPEC.md` 或 ADR，並在回報時列出。
