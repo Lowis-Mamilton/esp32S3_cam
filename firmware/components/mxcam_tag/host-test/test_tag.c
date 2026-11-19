@@ -257,6 +257,72 @@ static void test_clipped_bbox(void) {
   CHECK(out[0].h > 0);
 }
 
+/* Half-res mode: 160x120 gray, coordinates scaled back to 320x240. */
+static void check_half(const mxp_result_t *r, int id, double cx, double cy, double angle_deg, double cell) {
+  CHECK(r->id == id);
+  APPROX(r->x, cx, 3);
+  APPROX(r->y, cy, 3);
+  CHECK(r->extra_len == 18);
+  int rot = rd16(r->extra);
+  CHECK(abs(cdeg_diff(rot, (int)lround(angle_deg * 100))) <= 500);
+  double a = angle_deg * PI / 180.0, ext = 8 * cell * (fabs(cos(a)) + fabs(sin(a)));
+  APPROX(r->w, ext, 5);
+  APPROX(r->h, ext, 5);
+}
+
+/* The table-driven gray conversion equals the reference formula for every pixel. */
+static void test_luma_exhaustive(void) {
+  int bad = 0;
+  for (unsigned v = 0; v < 65536; v++) {
+    unsigned r5 = v >> 11, g6 = (v >> 5) & 0x3Fu, b5 = v & 0x1Fu;
+    unsigned r = (r5 << 3) | (r5 >> 2), g = (g6 << 2) | (g6 >> 4), b = (b5 << 3) | (b5 >> 2);
+    uint8_t want = (uint8_t)((77u * r + 150u * g + 29u * b) >> 8);
+    uint8_t mem[2] = { (uint8_t)(v >> 8), (uint8_t)v }; /* big-endian in memory */
+    uint16_t px;
+    memcpy(&px, mem, 2);
+    if (mxt_luma_be(px) != want) bad++;
+  }
+  CHECK(bad == 0);
+}
+
+static void test_half_res(void) {
+  mxt_tuning_t def, t;
+  mxt_get_tuning(&def);
+  CHECK(def.half_res == 0 && def.min_white_black_diff == 20 && def.max_nmaxima == 10 &&
+        def.min_cluster_pixels == 5 && def.refine_edges == 1 && def.max_line_fit_mse == 10);
+  t = def;
+  t.max_nmaxima = 0;
+  CHECK(!mxt_set_tuning(&t));
+  t = def;
+  t.max_line_fit_mse = 0;
+  CHECK(!mxt_set_tuning(&t));
+  t = def;
+  t.half_res = 1;
+  CHECK(mxt_set_tuning(&t));
+  mxt_tuning_t got;
+  mxt_get_tuning(&got);
+  CHECK(got.half_res == 1);
+
+  mxp_result_t out[MXP_MAX_RESULTS];
+  background();
+  CHECK(run(out, MXP_MAX_RESULTS) == 0);
+  background();
+  draw_tag(3, 100, 120, 8, 0);
+  uint8_t n = run(out, MXP_MAX_RESULTS);
+  CHECK(n == 1);
+  if (n >= 1) check_half(&out[0], 3, 100, 120, 0, 8);
+  background();
+  draw_tag(100, 200, 110, 8, 30);
+  n = run(out, MXP_MAX_RESULTS);
+  CHECK(n == 1);
+  if (n >= 1) check_half(&out[0], 100, 200, 110, 30, 8);
+  printf("half-res detect: %u us (host)\n", (unsigned)last_us);
+  mxt_profile_t pr;
+  mxt_last_profile(&pr);
+  CHECK(pr.total_us == last_us && pr.nquads >= 1);
+  CHECK(mxt_set_tuning(&def));
+}
+
 int main(void) {
   setvbuf(stdout, NULL, _IONBF, 0); /* keep output if a test crashes */
   fam = tag36h11_create();
@@ -270,6 +336,8 @@ int main(void) {
   test_lifecycle();
   test_decimate_setter();
   test_clipped_bbox();
+  test_half_res();
+  test_luma_exhaustive();
   mxt_deinit();
   tag36h11_destroy(fam);
   if (fails) {

@@ -34,7 +34,21 @@ wrapper, examples, `getopt`, `pjpeg`, `pam`, `zhash`, `string_util`,
   `-Wno-shift-negative-value` (upstream sets this too), and `-U_GNU_SOURCE` for
   `workerpool.c` (it redefines the macro IDF already passes).
 
-No shims: ESP-IDF's `pthread` component and newlib provide everything
+- `mxt_alloc.h`, `mxt_alloc_shim.h`, `mxt_alloc_shim.c` (ESP-IDF only): the
+  shim header is force-included (`-include`) into every upstream source and maps
+  `malloc`/`calloc`/`realloc` to `mxt_alloc_*`, which allocate in PSRAM.
+  Without it upstream's many small per-frame blocks took ~130 KB of internal
+  RAM at peak (plain malloc keeps blocks <= 4 KB internal).
+- `mxt_float_shim.h`: force-included after the alloc shim (also into
+  `mxcam_tag.c` and the host test, so the struct layout matches): includes the
+  system headers first, then `#define double float` and maps the libm calls to
+  their `f` versions; built with `-fsingle-precision-constant`. The ESP32-S3
+  FPU is single precision only; emulated double dominated quad fitting and
+  decoding (TAG mode 107 -> 56 ms per frame together with the threshold
+  setting, see the M2 Task 6 report). The host test runs the same float build.
+
+The upstream files stay byte-identical: everything above is compiler flags and
+forced includes. ESP-IDF's `pthread` component and newlib provide everything
 `pthreads_cross` / `workerpool` / `time_util` use. `mxcam_tag` runs with
 `nthreads = 1`, so `workerpool` never creates a thread.
 

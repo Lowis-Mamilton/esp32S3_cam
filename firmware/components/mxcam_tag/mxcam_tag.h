@@ -51,6 +51,46 @@ void mxt_deinit(void);
  * before mxt_init; the value survives deinit/init. Default 2. */
 bool mxt_set_quad_decimate(float decimate);
 
+/* Detector tuning (speed vs range). Defaults: half_res 0,
+ * min_white_black_diff 20 (upstream 5), max_nmaxima 10, min_cluster_pixels 5,
+ * refine_edges 1, max_line_fit_mse 10. */
+typedef struct {
+  /* 1: convert to a 160x120 gray image (2x2 mean) and detect on it without
+   * upstream decimation (quad_decimate is ignored); decode and edge refinement
+   * also run at 160x120, coordinates are scaled back to 320x240. Faster and
+   * smaller, but tags need ~2x the size in pixels to decode. */
+  uint8_t half_res;
+  uint8_t min_white_black_diff; /* threshold contrast to keep a component */
+  uint8_t max_nmaxima;          /* corner candidates per cluster */
+  uint8_t min_cluster_pixels;   /* smaller clusters are not fitted */
+  uint8_t refine_edges;         /* 0/1 */
+  uint8_t max_line_fit_mse;     /* line fit error limit (upstream float, default 10) */
+} mxt_tuning_t;
+void mxt_get_tuning(mxt_tuning_t *out);
+/* Applies now if initialised, otherwise at mxt_init. false on 0 for
+ * max_nmaxima or max_line_fit_mse. */
+bool mxt_set_tuning(const mxt_tuning_t *t);
+
+/* The gray value the detector uses for one RGB565 big-endian pixel (as stored
+ * in the frame buffer): (77R + 150G + 29B) >> 8 on 8-bit expanded channels. */
+uint8_t mxt_luma_be(uint16_t px);
+
+/* Where the last mxt_detect spent its time (from upstream's timeprofile
+ * stamps), for the 1 Hz log. Stages that did not run read 0. */
+typedef struct {
+  uint32_t gray_us;      /* RGB565 -> gray conversion (ours) */
+  uint32_t decimate_us;  /* quad_decimate */
+  uint32_t threshold_us; /* adaptive threshold */
+  uint32_t unionfind_us; /* connected components */
+  uint32_t clusters_us;  /* gradient clusters */
+  uint32_t fitquads_us;  /* quad fitting */
+  uint32_t decode_us;    /* decode + edge refinement */
+  uint32_t other_us;     /* everything else (init, reconcile, cleanup) */
+  uint32_t total_us;
+  uint32_t nquads;       /* candidate quads that reached decoding */
+} mxt_profile_t;
+void mxt_last_profile(mxt_profile_t *out);
+
 #ifdef __cplusplus
 }
 #endif
