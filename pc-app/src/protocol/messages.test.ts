@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
-  Cmd, ErrorCode, FunctionId, encodeConfig, encodeForget, encodeFuncConfig, encodeGetFuncConfig, encodeLearn,
+  Cmd, ErrorCode, FunctionId, Gesture, encodeConfig, encodeForget, encodeFuncConfig, encodeGetFuncConfig, encodeLearn,
   encodeSetName, encodeStreamStart, parseConfig, parseError, parseFramePush, parseFuncConfig, parseInfo, parseLearned,
   parseResults, responseOf,
 } from "./messages";
@@ -193,6 +193,67 @@ describe("config", () => {
     expect(() => parseConfig(p.slice(0, 17))).toThrow();
     const q = p.slice(); q[0] = 2;
     expect(() => parseConfig(q)).toThrow();
+  });
+});
+
+describe("M8a gesture", () => {
+  it("parseInfo reads gesture function", () => {
+    expect(parseInfo(fromHex(frameVector("get_info_response_gesture").payload_hex)).functionIds).toEqual([1, 2, 3, 8]);
+    expect(FunctionId.Gesture).toBe(8);
+  });
+
+  it("encodeGetFuncConfig for gesture", () => {
+    expect(frameVector("get_func_config_gesture_request").cmd).toBe(Cmd.GetFuncConfig);
+    expect(toHex(encodeGetFuncConfig(FunctionId.Gesture))).toBe(frameVector("get_func_config_gesture_request").payload_hex);
+  });
+
+  it("gesture func config vectors round trip", () => {
+    for (const [name, v] of [
+      ["func_config_gesture_default", pv.gesture_config_default],
+      ["set_func_config_gesture_request", pv.gesture_config_set],
+    ] as const) {
+      const c = parseFuncConfig(fromHex(frameVector(name).payload_hex));
+      expect(c).toEqual({
+        functionId: 8,
+        gesture: { handThreshold: v.hand_threshold, gestureThreshold: v.gesture_threshold, maxHands: v.max_hands },
+      });
+      expect(toHex(encodeFuncConfig(c))).toBe(frameVector(name).payload_hex);
+    }
+    expect(frameVector("func_config_gesture_default").cmd).toBe(Cmd.GetFuncConfig | 0x80);
+    expect(frameVector("set_func_config_gesture_request").cmd).toBe(Cmd.SetFuncConfig);
+  });
+
+  it("parseFuncConfig rejects wrong gesture version/length", () => {
+    const g = fromHex(frameVector("func_config_gesture_default").payload_hex);
+    expect(() => parseFuncConfig(g.slice(0, 9))).toThrow();
+    expect(() => parseFuncConfig(new Uint8Array([...g, 0]))).toThrow();
+    const v2 = g.slice(); v2[1] = 2;
+    expect(() => parseFuncConfig(v2)).toThrow();
+    const v0 = g.slice(); v0[1] = 0;
+    expect(() => parseFuncConfig(v0)).toThrow();
+  });
+
+  it("parseResults decodes gesture records", () => {
+    const r = parseResults(fromHex(frameVector("results_gesture_two").payload_hex));
+    const e = pv.results_gesture_two;
+    expect(r.frameId).toBe(e.frame_id);
+    expect(r.functionId).toBe(FunctionId.Gesture);
+    expect(r.results).toHaveLength(2);
+    expect(r.results.map((x) => [x.id, x.x, x.y, x.width, x.height, x.confidence])).toEqual(
+      e.results.map((x) => [x.id, x.x, x.y, x.width, x.height, x.confidence]));
+    expect(r.results[0].id).toBe(Gesture.Ok);
+    expect(r.results[1].id).toBe(Gesture.Unknown);
+    expect([r.results[0].confidence, r.results[1].confidence]).toEqual([92, 81]);
+    for (const x of r.results) {
+      expect(x.extra).toBeUndefined();
+      expect(x.line).toBeUndefined();
+    }
+  });
+
+  it("Gesture ids match the protocol table", () => {
+    expect(Gesture).toEqual({ Unknown: 0, One: 1, Two: 2, Three: 3, Four: 4, Five: 5, Like: 6, Ok: 7, Call: 8, Dislike: 9 });
+    expect(Gesture.Like).toBe(6);
+    expect(Gesture.Dislike).toBe(9);
   });
 });
 

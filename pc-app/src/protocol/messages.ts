@@ -35,7 +35,12 @@ export const ErrorCode = {
   Full: 7,
 } as const;
 
-export const FunctionId = { None: 0, Color: 1, AprilTag: 2, Face: 3, Line: 4, Track: 5 } as const;
+export const FunctionId = { None: 0, Color: 1, AprilTag: 2, Face: 3, Line: 4, Track: 5, Gesture: 8 } as const;
+
+/** Gesture ids in gesture ResultRecords (docs/protocol.md section 10). 0 = a hand was found but not recognised. */
+export const Gesture = {
+  Unknown: 0, One: 1, Two: 2, Three: 3, Four: 4, Five: 5, Like: 6, Ok: 7, Call: 8, Dislike: 9,
+} as const;
 
 export interface DeviceInfo {
   protocolVersion: number;
@@ -327,6 +332,7 @@ export function parseConfig(payload: Uint8Array): DeviceConfig {
 const FUNC_CONFIG_LEN = 10;
 const LINE_CONFIG_VERSION = 1;
 const TRACK_CONFIG_VERSION = 1;
+const GESTURE_CONFIG_VERSION = 1;
 
 /** Line config v1. mode 0 = dark line, 1 = light line, 2 = learned colour; threshold 0 = automatic. */
 export interface LineConfig {
@@ -347,9 +353,17 @@ export interface TrackConfig {
   scale: boolean;
 }
 
+/** Gesture config v1. maxHands is 1 or 2; the firmware clamps. */
+export interface GestureConfig {
+  handThreshold: number;
+  gestureThreshold: number;
+  maxHands: number;
+}
+
 export type FuncConfig =
   | { functionId: typeof FunctionId.Line; line: LineConfig }
-  | { functionId: typeof FunctionId.Track; track: TrackConfig };
+  | { functionId: typeof FunctionId.Track; track: TrackConfig }
+  | { functionId: typeof FunctionId.Gesture; gesture: GestureConfig };
 
 /** GET_FUNC_CONFIG request. */
 export function encodeGetFuncConfig(functionId: number): Uint8Array {
@@ -363,6 +377,9 @@ export function encodeFuncConfig(c: FuncConfig): Uint8Array {
   if (c.functionId === FunctionId.Line) {
     const l = c.line;
     out.set([LINE_CONFIG_VERSION, l.mode, l.threshold, l.roiPct, l.bands, l.minWidth, l.maxWidth, l.colorTolerance], 1);
+  } else if (c.functionId === FunctionId.Gesture) {
+    const g = c.gesture;
+    out.set([GESTURE_CONFIG_VERSION, g.handThreshold, g.gestureThreshold, g.maxHands], 1);
   } else {
     const t = c.track;
     out.set([TRACK_CONFIG_VERSION, t.threshold, t.adapt, t.reacquire ? 1 : 0, t.scale ? 1 : 0], 1);
@@ -396,6 +413,13 @@ export function parseFuncConfig(payload: Uint8Array): FuncConfig {
     return {
       functionId: FunctionId.Track,
       track: { threshold: payload[2], adapt: payload[3], reacquire: payload[4] !== 0, scale: payload[5] !== 0 },
+    };
+  }
+  if (fn === FunctionId.Gesture) {
+    if (version !== GESTURE_CONFIG_VERSION) throw new Error(`unsupported gesture config layout_version ${version}`);
+    return {
+      functionId: FunctionId.Gesture,
+      gesture: { handThreshold: payload[2], gestureThreshold: payload[3], maxHands: payload[4] },
     };
   }
   throw new Error(`function ${fn} has no func config`);

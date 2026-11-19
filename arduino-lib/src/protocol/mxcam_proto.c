@@ -430,6 +430,31 @@ bool mxp_unpack_track_config(const uint8_t *p, uint16_t len, mxp_track_config_t 
   return true;
 }
 
+void mxp_gesture_config_defaults(mxp_gesture_config_t *c) {
+  c->hand_threshold = 40; /* provisional, see docs/measurements/m8a.md */
+  c->gesture_threshold = 60;
+  c->max_hands = 1;
+}
+
+size_t mxp_pack_gesture_config(const mxp_gesture_config_t *c, uint8_t out[MXP_FUNC_CONFIG_SIZE]) {
+  memset(out, 0, MXP_FUNC_CONFIG_SIZE);
+  out[0] = MXP_FUNC_GESTURE;
+  out[1] = MXP_GESTURE_CONFIG_VERSION;
+  out[2] = c->hand_threshold;
+  out[3] = c->gesture_threshold;
+  out[4] = c->max_hands;
+  return MXP_FUNC_CONFIG_SIZE;
+}
+
+bool mxp_unpack_gesture_config(const uint8_t *p, uint16_t len, mxp_gesture_config_t *out) {
+  if (len != MXP_FUNC_CONFIG_SIZE || p[0] != MXP_FUNC_GESTURE || p[1] != MXP_GESTURE_CONFIG_VERSION)
+    return false;
+  out->hand_threshold = clamp_u8(p[2], 10, 95);
+  out->gesture_threshold = clamp_u8(p[3], 0, 100);
+  out->max_hands = clamp_u8(p[4], 1, 2);
+  return true;
+}
+
 void mxp_pack_line_extra(const mxp_line_extra_t *e, mxp_result_t *r) {
   uint8_t *x = r->extra;
   put_u16(x, (uint16_t)e->angle_cdeg);

@@ -202,6 +202,46 @@
       "seq": 0,
       "payload_hex": "4d00000004010100aa00a40015008700580eaffc1400b400e700a00061000200",
       "encoded_hex": "4d5801610020004d00000004010100aa00a40015008700580eaffc1400b400e700a000610002003201"
+    },
+    {
+      "name": "get_info_response_gesture",
+      "ver": 1,
+      "cmd": 129,
+      "seq": 3,
+      "payload_hex": "010001006131623263336424ec4a0011ff4001f000080401020308",
+      "encoded_hex": "4d580181031b00010001006131623263336424ec4a0011ff4001f000080401020308d420"
+    },
+    {
+      "name": "get_func_config_gesture_request",
+      "ver": 1,
+      "cmd": 68,
+      "seq": 12,
+      "payload_hex": "08",
+      "encoded_hex": "4d5801440c010008d42a"
+    },
+    {
+      "name": "func_config_gesture_default",
+      "ver": 1,
+      "cmd": 196,
+      "seq": 12,
+      "payload_hex": "0801283c010000000000",
+      "encoded_hex": "4d5801c40c0a000801283c01000000000072f8"
+    },
+    {
+      "name": "set_func_config_gesture_request",
+      "ver": 1,
+      "cmd": 69,
+      "seq": 13,
+      "payload_hex": "08013246020000000000",
+      "encoded_hex": "4d5801450d0a00080132460200000000000984"
+    },
+    {
+      "name": "results_gesture_two",
+      "ver": 1,
+      "cmd": 97,
+      "seq": 0,
+      "payload_hex": "7800000008020700c8007800500060005c0000005a008c003c0046005100",
+      "encoded_hex": "4d580161001e007800000008020700c8007800500060005c0000005a008c003c004600510069bf"
     }
   ],
   "decoder": [
@@ -456,6 +496,42 @@
             "y1": 97,
             "flags": 2
           }
+        }
+      ]
+    },
+    "gesture_config_default": {
+      "function_id": 8,
+      "layout_version": 1,
+      "hand_threshold": 40,
+      "gesture_threshold": 60,
+      "max_hands": 1
+    },
+    "gesture_config_set": {
+      "function_id": 8,
+      "layout_version": 1,
+      "hand_threshold": 50,
+      "gesture_threshold": 70,
+      "max_hands": 2
+    },
+    "results_gesture_two": {
+      "frame_id": 120,
+      "function_id": 8,
+      "results": [
+        {
+          "id": 7,
+          "x": 200,
+          "y": 120,
+          "width": 80,
+          "height": 96,
+          "confidence": 92
+        },
+        {
+          "id": 0,
+          "x": 90,
+          "y": 140,
+          "width": 60,
+          "height": 70,
+          "confidence": 81
         }
       ]
     }

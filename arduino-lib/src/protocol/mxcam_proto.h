@@ -210,6 +210,7 @@ size_t mxp_pack_learned(const mxp_learned_t *items, uint8_t n, uint8_t *out, siz
 #define MXP_FUNC_CONFIG_SIZE 10
 #define MXP_LINE_CONFIG_VERSION 1
 #define MXP_TRACK_CONFIG_VERSION 1
+#define MXP_GESTURE_CONFIG_VERSION 1
 
 enum { MXP_LINE_MODE_DARK = 0, MXP_LINE_MODE_LIGHT = 1, MXP_LINE_MODE_LEARNED = 2 };
 
@@ -221,9 +222,14 @@ typedef struct {
 typedef struct {
   uint8_t threshold, adapt, reacquire, scale;
 } mxp_track_config_t;
+/* Gesture config v1 (function 8, protocol.md 10). */
+typedef struct {
+  uint8_t hand_threshold, gesture_threshold, max_hands;
+} mxp_gesture_config_t;
 
 void mxp_line_config_defaults(mxp_line_config_t *c);   /* 0, 0, 60, 8, 4, 80, 30 */
 void mxp_track_config_defaults(mxp_track_config_t *c); /* 50, 10, 1, 1 */
+void mxp_gesture_config_defaults(mxp_gesture_config_t *c); /* 40, 60, 1 (hand_threshold provisional) */
 /* pack writes function_id, layout_version, the body and zero reserved bytes; returns 10. */
 size_t mxp_pack_line_config(const mxp_line_config_t *c, uint8_t out[MXP_FUNC_CONFIG_SIZE]);
 size_t mxp_pack_track_config(const mxp_track_config_t *c, uint8_t out[MXP_FUNC_CONFIG_SIZE]);
@@ -231,6 +237,9 @@ size_t mxp_pack_track_config(const mxp_track_config_t *c, uint8_t out[MXP_FUNC_C
  * values (protocol.md 9) and ignore reserved bytes. */
 bool mxp_unpack_line_config(const uint8_t *p, uint16_t len, mxp_line_config_t *out);
 bool mxp_unpack_track_config(const uint8_t *p, uint16_t len, mxp_track_config_t *out);
+size_t mxp_pack_gesture_config(const mxp_gesture_config_t *c, uint8_t out[MXP_FUNC_CONFIG_SIZE]);
+/* Gesture clamps: hand_threshold 10-95, gesture_threshold 0-100, max_hands 1-2. */
+bool mxp_unpack_gesture_config(const uint8_t *p, uint16_t len, mxp_gesture_config_t *out);
 
 /* Line ResultRecord extra (14 bytes): angle_cdeg, offset_x, x0, y0 (bottom end),
  * x1, y1 (top end) as i16, then flags u8 and reserved u8 = 0. */

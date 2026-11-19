@@ -485,6 +485,93 @@ static void test_func_config_reject(void) {
   CHECK(!mxp_unpack_track_config(pl, 10, &tc), "track version 2");
 }
 
+/* hand_threshold default is provisional (docs/measurements/m8a.md); if it changes, update
+ * GESTURE_DEFAULT_HAND_THRESHOLD here and mxp_gesture_config_defaults() - nothing else. The
+ * "default" vectors are only sample wire bytes (round trip) and do not follow the default. */
+#define GESTURE_DEFAULT_HAND_THRESHOLD 40
+
+static bool gesture_cfg_eq(const mxp_gesture_config_t *a, const mxp_gesture_config_t *b) {
+  return a->hand_threshold == b->hand_threshold && a->gesture_threshold == b->gesture_threshold &&
+         a->max_hands == b->max_hands;
+}
+
+static void test_gesture_config_vectors(void) {
+  uint8_t pl[32], out[MXP_FUNC_CONFIG_SIZE];
+  CHECK(MXP_FUNC_GESTURE == 8 && MXP_GESTURE_CONFIG_VERSION == 1, "gesture ids");
+  size_t pn = vec_payload("func_config_gesture_default", pl, sizeof pl);
+  CHECK(pn == MXP_FUNC_CONFIG_SIZE, "gesture config 10 bytes");
+  mxp_gesture_config_t g, d;
+  CHECK(mxp_unpack_gesture_config(pl, (uint16_t)pn, &g) && gesture_cfg_eq(&g, &VEC_P_GESTURE_CONFIG_DEFAULT),
+        "unpack gesture default");
+  memset(out, 0xEE, sizeof out);
+  CHECK(mxp_pack_gesture_config(&g, out) == MXP_FUNC_CONFIG_SIZE && memcmp(out, pl, pn) == 0,
+        "pack gesture default round trip");
+  memset(&d, 0xAA, sizeof d);
+  mxp_gesture_config_defaults(&d);
+  CHECK(d.hand_threshold == GESTURE_DEFAULT_HAND_THRESHOLD && d.gesture_threshold == 60 && d.max_hands == 1,
+        "gesture defaults");
+  pn = vec_payload("set_func_config_gesture_request", pl, sizeof pl);
+  CHECK(pn == MXP_FUNC_CONFIG_SIZE && mxp_unpack_gesture_config(pl, (uint16_t)pn, &g) &&
+            gesture_cfg_eq(&g, &VEC_P_GESTURE_CONFIG_SET) && g.hand_threshold == 50 &&
+            g.gesture_threshold == 70 && g.max_hands == 2,
+        "unpack gesture set");
+  memset(out, 0xEE, sizeof out);
+  CHECK(mxp_pack_gesture_config(&g, out) == MXP_FUNC_CONFIG_SIZE && memcmp(out, pl, pn) == 0,
+        "pack gesture set");
+  pn = vec_payload("get_func_config_gesture_request", pl, sizeof pl);
+  CHECK(pn == 1 && pl[0] == MXP_FUNC_GESTURE, "get gesture config request");
+}
+
+static void test_gesture_config_clamp(void) {
+  uint8_t out[MXP_FUNC_CONFIG_SIZE];
+  mxp_gesture_config_t g;
+  const uint8_t in1[10] = {8, 1, 5, 150, 0, 9, 9, 9, 9, 9};
+  CHECK(mxp_unpack_gesture_config(in1, 10, &g) && g.hand_threshold == 10 && g.gesture_threshold == 100 &&
+            g.max_hands == 1,
+        "gesture clamp 1");
+  static const uint8_t exp1[10] = {8, 1, 10, 100, 1, 0, 0, 0, 0, 0};
+  CHECK(mxp_pack_gesture_config(&g, out) == 10 && memcmp(out, exp1, 10) == 0, "gesture repack, reserved 0");
+  const uint8_t in2[10] = {8, 1, 99, 0, 7, 0, 0, 0, 0, 0};
+  CHECK(mxp_unpack_gesture_config(in2, 10, &g) && g.hand_threshold == 95 && g.gesture_threshold == 0 &&
+            g.max_hands == 2,
+        "gesture clamp 2");
+}
+
+static void test_gesture_config_reject(void) {
+  uint8_t pl[16];
+  mxp_gesture_config_t g;
+  vec_payload("func_config_gesture_default", pl, sizeof pl);
+  pl[10] = 0;
+  CHECK(!mxp_unpack_gesture_config(pl, 9, &g) && !mxp_unpack_gesture_config(pl, 11, &g), "gesture length");
+  pl[0] = 4;
+  CHECK(!mxp_unpack_gesture_config(pl, 10, &g), "gesture wrong fn");
+  pl[0] = 8;
+  pl[1] = 2;
+  CHECK(!mxp_unpack_gesture_config(pl, 10, &g), "gesture version 2");
+  pl[1] = 0;
+  CHECK(!mxp_unpack_gesture_config(pl, 10, &g), "gesture version 0");
+}
+
+static void test_gesture_results(void) {
+  uint8_t pl[128], out[128];
+  size_t pn = vec_payload("results_gesture_two", pl, sizeof pl);
+  mxp_results_t r;
+  CHECK(mxp_unpack_results(pl, (uint16_t)pn, &r), "unpack results_gesture_two");
+  check_results_equal(&r, &VEC_P_RESULTS_GESTURE_TWO, "results_gesture_two");
+  CHECK(r.function_id == MXP_FUNC_GESTURE && r.count == 2 && r.r[0].id == MXP_GESTURE_OK &&
+            r.r[0].confidence == 92 && r.r[1].id == MXP_GESTURE_UNKNOWN && r.r[1].confidence == 81 &&
+            r.r[0].extra_len == 0 && r.r[1].extra_len == 0,
+        "gesture records");
+  CHECK(mxp_pack_results(&VEC_P_RESULTS_GESTURE_TWO, out, sizeof out) == pn && memcmp(out, pl, pn) == 0,
+        "pack results_gesture_two");
+  mxp_info_t info;
+  pn = vec_payload("get_info_response_gesture", pl, sizeof pl);
+  CHECK(mxp_unpack_info(pl, (uint16_t)pn, &info) && info.function_count == 4 &&
+            info.function_ids[0] == 1 && info.function_ids[3] == MXP_FUNC_GESTURE,
+        "gesture info ids");
+  CHECK(mxp_pack_info(&info, out, sizeof out) == pn && memcmp(out, pl, pn) == 0, "gesture info round trip");
+}
+
 static void test_learn_with_id(void) {
   uint8_t pl[16];
   mxp_learn_req_t l;
@@ -556,6 +643,10 @@ int main(void) {
   test_func_config_vectors();
   test_func_config_clamp();
   test_func_config_reject();
+  test_gesture_config_vectors();
+  test_gesture_config_clamp();
+  test_gesture_config_reject();
+  test_gesture_results();
   test_learn_with_id();
   test_line_extra();
   if (failures) {

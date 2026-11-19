@@ -24,7 +24,7 @@ LINE_I16 = ("angle_cdeg", "offset_x", "x0", "y0", "x1", "y1")
 def emit_payloads(v, o):
     """Typed C constants for the decoded expectations. Needs mxcam_proto.h included first."""
     pl = v["payloads"]
-    for name in ("results_color_two", "results_tag_one", "results_line_one"):
+    for name in ("results_color_two", "results_tag_one", "results_line_one", "results_gesture_two"):
         p = pl[name]
         recs = []
         for r in p["results"]:
@@ -62,6 +62,10 @@ def emit_payloads(v, o):
     tc = pl["track_config_set"]
     o.append("static const mxp_track_config_t VEC_P_TRACK_CONFIG_SET = {%d, %d, %d, %d};" % (
         tc["threshold"], tc["adapt"], tc["reacquire"], tc["scale"]))
+    for name in ("gesture_config_default", "gesture_config_set"):
+        g = pl[name]
+        o.append("static const mxp_gesture_config_t VEC_P_%s = {%d, %d, %d};" % (
+            name.upper(), g["hand_threshold"], g["gesture_threshold"], g["max_hands"]))
     le = pl["results_line_one"]["results"][0]["line"]
     o.append("static const mxp_line_extra_t VEC_P_LINE_EXTRA_ONE = {%s, %d};" % (
         ", ".join(str(le[k]) for k in LINE_I16), le["flags"]))
