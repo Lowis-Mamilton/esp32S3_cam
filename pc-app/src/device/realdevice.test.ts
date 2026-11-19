@@ -404,3 +404,53 @@ test('import checks the 32-name table before wiping tag names', async () => {
   expect(sent(fw, Cmd.Forget)).toHaveLength(0)
   expect(fw.names.get('2:9')).toBe('keep')
 })
+
+// ---- M3: face detection (function 3) ----
+
+test('face: GET_INFO listing 3 makes it supported and selectable; no GET_LEARNED for face', async () => {
+  const fw = new FakeFirmware()
+  fw.functionIds = [1, 2, 3]
+  const d = await connected(fw)
+  expect(d.snapshot().supported).toEqual([1, 2, 3])
+  expect(sent(fw, Cmd.GetLearned).map((r) => r.payload[0])).toEqual([1, 2])
+  await d.setFunction(3)
+  expect(d.snapshot().activeFunction).toBe(3)
+  expect(fw.active).toBe(3)
+})
+
+test('face: results are kind face with a confidence and id 0', async () => {
+  const fw = new FakeFirmware()
+  fw.functionIds = [1, 2, 3]
+  const d = await connected(fw)
+  await d.setFunction(3)
+  let got: Result[] = []
+  d.onResults((r) => (got = r))
+  fw.pushResults(9, 3, [{ id: 0, x: 100, y: 90, width: 60, height: 70, confidence: 92 }])
+  await waitFor(() => expect(got).toHaveLength(1))
+  expect(got[0]).toMatchObject({ id: 0, kind: 'face', confidence: 92, x: 100, y: 90, width: 60, height: 70 })
+})
+
+test('face: threshold and max results go out through SET_CONFIG, and the device value is read back', async () => {
+  const fw = new FakeFirmware()
+  fw.functionIds = [1, 2, 3]
+  const d = await connected(fw)
+  await d.setParams({ face: { threshold: 75, maxResults: 2 } })
+  const c = parseWireConfig(sent(fw, Cmd.SetConfig)[0].payload)
+  expect([c.faceThreshold, c.faceMaxResults]).toEqual([75, 2])
+  expect(d.snapshot().params.face).toEqual({ threshold: 75, maxResults: 2 })
+  expect(d.snapshot().dirty).toBe(true)
+  // out-of-range values are clamped by the device like the firmware does
+  await d.setParams({ face: { threshold: 100, maxResults: 8 } })
+  expect(fw.config.faceThreshold).toBe(100)
+})
+
+test('face: the fake firmware answers BAD_PARAM to LEARN and SET_NAME for 3 and OK to FORGET', async () => {
+  const fw = new FakeFirmware()
+  fw.functionIds = [1, 2, 3]
+  fw.learnDelayMs = 0
+  const d = await connected(fw)
+  await d.setFunction(3)
+  await expect(d.learnColor({ x: 0, y: 0, width: 8, height: 8 })).rejects.toBeInstanceOf(LearnError) // LEARN is colour-only
+  await expect(d.setName(3, 0, 'x')).rejects.toBeInstanceOf(Error)
+  await expect(d.forget(3, 0)).resolves.toBeUndefined()
+})

@@ -73,6 +73,7 @@ type Reply = Uint8Array | { error: number } | null
 
 /** Simulated M2 firmware. Mutate the public fields to set up a scenario. */
 export class FakeFirmware {
+  /** Capabilities reported by GET_INFO; add 3 for a firmware with face detection (M3). */
   functionIds = [1, 2]
   active = 0
   config: DeviceConfig = { ...DEFAULT_CONFIG }
@@ -251,6 +252,8 @@ export class FakeFirmware {
         // clamp like the firmware
         c.tolerance = Math.min(100, c.tolerance)
         c.colorMaxResults = Math.min(8, Math.max(1, c.colorMaxResults))
+        c.faceThreshold = Math.min(100, c.faceThreshold)
+        c.faceMaxResults = Math.min(8, Math.max(1, c.faceMaxResults))
         c.ledBrightness = Math.min(100, c.ledBrightness)
         if (c.i2cAddress < 0x08 || c.i2cAddress > 0x77) c.i2cAddress = 0x5a
         const changed = JSON.stringify({ ...c, dirty: false }) !== JSON.stringify({ ...this.config, dirty: false })
@@ -285,7 +288,8 @@ export class FakeFirmware {
       case Cmd.Forget: {
         const fn = p[0]
         const id = v.getUint16(1, true)
-        if (fn !== 1 && fn !== 2) return this.reply(f, { error: ErrorCode.BadParam })
+        // face (3) has nothing to forget: answers OK like firmware (protocol.md 0x31)
+        if (fn !== 1 && fn !== 2 && fn !== 3) return this.reply(f, { error: ErrorCode.BadParam })
         if (fn === 1) this.colors = id === 0xffff ? [] : this.colors.filter((c) => c.id !== id)
         for (const k of [...this.names.keys()]) if (k.startsWith(`${fn}:`) && (id === 0xffff || k === `${fn}:${id}`)) this.names.delete(k)
         this.config.dirty = true
@@ -295,6 +299,7 @@ export class FakeFirmware {
         const fn = p[0]
         const id = v.getUint16(1, true)
         const name = new TextDecoder().decode(p.subarray(4, 4 + p[3]))
+        if (fn !== 1 && fn !== 2) return this.reply(f, { error: ErrorCode.BadParam }) // face has no names
         if (fn === 1 && !this.colors.some((c) => c.id === id)) return this.reply(f, { error: ErrorCode.BadParam })
         if (name === '') this.names.delete(`${fn}:${id}`)
         else {

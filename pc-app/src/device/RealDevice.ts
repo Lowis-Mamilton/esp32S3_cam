@@ -52,6 +52,8 @@ const FORGET_ALL = 0xffff
 const NAME_TABLE_SIZE = 32
 const REFRESH_RETRY_MS = 500
 const REFRESH_RETRIES = 3
+/** Face detection has nothing learned or named, so it is never asked (GET_LEARNED is for colour and tag). */
+const hasLearned = (fn: FunctionId) => fn !== 3
 const KIND: Record<FunctionId, Result['kind']> = { 1: 'color', 2: 'tag', 3: 'face' }
 const ERROR_NAME: Record<number, string> = {
   [ErrorCode.UnknownCmd]: 'UNKNOWN_CMD',
@@ -312,13 +314,13 @@ export class RealDevice implements Device {
   /** Runs during connect (status 'connecting'): GET_CONFIG, then GET_LEARNED per supported function. A lost reply is retried once. */
   private async loadAll() {
     await this.loadConfig(true)
-    for (const fn of this.supportedFns()) await this.loadLearned(fn, true)
+    for (const fn of this.supportedFns()) if (hasLearned(fn)) await this.loadLearned(fn, true)
     this.changed()
   }
 
   /** After a change: re-read the learned lists and the config (for dirty). */
   private async refresh(fns: FunctionId[]) {
-    for (const fn of fns) if (this.supportedFns().includes(fn)) await this.loadLearned(fn)
+    for (const fn of fns) if (this.supportedFns().includes(fn) && hasLearned(fn)) await this.loadLearned(fn)
     if (this.configSupported) await this.loadConfig()
     this.changed()
   }

@@ -72,6 +72,7 @@ export const zhTW = {
   paramMinArea: '最小面積',
   paramMaxResults: '最多結果數',
   paramThreshold: '偵測門檻',
+  faceThresholdHint: '門檻低於 50 不會多找到臉',
   paramShowNames: '顯示名稱',
   paramTagFamily: 'Tag 家族',
   copy: '複製',

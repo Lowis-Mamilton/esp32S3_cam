@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useId, useRef, useState } from 'react'
 import { ConfigFileError } from '../../device/config'
 import { NotSupportedError, type Device, type FunctionParams } from '../../device/types'
 import { useT, type MessageKey } from '../../i18n'
@@ -17,10 +17,13 @@ interface SliderProps {
   step?: number
   disabled: boolean
   onCommit(v: number): Promise<unknown> | void
+  /** Small note under the slider, tied to it with aria-describedby. */
+  hint?: string
 }
 
 /** Shows the value live while dragging; sends it to the device once the user pauses. */
-export function Slider({ label, value, valueText, min, max, step = 1, disabled, onCommit }: SliderProps) {
+export function Slider({ label, value, valueText, min, max, step = 1, disabled, onCommit, hint }: SliderProps) {
+  const hintId = useId()
   const [draft, setDraft] = useState<number | null>(null)
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const pending = useRef<{ v: number; commit: SliderProps['onCommit'] } | null>(null)
@@ -51,11 +54,16 @@ export function Slider({ label, value, valueText, min, max, step = 1, disabled, 
         <span>{label}</span>
         <output>{draft === null && valueText ? valueText : shown}</output>
       </div>
-      <input type="range" aria-label={label} min={min} max={max} step={step} value={shown} disabled={disabled} onChange={(e) => change(Number(e.target.value))} />
+      <input type="range" aria-label={label} min={min} max={max} step={step} value={shown} disabled={disabled} aria-describedby={hint ? hintId : undefined} onChange={(e) => change(Number(e.target.value))} />
       <div className="rp-slider-range" aria-hidden="true">
         <span>{min}</span>
         <span>{max}</span>
       </div>
+      {hint && (
+        <p id={hintId} className="rp-hint">
+          {hint}
+        </p>
+      )}
     </div>
   )
 }
@@ -209,7 +217,7 @@ function FnParams({ device, fn, params, disabled, guard }: Props) {
   const face = (patch: Partial<FunctionParams['face']>) => set((p) => ({ face: { ...p.face, ...patch } }))
   return (
     <div className="rp-params">
-      <Slider key="3-threshold" label={t('paramThreshold')} value={f.threshold} min={0} max={100} disabled={disabled} onCommit={(v) => face({ threshold: v })} />
+      <Slider key="3-threshold" label={t('paramThreshold')} value={f.threshold} min={0} max={100} disabled={disabled} hint={t('faceThresholdHint')} onCommit={(v) => face({ threshold: v })} />
       <Slider key="3-maxResults" label={t('paramMaxResults')} value={f.maxResults} min={1} max={8} disabled={disabled} onCommit={(v) => face({ maxResults: v })} />
     </div>
   )

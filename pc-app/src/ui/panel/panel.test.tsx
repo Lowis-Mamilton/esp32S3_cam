@@ -1,4 +1,6 @@
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { Cmd } from '../../protocol/messages'
+import { FakeFirmware } from '../../testing/fakeFirmware'
 import { useState, useSyncExternalStore } from 'react'
 import { afterEach, beforeEach, expect, test, vi } from 'vitest'
 import { DemoDevice } from '../../device/DemoDevice'
@@ -449,4 +451,36 @@ test('a full name table on the device shows a localized message', async () => {
   fireEvent.change(screen.getByRole('textbox', { name: '名稱' }), { target: { value: 'x' } })
   fireEvent.click(screen.getByRole('button', { name: '加入' }))
   expect(await screen.findByText('名字已達上限（最多 32 個）')).toBeInTheDocument()
+})
+
+test('face threshold has a hint that values below 50 find no more faces (zh-TW)', () => {
+  setup(3)
+  tab('參數')
+  expect(screen.getByText('門檻低於 50 不會多找到臉')).toBeInTheDocument()
+  expect(screen.getByRole('slider', { name: '偵測門檻' })).toHaveAccessibleDescription('門檻低於 50 不會多找到臉')
+})
+
+test('face on a real board: params go through SET_CONFIG, the learn tab has no buttons, LEARN/SET_NAME are never sent', async () => {
+  const fw = new FakeFirmware()
+  fw.functionIds = [1, 2, 3]
+  const d = new RealDevice(fw.serial())
+  await waitFor(() => expect(d.snapshot().status).toBe('connected'))
+  setup(3, [], d)
+  tab('參數')
+  fireEvent.change(screen.getByRole('slider', { name: '偵測門檻' }), { target: { value: '70' } })
+  await waitFor(() => expect(fw.config.faceThreshold).toBe(70))
+  await waitFor(() => expect(screen.getByText('未儲存')).toBeInTheDocument())
+  tab('學習')
+  expect(screen.getByText('人臉偵測不需要學習')).toBeInTheDocument()
+  expect(screen.queryAllByRole('button').filter((b) => /學習|加入|刪除/.test(b.textContent ?? b.getAttribute('aria-label') ?? ''))).toHaveLength(0)
+  expect(fw.cmds()).not.toContain(Cmd.Learn)
+  expect(fw.cmds()).not.toContain(Cmd.SetName)
+})
+
+test('face code tab uses MXCAM_ALGO_FACE and reads the confidence', () => {
+  setup(3)
+  tab('程式')
+  expect(document.body.textContent).toContain('MXCAM_ALGO_FACE')
+  expect(snippetFor(3, 'en')).toContain('r.confidence')
+  expect(snippetFor(1, 'en')).not.toContain('r.confidence')
 })

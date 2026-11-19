@@ -74,6 +74,7 @@ export const en: Record<keyof typeof zhTW, string> = {
   paramMinArea: 'Min area',
   paramMaxResults: 'Max results',
   paramThreshold: 'Threshold',
+  faceThresholdHint: 'Below 50 finds no more faces',
   paramShowNames: 'Show names',
   paramTagFamily: 'Tag family',
   copy: 'Copy',

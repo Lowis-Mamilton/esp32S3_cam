@@ -11,7 +11,7 @@ const TEXT = {
     each: '// 一個一個讀出來',
     colorId: '// r.id 是學習的顏色 ID',
     tagId: '// r.id 是 tag 編號',
-    faceId: '// 人臉的 r.id 沒有意義',
+    faceId: '// 人臉的 r.id 沒有意義，信心度是 r.confidence（0–100）',
     box: '// 位置與大小：r.x, r.y, r.width, r.height',
   },
   en: {
@@ -21,7 +21,7 @@ const TEXT = {
     each: '// Read them one by one',
     colorId: '// r.id is the learned colour ID',
     tagId: '// r.id is the tag number',
-    faceId: '// r.id carries no meaning for faces',
+    faceId: '// r.id carries no meaning for faces; r.confidence is 0-100',
     box: '// Position and size: r.x, r.y, r.width, r.height',
   },
 } as const
@@ -47,7 +47,7 @@ void loop() {
       MXCamResult r = cam.read();
       ${idNote}
       ${c.box}
-      Serial.print(r.id);
+      Serial.print(${fn === 3 ? "r.confidence" : "r.id"});
       Serial.print(" ");
       Serial.print(r.x);
       Serial.print(" ");

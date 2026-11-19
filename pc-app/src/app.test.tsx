@@ -420,3 +420,27 @@ test('real board: results pushes show up in the results tab', async () => {
   expect((await screen.findAllByText('紅色積木')).length).toBeGreaterThan(0)
   expect(screen.getAllByText('ID1').length).toBeGreaterThan(0)
 })
+
+test('real board: face is selectable when GET_INFO lists 3, and results read 人臉 92%', async () => {
+  const fw = new FakeFirmware()
+  fw.functionIds = [1, 2, 3]
+  renderApp({ serial: fw.serial() })
+  expect(await screen.findByText('已連線')).toBeInTheDocument()
+  const face = screen.getByRole('button', { name: '人臉' })
+  expect(face).not.toHaveAttribute('aria-disabled')
+  fireEvent.click(face)
+  await waitFor(() => expect(fw.active).toBe(3))
+  fw.pushResults(5, 3, [{ id: 0, x: 160, y: 120, width: 50, height: 60, confidence: 92 }])
+  expect((await screen.findAllByText('92%')).length).toBeGreaterThan(0)
+})
+
+test('real board: face stays greyed with 需要更新韌體 when GET_INFO lacks 3', async () => {
+  const fw = new FakeFirmware()
+  renderApp({ serial: fw.serial() })
+  expect(await screen.findByText('已連線')).toBeInTheDocument()
+  const face = screen.getByRole('button', { name: '人臉' })
+  expect(face).toHaveAttribute('aria-disabled', 'true')
+  expect(face).toHaveAttribute('title', '需要更新韌體')
+  fireEvent.click(face)
+  expect(fw.requests.some((r) => r.cmd === Cmd.SetFunction && r.payload[0] === 3)).toBe(false)
+})
