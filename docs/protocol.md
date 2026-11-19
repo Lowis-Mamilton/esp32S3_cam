@@ -172,7 +172,7 @@ AprilTag 的 `x, y` 是由單應矩陣（homography）算出的 tag 中心，可
 | count | u8 | 0–8 |
 | records | ResultRecord ×count | 依面積（AprilTag、人臉：依信心度或面積）由大到小 |
 
-回傳的是**最近一張處理完的畫面**的結果，不會等下一張。
+回傳的是**最近一張處理完的畫面**的結果，不會等下一張。開機後還沒處理完任何畫面時回 `frame_id = 0`、`count = 0`（`function_id` 為目前功能）。
 
 ### 0x61 推送 RESULTS（僅 USB，需 STREAM_START 的 flags bit1）
 
@@ -191,6 +191,10 @@ payload 與 GET_RESULTS 的回應相同。每處理完一張畫面推送一次�
 
 請求：`function_id (u8)`，`id (u16)` —— `0xFFFF` 表示全部忘記。回應 `0xB1`：空。ID 不存在也回成功（冪等）。
 
+- 顏色（1）：刪除學到的顏色和它的名字
+- AprilTag（2）：tag 不需要學習，只刪除名字（`0xFFFF` 刪除所有 tag 名字）
+- 其他功能 → `BAD_PARAM`
+
 ### 0x32 SET_NAME
 
 請求：`function_id (u8)`，`id (u16)`，`name_len (u8)`，`name (UTF-8，最多 48 bytes)`。`name_len = 0` 表示清除名字。回應 `0xB2`：空。
@@ -198,6 +202,7 @@ payload 與 GET_RESULTS 的回應相同。每處理完一張畫面推送一次�
 - 顏色：ID 必須已經學過，否則 `BAD_PARAM`
 - AprilTag：任何 0–586 的 tag ID 都可以取名（不需要先學習）
 - 名字超過 48 bytes 或不是合法 UTF-8 → `BAD_LENGTH` / `BAD_PARAM`
+- 名字表已滿（所有功能合計 32 筆）→ `FULL`；改已有的名字或清除名字不受影響
 
 ### 0x33 GET_LEARNED
 
@@ -238,6 +243,7 @@ UART 鮑率、I2C 位址的變更**存檔並重開機後**才生效（避免改�
 
 - SAVE：把學習資料、名字和 Config 寫進 NVS。回應 `0xC2`：空。之後 `dirty` = 0。
 - FACTORY_RESET：清除 NVS 中的學習資料、名字和 Config，回到預設值（不重開機）。回應 `0xC3`：空。
+- 兩者都在寫完 flash 後才回應（通常 < 100 ms，主機逾時應 ≥ 1 秒）；寫入失敗回 `INTERNAL`（資料不變）。同時只能有一個 SAVE / FACTORY_RESET，第二個回 `BUSY`。
 
 ### 新增錯誤碼
 
