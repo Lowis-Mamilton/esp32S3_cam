@@ -4,6 +4,10 @@
 
 #ifdef ESP_PLATFORM
 #include "esp_attr.h"
+#include "sdkconfig.h"
+#if !CONFIG_SPIRAM_ALLOW_BSS_SEG_EXTERNAL_MEMORY
+#error "mxcam_color needs CONFIG_SPIRAM_ALLOW_BSS_SEG_EXTERNAL_MEMORY=y (work buffer lives in PSRAM BSS)"
+#endif
 #else
 #define EXT_RAM_BSS_ATTR
 #endif
@@ -19,18 +23,55 @@
  *   lcls   u8  [9601]    9.6 KB  class per root
  * Total ~ 144 KB, so it goes to PSRAM on target (EXT_RAM_BSS_ATTR; needs
  * CONFIG_SPIRAM_ALLOW_BSS_SEG_EXTERNAL_MEMORY=y) and is plain static on host.
- * Consequence: mxc_detect is not reentrant. */
+ * Consequence: mxc_detect is not reentrant, and must not run while the flash
+ * cache is disabled (PSRAM BSS is unreachable then).
+ * Label bound: 4-connectivity bounds labels to GN/2 only for ONE class; with
+ * several classes up to GN provisional labels could be requested. Rather than
+ * size every array for GN+1 (+~110 KB PSRAM), label allocation is guarded:
+ * once MAXLBL is exhausted further new components are left unlabelled (they
+ * are dropped). Only pathological noise (thousands of isolated 1-cell blobs)
+ * can hit this, and such blobs are below any sensible min_area. */
 #define GW (MXC_FRAME_W / 2)
 #define GH (MXC_FRAME_H / 2)
 #define GN (GW * GH)
 #define MAXLBL (GN / 2 + 1)
 
-static EXT_RAM_BSS_ATTR uint8_t s_cls[GN];
-static EXT_RAM_BSS_ATTR uint16_t s_label[GN];
-static EXT_RAM_BSS_ATTR uint16_t s_parent[MAXLBL];
-static EXT_RAM_BSS_ATTR uint16_t s_area[MAXLBL];
-static EXT_RAM_BSS_ATTR uint8_t s_bx0[MAXLBL], s_by0[MAXLBL], s_bx1[MAXLBL], s_by1[MAXLBL];
-static EXT_RAM_BSS_ATTR uint8_t s_lcls[MAXLBL];
+#define CANARY 0xA5A5A5A5u
+typedef struct {
+  uint8_t cls[GN];
+  uint32_t c0;
+  uint16_t label[GN];
+  uint32_t c1;
+  uint16_t parent[MAXLBL];
+  uint32_t c2;
+  uint16_t area[MAXLBL];
+  uint32_t c3;
+  uint8_t bx0[MAXLBL], by0[MAXLBL], bx1[MAXLBL], by1[MAXLBL];
+  uint32_t c4;
+  uint8_t lcls[MAXLBL];
+  uint32_t c5;
+} work_t;
+/* Canaries sit after each array so tests can detect overruns without ASan. */
+static EXT_RAM_BSS_ATTR work_t s_w;
+#define s_cls s_w.cls
+#define s_label s_w.label
+#define s_parent s_w.parent
+#define s_area s_w.area
+#define s_bx0 s_w.bx0
+#define s_by0 s_w.by0
+#define s_bx1 s_w.bx1
+#define s_by1 s_w.by1
+#define s_lcls s_w.lcls
+
+#ifdef MXC_TEST_HOOKS
+void mxc_test_canary_arm(void) {
+  s_w.c0 = s_w.c1 = s_w.c2 = s_w.c3 = s_w.c4 = s_w.c5 = CANARY;
+}
+bool mxc_test_canary_ok(void) {
+  return s_w.c0 == CANARY && s_w.c1 == CANARY && s_w.c2 == CANARY && s_w.c3 == CANARY &&
+         s_w.c4 == CANARY && s_w.c5 == CANARY;
+}
+#endif
 
 typedef struct {
   float h, s, v;
@@ -172,6 +213,10 @@ uint8_t mxc_detect(const uint16_t *frame, const mxc_learned_t *learned, uint8_t 
       uint16_t left = (gx > 0 && s_cls[i - 1] == c) ? s_label[i - 1] : 0;
       uint16_t up = (gy > 0 && s_cls[i - GW] == c) ? s_label[i - GW] : 0;
       if (!left && !up) {
+        if (next >= MAXLBL) {
+          s_label[i] = 0; /* label budget exhausted: drop this cell */
+          continue;
+        }
         s_parent[next] = next;
         s_label[i] = next++;
       } else if (left && up) {

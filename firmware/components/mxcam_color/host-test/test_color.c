@@ -5,6 +5,9 @@
 
 #include "mxcam_color.h"
 
+void mxc_test_canary_arm(void);
+bool mxc_test_canary_ok(void);
+
 static int fails;
 #define CHECK(c)                                          \
   do {                                                    \
@@ -179,6 +182,65 @@ static void test_same_color(void) {
   CHECK(!mxc_same_color(grey, grey, 100));
 }
 
+
+static void fill_pattern(int mode, const uint8_t *c[3]) {
+  for (int y = 0; y < MXC_FRAME_H; y++)
+    for (int x = 0; x < MXC_FRAME_W; x++) {
+      int cell = ((x / 2) + 2 * (y / 2));
+      const uint8_t *col = mode == 2 ? c[(x / 2 + y / 2) % 2] : c[cell % 3];
+      frame[y * MXC_FRAME_W + x] = px(col[0], col[1], col[2]);
+    }
+}
+
+static void test_label_overflow(void) {
+  mxc_learned_t l[3] = {learn(1, RED), learn(2, GREEN), learn(3, BLUE)};
+  const uint8_t *cols[3] = {RED, GREEN, BLUE};
+  mxp_result_t out[8];
+  mxc_params_t p = params(30, 1, 8);
+  for (int mode = 2; mode <= 3; mode++) {
+    fill_pattern(mode, cols);
+    mxc_test_canary_arm();
+    uint8_t n = mxc_detect(frame, l, mode == 2 ? 2 : 3, &p, out, 8);
+    CHECK(mxc_test_canary_ok());
+    CHECK(n <= 8);
+  }
+}
+
+static void test_concave_blob(void) {
+  clear(0, 0, 0);
+  rect(40, 40, 20, 80, RED);   /* left arm */
+  rect(100, 40, 20, 80, RED);  /* right arm */
+  rect(40, 100, 80, 20, RED);  /* base joins them (U shape) */
+  mxc_learned_t l[1] = {learn(1, RED)};
+  mxc_params_t p = params(30, 10, 8);
+  mxp_result_t out[8];
+  CHECK(mxc_detect(frame, l, 1, &p, out, 8) == 1);
+  NEAR(out[0].x, 80, 2); NEAR(out[0].y, 80, 2); NEAR(out[0].w, 80, 2); NEAR(out[0].h, 80, 2);
+}
+
+static void test_nearest_hue_wins(void) {
+  const uint8_t orange[3] = {230, 120, 20}; /* hue ~28 */
+  const uint8_t yellowish[3] = {230, 200, 20}; /* hue ~51 */
+  const uint8_t blob[3] = {230, 135, 20};  /* hue ~32, nearer orange */
+  clear(0, 0, 0);
+  rect(100, 80, 40, 40, blob);
+  mxc_learned_t l[2] = {learn(1, yellowish), learn(2, orange)};
+  mxc_params_t p = params(60, 100, 8);
+  mxp_result_t out[8];
+  CHECK(mxc_detect(frame, l, 2, &p, out, 8) == 1);
+  CHECK(out[0].id == 2);
+}
+
+static void test_odd_offset(void) {
+  clear(0, 0, 0);
+  rect(101, 57, 41, 33, GREEN);
+  mxc_learned_t l[1] = {learn(2, GREEN)};
+  mxc_params_t p = params(30, 100, 8);
+  mxp_result_t out[8];
+  CHECK(mxc_detect(frame, l, 1, &p, out, 8) == 1);
+  NEAR(out[0].x, 101 + 20, 2); NEAR(out[0].y, 57 + 16, 2); NEAR(out[0].w, 41, 2); NEAR(out[0].h, 33, 2);
+}
+
 static void test_timing(void) {
   clear(0, 0, 0);
   rect(20, 30, 60, 40, RED);
@@ -202,6 +264,10 @@ int main(void) {
   test_grey_never_matches();
   test_sample();
   test_same_color();
+  test_label_overflow();
+  test_concave_blob();
+  test_nearest_hue_wins();
+  test_odd_offset();
   test_timing();
   if (fails) {
     printf("%d failure(s)\n", fails);
