@@ -3,7 +3,7 @@ import type { ResultsStore } from '../../device/resultsStore'
 import { LearnError, NotConnectedError, NotSupportedError, type FrameSource, type LearnedId } from '../../device/types'
 import { useT } from '../../i18n'
 import type { FunctionId } from '../layout/types'
-import { FRAME_H, FRAME_W, toFrame, toScreen, type Viewport } from './geometry'
+import { FRAME_H, FRAME_W, boxToScreen, mirrorRegion, toFrame, toScreen, type Viewport } from './geometry'
 import { idColorVar, labelFor } from './labels'
 
 export interface LiveStageHandle {
@@ -34,6 +34,24 @@ const TAB_H = 18
 /** Rough tab width: CJK glyphs are about twice as wide as Latin ones at 12px. */
 const tabWidth = (text: string) => Math.ceil([...text].reduce((w, c) => w + (c.charCodeAt(0) > 255 ? 13 : 7), 14))
 const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v))
+const CENTRE: Region = { x: 152, y: 112, width: 16, height: 16 }
+
+const MIRROR_KEY = 'mxcam.mirror'
+/** Mirror view (ADR-0010) is a per-browser display preference, on by default. */
+function readMirror(): boolean {
+  try {
+    return localStorage.getItem(MIRROR_KEY) !== '0'
+  } catch {
+    return true
+  }
+}
+function storeMirror(on: boolean) {
+  try {
+    localStorage.setItem(MIRROR_KEY, on ? '1' : '0')
+  } catch {
+    // storage unavailable
+  }
+}
 
 export default function LiveStage({ ref, connected, fps, kbps, fn, canLearn, onLearn, results: store, learned, showNames }: Props) {
   const { t } = useT()
@@ -44,6 +62,12 @@ export default function LiveStage({ ref, connected, fps, kbps, fn, canLearn, onL
   const [vp, setVp] = useState<Viewport>({ width: 0, height: 0 })
   const [drag, setDrag] = useState<{ x0: number; y0: number; x1: number; y1: number } | null>(null)
   const [toast, setToast] = useState<{ text: string; error: boolean } | null>(null)
+  // Results and LEARN regions are TRUE-image coordinates; only the screen is mirrored.
+  const [mirror, setMirrorState] = useState(readMirror)
+  const setMirror = (on: boolean) => {
+    setMirrorState(on)
+    storeMirror(on)
+  }
   const dragCleanup = useRef<(() => void) | null>(null)
   const toastTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
 
@@ -148,7 +172,7 @@ export default function LiveStage({ ref, connected, fps, kbps, fn, canLearn, onL
 
   const frameAt = (clientX: number, clientY: number) => {
     const r = canvasRef.current!.getBoundingClientRect()
-    const f = toFrame({ width: r.width, height: r.height }, clientX - r.left, clientY - r.top)
+    const f = toFrame({ width: r.width, height: r.height }, clientX - r.left, clientY - r.top, mirror)
     return { x: clamp(f.x, 0, FRAME_W), y: clamp(f.y, 0, FRAME_H) }
   }
 
@@ -191,44 +215,37 @@ export default function LiveStage({ ref, connected, fps, kbps, fn, canLearn, onL
 
   const kind = fn === 1 ? 'color' : fn === 2 ? 'tag' : 'face'
   const shown = results.filter((r) => r.kind === kind)
-  const centre = toScreen(vp, FRAME_W / 2, FRAME_H / 2)
+  const centre = toScreen(vp, FRAME_W / 2, FRAME_H / 2, mirror)
   let dragBox: { left: number; top: number; width: number; height: number } | null = null
   if (drag) {
-    const a = toScreen(vp, Math.min(drag.x0, drag.x1), Math.min(drag.y0, drag.y1))
-    const b = toScreen(vp, Math.max(drag.x0, drag.x1), Math.max(drag.y0, drag.y1))
-    dragBox = { left: a.px, top: a.py, width: b.px - a.px, height: b.py - a.py }
+    const w = Math.abs(drag.x1 - drag.x0)
+    const h = Math.abs(drag.y1 - drag.y0)
+    const box = { x: Math.min(drag.x0, drag.x1) + w / 2, y: Math.min(drag.y0, drag.y1) + h / 2, width: w, height: h }
+    dragBox = boxToScreen(vp, box, mirror)
   }
 
   return (
     <div className="stage-wrap">
       <div ref={stageRef} className={`stage${canLearn ? ' learnable' : ''}`} onMouseDown={onMouseDown}>
-        <canvas ref={canvasRef} width={FRAME_W} height={FRAME_H} />
+        <canvas ref={canvasRef} width={FRAME_W} height={FRAME_H} className={mirror ? 'mirrored' : undefined} />
         <div className="ls-overlay" aria-hidden="true">
           <div className="ls-boxes">
             {shown.map((r, i) => {
-              // Result x/y are the box centre.
-              const a = toScreen(vp, r.x - r.width / 2, r.y - r.height / 2)
-              const b = toScreen(vp, r.x + r.width / 2, r.y + r.height / 2)
-              const style = {
-                '--c': idColorVar(r),
-                left: a.px,
-                top: a.py,
-                width: b.px - a.px,
-                height: b.py - a.py,
-              } as CSSProperties
+              // Result x/y are the box centre, in true-image coordinates.
+              const style = { '--c': idColorVar(r), ...boxToScreen(vp, r, mirror) } as CSSProperties
               return <div key={i} className={`ls-box${r.kind === 'color' && r.id === 0 ? ' unlearned' : ''}`} style={style} />
             })}
           </div>
           <div className="ls-labels">
             {shown.map((r, i) => {
-              const a = toScreen(vp, r.x - r.width / 2, r.y - r.height / 2)
-              const bottom = toScreen(vp, r.x, r.y + r.height / 2).py
+              const box = boxToScreen(vp, r, mirror)
+              const bottom = box.top + box.height
               const text = labelFor(r, learned, showNames, t)
               const w = tabWidth(text)
-              const left = clamp(a.px - 2, 0, Math.max(0, vp.width - w))
-              let top = a.py - TAB_H - 1 // above the box
+              const left = clamp(box.left - 2, 0, Math.max(0, vp.width - w))
+              let top = box.top - TAB_H - 1 // above the box
               if (top < 0) top = bottom + 1 // below, if there is room
-              if (top + TAB_H > vp.height) top = a.py + 1 // otherwise inside the box top
+              if (top + TAB_H > vp.height) top = box.top + 1 // otherwise inside the box top
               top = clamp(top, 0, Math.max(0, vp.height - TAB_H))
               const style = { '--c': idColorVar(r), left, top, width: w } as CSSProperties
               return (
@@ -252,20 +269,27 @@ export default function LiveStage({ ref, connected, fps, kbps, fn, canLearn, onL
         </div>
         {!connected && <div className="stage-idle">{t('liveIdle')}</div>}
       </div>
-      {canLearn && (
-        <div className="stage-actions">
-          <button type="button" className="btn" onClick={() => void learn({ x: 152, y: 112, width: 16, height: 16 })}>
-            {t('learnCenter')}
-          </button>
-          {toast ? (
-            <span role="status" className={`ls-msg${toast.error ? ' error' : ''}`}>
-              {toast.text}
-            </span>
-          ) : (
-            <span className="muted">{t('dragHint')}</span>
-          )}
-        </div>
-      )}
+      <div className="stage-actions">
+        {canLearn && (
+          <>
+            {/* The centre square in screen space, converted to the true image. */}
+            <button type="button" className="btn" onClick={() => void learn(mirror ? mirrorRegion(CENTRE) : CENTRE)}>
+              {t('learnCenter')}
+            </button>
+            {toast ? (
+              <span role="status" className={`ls-msg${toast.error ? ' error' : ''}`}>
+                {toast.text}
+              </span>
+            ) : (
+              <span className="muted">{t('dragHint')}</span>
+            )}
+          </>
+        )}
+        <label className="ls-mirror">
+          <input type="checkbox" checked={mirror} onChange={(e) => setMirror(e.target.checked)} />
+          {t('mirrorView')}
+        </label>
+      </div>
     </div>
   )
 }

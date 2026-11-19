@@ -1,6 +1,6 @@
 import { act, fireEvent, render, screen } from '@testing-library/react'
 import { createRef } from 'react'
-import { afterEach, expect, test, vi } from 'vitest'
+import { afterEach, beforeEach, expect, test, vi } from 'vitest'
 import { DemoLearnError } from '../../device/demo/recognize'
 import { ResultsStore } from '../../device/resultsStore'
 import { NotConnectedError, NotSupportedError, type LearnedId, type Result } from '../../device/types'
@@ -8,6 +8,8 @@ import { I18nProvider } from '../../i18n'
 import LiveStage, { type LiveStageHandle } from './LiveStage'
 
 afterEach(() => vi.restoreAllMocks())
+// The geometry tests below were written for the unmirrored view; the mirror tests at the end clear this.
+beforeEach(() => localStorage.setItem('mxcam.mirror', '0'))
 
 function stubRect(w: number, h: number) {
   vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue({
@@ -258,4 +260,43 @@ test('review point 4: boxes are the results of the frame on screen, not the newe
   })
   expect(left()).toEqual(['50px']) // newer results do not jump ahead of the picture
   vi.unstubAllGlobals()
+})
+
+// ---- mirror view (ADR-0010) ----
+test('mirror view is on by default and persisted; it mirrors the canvas and the boxes but not the label text', () => {
+  localStorage.removeItem('mxcam.mirror')
+  stubRect(640, 480)
+  const { container, unmount } = setup({ results: [{ id: 1, kind: 'color', x: 50, y: 100, width: 20, height: 40 }], learned: [{ id: 1, name: '紅' }] })
+  const toggle = screen.getByRole('checkbox', { name: '鏡像顯示' })
+  expect(toggle).toBeChecked()
+  expect(container.querySelector('canvas')!.classList.contains('mirrored')).toBe(true)
+  expect(container.querySelector<HTMLElement>('.ls-box')!.style.left).toBe('520px')
+  expect(screen.getByText('ID1 紅')).toBeTruthy() // text itself is not mirrored
+  fireEvent.click(toggle)
+  expect(localStorage.getItem('mxcam.mirror')).toBe('0')
+  expect(container.querySelector('canvas')!.classList.contains('mirrored')).toBe(false)
+  expect(container.querySelector<HTMLElement>('.ls-box')!.style.left).toBe('80px')
+  unmount()
+  setup()
+  expect(screen.getByRole('checkbox', { name: '鏡像顯示' })).not.toBeChecked()
+  localStorage.removeItem('mxcam.mirror')
+})
+
+test('mirror view: dragging learns the TRUE-image region (x = 320 - x - w)', async () => {
+  localStorage.removeItem('mxcam.mirror')
+  stubRect(640, 480) // scale 2
+  const onLearn = vi.fn(async () => 3)
+  const { container } = setup({ onLearn })
+  const stage = container.querySelector('.stage')!
+  // on screen: frame-space 10..50 x 10..40 of the mirrored picture
+  fireEvent.mouseDown(stage, { clientX: 20, clientY: 20 })
+  await act(async () => {
+    fireEvent.mouseUp(window, { clientX: 100, clientY: 80 })
+  })
+  expect(onLearn).toHaveBeenCalledWith({ x: 270, y: 10, width: 40, height: 30 })
+})
+
+test('the mirror toggle is there even when learning is unavailable', () => {
+  setup({ canLearn: false })
+  expect(screen.getByRole('checkbox', { name: '鏡像顯示' })).toBeInTheDocument()
 })
