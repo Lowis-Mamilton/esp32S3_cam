@@ -97,7 +97,7 @@ M2 的指令細節見第 7 節；M3 以後新增的指令在各自的里程碑�
 |---|---|---|
 | protocol_version | u8 | `1` |
 | fw_major, fw_minor, fw_patch | u8 ×3 | 韌體版本，例如 0.1.0 |
-| fw_git | char[7] | git commit 前 7 碼；沒有就填 `"unknown"` |
+| fw_git | char[7] | git commit 前 7 碼；工作目錄有未提交變更（dirty build）時是前 6 碼加 `+`；沒有就填 `"unknown"` |
 | serial | u8[6] | 晶片 MAC 位址，當作裝置序號 |
 | frame_width, frame_height | u16 ×2 | 320, 240 |
 | max_results | u8 | 一次最多回傳幾筆結果，`8` |
@@ -184,8 +184,9 @@ payload 與 GET_RESULTS 的回應相同。每處理完一張畫面推送一次�
 
 請求：`function_id (u8)`，`x, y, width, height (u16 ×4)` —— 要學習的區域，**左上角**座標（320×240）。
 
-- 只有顏色（1）支援；其他功能回 `BAD_PARAM`
-- MXCam 在**下一張畫面**取區域內的顏色，因此回應最多晚一張畫面（約 100 ms）才送出；主機的逾時應 ≥ 1 秒
+- 只有顏色（1）支援，而且 MXCam **目前的功能也必須是顏色（1）**；`function_id` 不是 1，或目前功能不是顏色，都回 `BAD_PARAM`
+- MXCam 在**下一張畫面**取區域內的顏色，因此回應最多晚一張畫面（約 100 ms）才送出；主機的逾時應 ≥ 1 秒。取樣的那張畫面可能是請求抵達前不久才抓到的
+- 約 1 秒內沒有畫面可取樣（例如鏡頭抓圖持續失敗）時，MXCam 以 `BAD_PARAM` 取消這個 LEARN，不會一直回 `BUSY`
 - 回應 `0xB0`：`id (u8)` —— 分配到的 ID（同一個顏色已學過就是原本的 ID）
 - 錯誤：區域沒有顏色（太暗、太灰）→ `BAD_PARAM`；已經學滿 7 個 → `FULL (0x07)`
 
