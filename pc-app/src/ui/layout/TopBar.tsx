@@ -30,47 +30,53 @@ export default function TopBar({ status, lost, info, demo, onToggleDemo, onConne
 
   return (
     <header className="topbar">
-      <h1 className="brand">{t('appTitle')}</h1>
-      {demo && <span className="demo-badge">{t('demoBadge')}</span>}
-      {(!unsupported || demo) && (
-        <div className="conn-status" data-tone={tone}>
-          <span className="lamp" aria-hidden="true" />
-          <span>{statusText}</span>
-          {info && <span className="fw-version">{info.firmwareVersion}</span>}
-        </div>
-      )}
-      <div className="topbar-spacer" />
-      <button
-        type="button"
-        role="switch"
-        aria-checked={demo}
-        className="tb-switch"
-        data-slot="demo-toggle"
-        onClick={() => onToggleDemo(!demo)}
-      >
-        <span className="tb-switch-track" aria-hidden="true" />
-        {t('demoMode')}
-      </button>
-      <div className="tb-seg" role="group" aria-label={t('language')}>
-        <button type="button" lang="zh-Hant" aria-pressed={lang === 'zh-TW'} onClick={() => setLang('zh-TW')}>
-          繁中
-        </button>
-        <button type="button" lang="en" aria-pressed={lang === 'en'} onClick={() => setLang('en')}>
-          English
-        </button>
+      <div className="tb-start">
+        <h1 className="brand">{t('appTitle')}</h1>
+        {demo && <span className="demo-badge">{t('demoBadge')}</span>}
       </div>
-      {!unsupported && !demo && (
-        <>
-          <button type="button" className="btn primary" onClick={onConnect} disabled={busy}>
-            <Plug size={16} aria-hidden="true" />
-            {t('connect')}
+      {/* Centred like an editor's document name: the board this page is talking to. */}
+      <div className="tb-centre">
+        {(!unsupported || demo) && (
+          <div className="conn-status" data-tone={tone}>
+            <span className="lamp" aria-hidden="true" />
+            <span>{statusText}</span>
+            {info && <span className="fw-version">{info.firmwareVersion}</span>}
+          </div>
+        )}
+      </div>
+      <div className="tb-end">
+        <button
+          type="button"
+          role="switch"
+          aria-checked={demo}
+          className="tb-switch"
+          data-slot="demo-toggle"
+          onClick={() => onToggleDemo(!demo)}
+        >
+          <span className="tb-switch-track" aria-hidden="true" />
+          {t('demoMode')}
+        </button>
+        <div className="tb-seg" role="group" aria-label={t('language')}>
+          <button type="button" lang="zh-Hant" aria-pressed={lang === 'zh-TW'} onClick={() => setLang('zh-TW')}>
+            繁中
           </button>
-          <button type="button" className="btn" onClick={onDisconnect} disabled={!busy}>
-            <Unplug size={16} aria-hidden="true" />
-            {t('disconnect')}
+          <button type="button" lang="en" aria-pressed={lang === 'en'} onClick={() => setLang('en')}>
+            English
           </button>
-        </>
-      )}
+        </div>
+        {!unsupported && !demo && (
+          <>
+            <button type="button" className="btn tb-btn primary" onClick={onConnect} disabled={busy}>
+              <Plug size={16} aria-hidden="true" />
+              {t('connect')}
+            </button>
+            <button type="button" className="btn tb-btn" onClick={onDisconnect} disabled={!busy}>
+              <Unplug size={16} aria-hidden="true" />
+              {t('disconnect')}
+            </button>
+          </>
+        )}
+      </div>
     </header>
   )
 }

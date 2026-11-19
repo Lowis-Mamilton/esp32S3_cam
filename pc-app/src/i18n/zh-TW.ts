@@ -118,5 +118,8 @@ export const zhTW = {
   coordsTrueImage: '座標是鏡頭真實影像的座標（R4 收到的數字）',
   learnBusy: '學習中，請稍候',
   learnCancelled: '學習已取消（功能已切換）',
-  cfgPartial: '板子上的設定可能只更新了一部分'
+  cfgPartial: '板子上的設定可能只更新了一部分',
+  stageColor: '顏色辨識',
+  stageTag: 'AprilTag 辨識',
+  stageFace: '人臉偵測'
 } as const

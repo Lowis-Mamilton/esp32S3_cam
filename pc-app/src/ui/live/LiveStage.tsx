@@ -2,6 +2,8 @@ import { useCallback, useEffect, useImperativeHandle, useLayoutEffect, useRef, u
 import type { ResultsStore } from '../../device/resultsStore'
 import { LearnError, NotConnectedError, NotSupportedError, type FrameSource, type LearnedId } from '../../device/types'
 import { useT } from '../../i18n'
+import CategoryDisc from '../layout/CategoryDisc'
+import { FN_CATEGORY, FN_ICON } from '../layout/categories'
 import type { FunctionId } from '../layout/types'
 import { useMirror } from './mirror'
 import { FRAME_H, FRAME_W, boxToScreen, mirrorRegion, toFrame, toScreen, type Viewport } from './geometry'
@@ -206,6 +208,11 @@ export default function LiveStage({ ref, connected, fps, kbps, fn, canLearn, onL
 
   return (
     <div className="stage-wrap">
+      {/* A hat block on top of the picture: what the board is running right now. */}
+      <div className="ls-hat">
+        <CategoryDisc cat={FN_CATEGORY[fn]} Icon={FN_ICON[fn]} size={15} />
+        <span>{t(fn === 1 ? 'stageColor' : fn === 2 ? 'stageTag' : 'stageFace')}</span>
+      </div>
       <div ref={stageRef} className={`stage${canLearn ? ' learnable' : ''}`} onMouseDown={onMouseDown}>
         <canvas ref={canvasRef} width={FRAME_W} height={FRAME_H} className={mirror ? 'mirrored' : undefined} />
         <div className="ls-overlay" aria-hidden="true">
@@ -253,7 +260,7 @@ export default function LiveStage({ ref, connected, fps, kbps, fn, canLearn, onL
         {canLearn && (
           <>
             {/* The centre square in screen space, converted to the true image. */}
-            <button type="button" className="btn" onClick={() => void learn(mirror ? mirrorRegion(CENTRE) : CENTRE)}>
+            <button type="button" className="btn ls-block" onClick={() => void learn(mirror ? mirrorRegion(CENTRE) : CENTRE)}>
               {t('learnCenter')}
             </button>
             {toast ? (

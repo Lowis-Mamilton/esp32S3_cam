@@ -120,5 +120,8 @@ export const en: Record<keyof typeof zhTW, string> = {
   coordsTrueImage: "Coordinates are the camera's true-image coordinates (what the R4 receives)",
   learnBusy: 'Still learning, please wait',
   learnCancelled: 'Learning cancelled (function changed)',
-  cfgPartial: 'The board may be only partly updated'
+  cfgPartial: 'The board may be only partly updated',
+  stageColor: 'Color recognition',
+  stageTag: 'AprilTag recognition',
+  stageFace: 'Face detection'
 }

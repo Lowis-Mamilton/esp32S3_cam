@@ -1,6 +1,8 @@
 import { Fragment, useId } from 'react'
-import { Cpu, Palette, QrCode, ScanFace, Settings, type LucideIcon } from 'lucide-react'
+import { Cpu, Settings } from 'lucide-react'
 import { useT, type MessageKey } from '../../i18n'
+import CategoryDisc from './CategoryDisc'
+import { FN_CATEGORY, FN_ICON } from './categories'
 import type { FunctionId, View } from './types'
 
 interface Props {
@@ -12,10 +14,10 @@ interface Props {
   onSelect(v: View): void
 }
 
-const FUNCTIONS: { id: FunctionId; key: MessageKey; Icon: LucideIcon }[] = [
-  { id: 1, key: 'fnColor', Icon: Palette },
-  { id: 2, key: 'fnTag', Icon: QrCode },
-  { id: 3, key: 'fnFace', Icon: ScanFace },
+const FUNCTIONS: { id: FunctionId; key: MessageKey }[] = [
+  { id: 1, key: 'fnColor' },
+  { id: 2, key: 'fnTag' },
+  { id: 3, key: 'fnFace' },
 ]
 
 export default function Sidebar({ view, supported, needConnect = false, onSelect }: Props) {
@@ -24,7 +26,7 @@ export default function Sidebar({ view, supported, needConnect = false, onSelect
   const hint = t(needConnect ? 'needConnect' : 'needFirmware')
   return (
     <nav className="sidebar" aria-label={t('navFunctions')}>
-      {FUNCTIONS.map(({ id, key, Icon }) => {
+      {FUNCTIONS.map(({ id, key }) => {
         const ok = !needConnect && supported.includes(id)
         const current = view.kind === 'function' && view.id === id
         return (
@@ -38,8 +40,8 @@ export default function Sidebar({ view, supported, needConnect = false, onSelect
               aria-describedby={ok ? undefined : `${base}-${id}`}
               onClick={() => ok && onSelect({ kind: 'function', id })}
             >
-              <Icon size={18} aria-hidden="true" />
-              {t(key)}
+              <CategoryDisc cat={FN_CATEGORY[id]} Icon={FN_ICON[id]} />
+              <span className="nav-label">{t(key)}</span>
             </button>
             {!ok && (
               <span id={`${base}-${id}`} className="visually-hidden">
@@ -56,8 +58,8 @@ export default function Sidebar({ view, supported, needConnect = false, onSelect
         aria-current={view.kind === 'settings' ? 'page' : undefined}
         onClick={() => onSelect({ kind: 'settings' })}
       >
-        <Settings size={18} aria-hidden="true" />
-        {t('navSettings')}
+        <CategoryDisc cat="settings" Icon={Settings} />
+        <span className="nav-label">{t('navSettings')}</span>
       </button>
       <button
         type="button"
@@ -65,8 +67,8 @@ export default function Sidebar({ view, supported, needConnect = false, onSelect
         aria-current={view.kind === 'firmware' ? 'page' : undefined}
         onClick={() => onSelect({ kind: 'firmware' })}
       >
-        <Cpu size={18} aria-hidden="true" />
-        {t('navFirmware')}
+        <CategoryDisc cat="firmware" Icon={Cpu} />
+        <span className="nav-label">{t('navFirmware')}</span>
       </button>
     </nav>
   )

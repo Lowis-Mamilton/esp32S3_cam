@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { useT } from '../../i18n'
 import type { FunctionId } from '../layout/types'
 import { snippetFor } from './codeSnippets'
+import { tokenizeLine } from './highlight'
 
 export default function CodeTab({ fn }: { fn: FunctionId }) {
   const { t, lang } = useT()
@@ -14,6 +15,8 @@ export default function CodeTab({ fn }: { fn: FunctionId }) {
     [],
   )
   const code = snippetFor(fn, lang)
+  // The snippet ends with a newline; no empty numbered line for it.
+  const lines = code.replace(/\n$/, '').split('\n')
   const show = (r: 'ok' | 'fail') => {
     setCopied(r)
     if (timer.current) clearTimeout(timer.current)
@@ -38,8 +41,20 @@ export default function CodeTab({ fn }: { fn: FunctionId }) {
           {copied === 'ok' ? t('copied') : copied === 'fail' ? t('copyFailed') : ''}
         </span>
       </div>
+      {/* One span per line: CSS numbers them; the text content stays exactly the snippet. */}
       <pre className="rp-pre" tabIndex={0} aria-label={t('tabCode')}>
-        <code>{code}</code>
+        <code>
+          {lines.map((line, i) => (
+            <span key={i} className="rp-ln">
+              {tokenizeLine(line).map((tk, j) => (
+                <span key={j} className={tk.kind === 'text' ? undefined : `rp-tk-${tk.kind}`}>
+                  {tk.text}
+                </span>
+              ))}
+              {i < lines.length - 1 ? '\n' : ''}
+            </span>
+          ))}
+        </code>
       </pre>
     </div>
   )
