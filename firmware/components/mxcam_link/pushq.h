@@ -13,6 +13,7 @@
 #define MXCAM_PUSHQ_H
 
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
 
 #ifdef __cplusplus
@@ -20,6 +21,14 @@ extern "C" {
 #endif
 
 #define PUSHQ_MAX_SLOTS 4
+
+/* Hard cap for a pushed FRAME payload (header + JPEG). Larger frames are
+ * dropped (counted) by the link; the encoder lowers quality instead of exceeding it. */
+#define PUSHQ_MAX_FRAME_PAYLOAD (48u * 1024u)
+
+/* Time budget for sending one whole push packet of len bytes: 50 ms base plus
+ * about 1 ms per KB (USB full speed moves ~1 KB/ms at best). */
+uint32_t pushq_send_budget_us(size_t len);
 
 typedef struct {
   uint8_t n, max_pending;

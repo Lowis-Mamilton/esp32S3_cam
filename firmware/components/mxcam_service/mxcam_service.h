@@ -24,8 +24,9 @@ extern "C" {
 /* mxs_handle returns this instead of a size when the response is deferred
  * (LEARN on function 1): nothing is sent now; the pipeline later completes the
  * request via mxs_take_pending_learn() + mxs_complete_learn(), or it is
- * cancelled (mxs_take_cancelled()). */
+ * cancelled (mxs_peek_cancelled()). */
 #define MXS_DEFERRED ((size_t)-1)
+#define MXS_CANCEL_QUEUE 4
 
 /* Results the pipeline passes to mxs_complete_learn() (> 0 is the learned id). */
 #define MXS_LEARN_NO_COLOR 0 /* region has no usable colour -> BAD_PARAM */
@@ -46,8 +47,8 @@ typedef struct {
   uint32_t last_request_ms;
   bool has_request; /* at least one valid request received */
   mxs_pending_learn_t pending_learn;
-  bool cancel_pending; /* an unclaimed learn was cancelled; its error is not sent yet */
-  uint8_t cancel_seq;
+  uint8_t cancel_seq[MXS_CANCEL_QUEUE]; /* seqs of cancelled learns whose error is not sent yet */
+  uint8_t cancel_count;
 } mxs_state_t;
 
 void mxs_init(mxs_state_t *s, const mxp_info_t *info);
@@ -66,14 +67,21 @@ bool mxs_take_pending_learn(mxs_state_t *s, uint8_t *seq, mxp_learn_req_t *req);
  * FULL) and clears the pending learn. Returns 0 if no learn with that seq is
  * pending or out is too small. */
 size_t mxs_complete_learn(mxs_state_t *s, uint8_t seq, int result, uint8_t *out, size_t out_cap);
-/* A queued (unclaimed) LEARN is cancelled by SET_FUNCTION change or host/stream
- * timeout. Returns the ERROR BAD_PARAM packet (original seq in *seq) once, 0 if
- * nothing was cancelled. The link calls it after every handle and on its idle
- * wakeups so the cancellation actually goes out. */
-size_t mxs_take_cancelled(mxs_state_t *s, uint8_t *seq, uint8_t *out, size_t out_cap);
+/* A LEARN (queued OR claimed) is cancelled by a SET_FUNCTION change or a
+ * host/stream timeout: its ERROR BAD_PARAM (original seq) is queued (up to
+ * MXS_CANCEL_QUEUE, oldest dropped on overflow) and the learn is cleared, so a
+ * claimed-but-never-completed learn cannot wedge LEARN as BUSY. A late
+ * mxs_complete_learn() for a cancelled learn returns 0. The pipeline MUST call
+ * mxs_complete_learn() on every path and send nothing if it returns 0.
+ *
+ * Delivery: peek the front packet (0 if none; seq in *seq), send it, and only
+ * after a successful send call mxs_ack_cancelled(); a failed send is retried at
+ * the next flush. The link flushes after every handle and on idle wakeups. */
+size_t mxs_peek_cancelled(const mxs_state_t *s, uint8_t *seq, uint8_t *out, size_t out_cap);
+void mxs_ack_cancelled(mxs_state_t *s);
 
-/* Stops streaming when no request arrived for more than 3000 ms (and cancels an
- * unclaimed LEARN). */
+/* Stops streaming when no request arrived for more than 3000 ms (and cancels a
+ * pending LEARN). */
 void mxs_tick(mxs_state_t *s, uint32_t now_ms);
 /* A request arrived within the last 3000 ms. */
 bool mxs_host_connected(const mxs_state_t *s, uint32_t now_ms);

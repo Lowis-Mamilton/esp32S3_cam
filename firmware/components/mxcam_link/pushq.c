@@ -1,3 +1,4 @@
+#include <stddef.h>
 #include "pushq.h"
 
 enum { S_FREE = 0, S_FILLING, S_READY, S_SENDING };
@@ -77,4 +78,9 @@ void pushq_done(pushq_t *q, int idx)
 {
   if (idx < 0 || idx >= q->n || q->state[idx] != S_SENDING) return;
   q->state[idx] = S_FREE;
+}
+
+uint32_t pushq_send_budget_us(size_t len)
+{
+  return 50000u + (uint32_t)(len * 1000u / 1024u);
 }

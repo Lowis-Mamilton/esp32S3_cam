@@ -101,12 +101,22 @@ static void test_abort_and_order(void)
   CHECK(pushq_take(&q) == p && pushq_take(&q) == r);
 }
 
+static void test_budget(void)
+{
+  CHECK(pushq_send_budget_us(0) == 50000u);
+  CHECK(pushq_send_budget_us(1024) == 51000u);
+  CHECK(pushq_send_budget_us(PUSHQ_MAX_FRAME_PAYLOAD + 9) == 50000u + (PUSHQ_MAX_FRAME_PAYLOAD + 9) * 1000u / 1024u);
+  CHECK(pushq_send_budget_us(2048) > pushq_send_budget_us(1024));
+  CHECK(PUSHQ_MAX_FRAME_PAYLOAD == 48 * 1024);
+}
+
 int main(void)
 {
   test_frame_policy();
   test_never_overwrites_sending();
   test_latest_wins();
   test_abort_and_order();
+  test_budget();
   if (g_fail) {
     printf("%d of %d checks FAILED\n", g_fail, g_checks);
     return 1;

@@ -19,12 +19,15 @@ static size_t reply_err(const mxp_frame_t *req, uint8_t code, uint8_t *out, size
   return mxp_encode_error(req->seq, req->cmd, code, out, out_cap);
 }
 
-/* Cancel a queued (not yet claimed) LEARN; its BAD_PARAM goes out via mxs_take_cancelled. */
+/* Cancel the pending LEARN (queued or claimed); its BAD_PARAM goes out via mxs_peek_cancelled. */
 static void cancel_learn(mxs_state_t *s)
 {
-  if (s->pending_learn.active && !s->pending_learn.claimed) {
-    s->cancel_pending = true;
-    s->cancel_seq = s->pending_learn.seq;
+  if (s->pending_learn.active) {
+    if (s->cancel_count == MXS_CANCEL_QUEUE) { /* full: drop the oldest */
+      memmove(s->cancel_seq, s->cancel_seq + 1, MXS_CANCEL_QUEUE - 1);
+      s->cancel_count--;
+    }
+    s->cancel_seq[s->cancel_count++] = s->pending_learn.seq;
     s->pending_learn.active = false;
   }
 }
@@ -107,7 +110,8 @@ bool mxs_take_pending_learn(mxs_state_t *s, uint8_t *seq, mxp_learn_req_t *req)
 
 size_t mxs_complete_learn(mxs_state_t *s, uint8_t seq, int result, uint8_t *out, size_t out_cap)
 {
-  if (!s->pending_learn.active || s->pending_learn.seq != seq) return 0;
+  /* Only a claimed learn can be completed; a cancelled one is gone (returns 0). */
+  if (!s->pending_learn.active || !s->pending_learn.claimed || s->pending_learn.seq != seq) return 0;
   size_t n;
   if (result > 0 && result <= 255) {
     uint8_t id = (uint8_t)result;
@@ -120,14 +124,19 @@ size_t mxs_complete_learn(mxs_state_t *s, uint8_t seq, int result, uint8_t *out,
   return n;
 }
 
-size_t mxs_take_cancelled(mxs_state_t *s, uint8_t *seq, uint8_t *out, size_t out_cap)
+size_t mxs_peek_cancelled(const mxs_state_t *s, uint8_t *seq, uint8_t *out, size_t out_cap)
 {
-  if (!s->cancel_pending) return 0;
-  size_t n = mxp_encode_error(s->cancel_seq, MXP_CMD_LEARN, MXP_ERR_BAD_PARAM, out, out_cap);
-  if (n == 0) return 0;
-  *seq = s->cancel_seq;
-  s->cancel_pending = false;
+  if (s->cancel_count == 0) return 0;
+  size_t n = mxp_encode_error(s->cancel_seq[0], MXP_CMD_LEARN, MXP_ERR_BAD_PARAM, out, out_cap);
+  if (n > 0) *seq = s->cancel_seq[0];
   return n;
+}
+
+void mxs_ack_cancelled(mxs_state_t *s)
+{
+  if (s->cancel_count == 0) return;
+  memmove(s->cancel_seq, s->cancel_seq + 1, (size_t)s->cancel_count - 1);
+  s->cancel_count--;
 }
 
 void mxs_tick(mxs_state_t *s, uint32_t now_ms)

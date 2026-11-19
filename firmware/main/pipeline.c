@@ -106,13 +106,13 @@ static void pipeline_task(void *arg)
             fps = (int)((int64_t)frames * 1000000 / (now - t0));
             encoder_stats_t es;
             encoder_take_stats(&es);
-            uint32_t q_drop, tx_fail;
-            mxcam_link_take_push_stats(&q_drop, &tx_fail);
+            uint32_t q_drop, q_big, tx_fail;
+            mxcam_link_take_push_stats(&q_drop, &q_big, &tx_fail);
             ESP_LOGI(TAG,
                      "fps=%d grab_fail=%u bad_size=%u lcd_err=%u stream=%d sent=%u drop=%u enc_fail=%u "
-                     "enc_avg_ms=%u enc_max_ms=%u jpeg_avg=%u qdrop=%u txfail=%u",
+                     "enc_avg_ms=%u enc_max_ms=%u jpeg_avg=%u qdrop=%u qbig=%u txfail=%u",
                      fps, grab_fail, bad_size, lcd_err, streaming_now ? 1 : 0, es.frames, es.send_fail,
-                     es.enc_fail, (unsigned)es.enc_avg_ms, (unsigned)es.enc_max_ms, (unsigned)es.jpeg_avg, (unsigned)q_drop, (unsigned)tx_fail);
+                     es.enc_fail, (unsigned)es.enc_avg_ms, (unsigned)es.enc_max_ms, (unsigned)es.jpeg_avg, (unsigned)q_drop, (unsigned)q_big, (unsigned)tx_fail);
             frames = 0;
             t0 = now;
         }

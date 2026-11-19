@@ -4,12 +4,15 @@
 
 #include "driver/usb_serial_jtag.h"
 #include "esp_heap_caps.h"
+#include "esp_log.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 #include "freertos/task.h"
 #include "mxcam_proto.h"
 #include "pushq.h"
+
+static const char *TAG = "link";
 
 #define TX_RING_SIZE 8192
 #define RX_RING_SIZE 2048
@@ -20,7 +23,8 @@
 #define TX_TASK_STACK 4096
 #define TX_TASK_PRIO 4 /* between the encoder (3) and RX (6); core 0 */
 
-#define MAX_FRAME_PAYLOAD 65535u /* protocol limit for one packet's payload */
+#define MAX_FRAME_PAYLOAD PUSHQ_MAX_FRAME_PAYLOAD /* hard cap: larger FRAMEs are dropped and counted */
+#define MUTEX_WAIT_MS 150 /* how long a sender may wait for the tx mutex (a big push holds it) */
 #define MAX_RESULTS_PAYLOAD 512u
 #define FRAME_SLOTS 3   /* one being sent + at most 2 pending */
 #define RESULTS_SLOTS 2 /* one being sent + the latest */
@@ -44,7 +48,8 @@ static portMUX_TYPE s_push_lock = portMUX_INITIALIZER_UNLOCKED;
 static TaskHandle_t s_tx_task;
 static uint8_t *s_tx_buf;
 static uint8_t s_push_seq; /* MXCam's own push counter (protocol.md 3), TX task only */
-static uint32_t s_dropped, s_tx_fail;
+static SemaphoreHandle_t s_flush_mutex;
+static uint32_t s_dropped, s_dropped_size, s_tx_fail;
 
 static inline uint32_t now_ms(void)
 {
@@ -61,12 +66,15 @@ void mxcam_link_state_unlock(void)
     xSemaphoreGive(s_state_mutex);
 }
 
-bool mxcam_link_send(const uint8_t *data, size_t len)
+/* Holds the tx mutex for the whole packet (a response is never interleaved
+ * inside another packet's bytes). The transfer budget starts once the mutex is
+ * ours; waiting for it is bounded separately by MUTEX_WAIT_MS. */
+static bool send_packet(const uint8_t *data, size_t len, uint32_t budget_us)
 {
     if (!s_tx_mutex || !data || len == 0) return false;
-    int64_t deadline = esp_timer_get_time() + SEND_BUDGET_US;
 
-    if (xSemaphoreTake(s_tx_mutex, pdMS_TO_TICKS(SEND_BUDGET_US / 1000)) != pdTRUE) return false;
+    if (xSemaphoreTake(s_tx_mutex, pdMS_TO_TICKS(MUTEX_WAIT_MS)) != pdTRUE) return false;
+    int64_t deadline = esp_timer_get_time() + budget_us;
     bool ok = true;
     size_t off = 0;
     while (off < len) {
@@ -87,22 +95,39 @@ bool mxcam_link_send(const uint8_t *data, size_t len)
     return ok;
 }
 
-void mxcam_link_respond(uint8_t cmd, uint8_t seq, const uint8_t *payload, uint16_t len)
+bool mxcam_link_send(const uint8_t *data, size_t len)
+{
+    return send_packet(data, len, SEND_BUDGET_US);
+}
+
+bool mxcam_link_respond(uint8_t cmd, uint8_t seq, const uint8_t *payload, uint16_t len)
 {
     uint8_t buf[128];
-    if (len > sizeof(buf) - MXP_OVERHEAD) return;
+    if (len > MXCAM_LINK_RESPOND_MAX_PAYLOAD) {
+        ESP_LOGW(TAG, "respond: payload %u > %u, not sent", (unsigned)len, MXCAM_LINK_RESPOND_MAX_PAYLOAD);
+        return false;
+    }
     size_t n = mxp_encode(cmd, seq, payload, len, buf, sizeof(buf));
-    if (n > 0) mxcam_link_send(buf, n);
+    return n > 0 && mxcam_link_send(buf, n);
 }
 
 void mxcam_link_flush_cancelled(void)
 {
     uint8_t out[32], seq;
-    size_t n = 0;
-    mxcam_link_state_lock();
-    if (s_state) n = mxs_take_cancelled(s_state, &seq, out, sizeof(out));
-    mxcam_link_state_unlock();
-    if (n > 0) mxcam_link_send(out, n);
+    /* One flusher at a time, so ack always pops the packet that was sent. */
+    if (!s_flush_mutex || xSemaphoreTake(s_flush_mutex, 0) != pdTRUE) return;
+    for (int i = 0; i < MXS_CANCEL_QUEUE; i++) {
+        size_t n = 0;
+        mxcam_link_state_lock();
+        if (s_state) n = mxs_peek_cancelled(s_state, &seq, out, sizeof(out));
+        mxcam_link_state_unlock();
+        if (n == 0) break;
+        if (!mxcam_link_send(out, n)) break; /* kept queued: retried at the next flush */
+        mxcam_link_state_lock();
+        mxs_ack_cancelled(s_state);
+        mxcam_link_state_unlock();
+    }
+    xSemaphoreGive(s_flush_mutex);
 }
 
 static push_kind_t *kind_for(uint8_t cmd)
@@ -115,7 +140,13 @@ static push_kind_t *kind_for(uint8_t cmd)
 bool mxcam_link_push(uint8_t cmd, const uint8_t *payload, uint16_t len)
 {
     push_kind_t *k = kind_for(cmd);
-    if (!k || !s_tx_task || (!payload && len > 0) || len > k->cap) return false;
+    if (!k || !s_tx_task || (!payload && len > 0)) return false;
+    if (len > k->cap) {
+        portENTER_CRITICAL(&s_push_lock);
+        s_dropped_size++;
+        portEXIT_CRITICAL(&s_push_lock);
+        return false;
+    }
 
     bool dropped;
     portENTER_CRITICAL(&s_push_lock);
@@ -134,12 +165,13 @@ bool mxcam_link_push(uint8_t cmd, const uint8_t *payload, uint16_t len)
     return true;
 }
 
-void mxcam_link_take_push_stats(uint32_t *dropped, uint32_t *tx_fail)
+void mxcam_link_take_push_stats(uint32_t *dropped, uint32_t *dropped_size, uint32_t *tx_fail)
 {
     portENTER_CRITICAL(&s_push_lock);
     *dropped = s_dropped;
+    *dropped_size = s_dropped_size;
     *tx_fail = s_tx_fail;
-    s_dropped = s_tx_fail = 0;
+    s_dropped = s_dropped_size = s_tx_fail = 0;
     portEXIT_CRITICAL(&s_push_lock);
 }
 
@@ -164,7 +196,9 @@ static void tx_task(void *arg)
              * response from the RX task slips in between packets. */
             size_t n = mxp_encode(k->cmd, s_push_seq++, k->buf[idx], k->len[idx], s_tx_buf,
                                   MAX_FRAME_PAYLOAD + MXP_OVERHEAD);
-            bool ok = n > 0 && mxcam_link_send(s_tx_buf, n);
+            /* Whole packet under one mutex hold (nothing interleaves inside it),
+             * with a length-scaled budget. */
+            bool ok = n > 0 && send_packet(s_tx_buf, n, pushq_send_budget_us(n));
 
             portENTER_CRITICAL(&s_push_lock);
             pushq_done(&k->q, idx);
@@ -207,7 +241,8 @@ esp_err_t mxcam_link_start(mxs_state_t *state)
     s_state = state;
     s_state_mutex = xSemaphoreCreateMutex();
     s_tx_mutex = xSemaphoreCreateMutex();
-    if (!s_state_mutex || !s_tx_mutex) return ESP_ERR_NO_MEM;
+    s_flush_mutex = xSemaphoreCreateMutex();
+    if (!s_state_mutex || !s_tx_mutex || !s_flush_mutex) return ESP_ERR_NO_MEM;
 
     pushq_init(&s_frame_kind.q, FRAME_SLOTS, 2);
     s_frame_kind.cap = MAX_FRAME_PAYLOAD;

@@ -285,34 +285,59 @@ static void test_learn_cancel(void)
   call(&s, MXP_CMD_SET_FUNCTION, 6, &zero, 1, 10, &r, rb, sizeof(rb));
   CHECK(r.cmd == 0x90);
   CHECK(!s.pending_learn.active);
-  size_t n = mxs_take_cancelled(&s, &seq, out, sizeof(out));
+  size_t n = mxs_peek_cancelled(&s, &seq, out, sizeof(out));
   CHECK(n > 0 && seq == 31);
   decode(out, n, &r, rb, sizeof(rb));
   CHECK(r.cmd == 0xFF && r.seq == 31 && r.payload[0] == MXP_CMD_LEARN && r.payload[1] == MXP_ERR_BAD_PARAM);
-  CHECK(mxs_take_cancelled(&s, &seq, out, sizeof(out)) == 0); /* only once */
+  /* peek does not consume: a failed send is retried by the next flush */
+  CHECK(mxs_peek_cancelled(&s, &seq, out, sizeof(out)) == n && seq == 31);
+  mxs_ack_cancelled(&s);
+  CHECK(mxs_peek_cancelled(&s, &seq, out, sizeof(out)) == 0);
 
   /* stream/host timeout cancels it too */
   s.function_id = 1;
   CHECK(learn(&s, 1, 32, 1000, &r, rb, sizeof(rb)) == MXS_DEFERRED);
   mxs_tick(&s, 3999);
   CHECK(s.pending_learn.active);
-  CHECK(mxs_take_cancelled(&s, &seq, out, sizeof(out)) == 0);
+  CHECK(mxs_peek_cancelled(&s, &seq, out, sizeof(out)) == 0);
   mxs_tick(&s, 4001);
   CHECK(!s.pending_learn.active);
-  n = mxs_take_cancelled(&s, &seq, out, sizeof(out));
+  n = mxs_peek_cancelled(&s, &seq, out, sizeof(out));
   CHECK(n > 0 && seq == 32);
   decode(out, n, &r, rb, sizeof(rb));
   CHECK(r.cmd == 0xFF && r.seq == 32 && r.payload[1] == MXP_ERR_BAD_PARAM);
+  mxs_ack_cancelled(&s);
 
-  /* a learn already claimed by the pipeline is not cancelled (it completes it) */
+  /* a CLAIMED learn is cancelled too (BAD_PARAM queued), so it cannot wedge
+   * LEARN as BUSY; a new LEARN is accepted afterwards. */
   s.function_id = 1;
   CHECK(learn(&s, 1, 33, 5000, &r, rb, sizeof(rb)) == MXS_DEFERRED);
   mxp_learn_req_t req;
   CHECK(mxs_take_pending_learn(&s, &seq, &req));
   call(&s, MXP_CMD_SET_FUNCTION, 7, &zero, 1, 5001, &r, rb, sizeof(rb));
+  CHECK(!s.pending_learn.active);
+  n = mxs_peek_cancelled(&s, &seq, out, sizeof(out));
+  CHECK(n > 0 && seq == 33);
+  mxs_ack_cancelled(&s);
+  CHECK(mxs_complete_learn(&s, 33, 2, out, sizeof(out)) == 0); /* late completion is ignored */
+  s.function_id = 1;
+  CHECK(learn(&s, 1, 34, 5002, &r, rb, sizeof(rb)) == MXS_DEFERRED);
+  CHECK(mxs_complete_learn(&s, 34, 2, out, sizeof(out)) == 0); /* not claimed yet */
   CHECK(s.pending_learn.active);
-  CHECK(mxs_take_cancelled(&s, &seq, out, sizeof(out)) == 0);
-  CHECK(mxs_complete_learn(&s, 33, 2, out, sizeof(out)) > 0);
+
+  /* two cancels before a flush are both delivered, in order */
+  mxs_init(&s, &info);
+  s.function_id = 1;
+  CHECK(learn(&s, 1, 40, 0, &r, rb, sizeof(rb)) == MXS_DEFERRED);
+  call(&s, MXP_CMD_SET_FUNCTION, 8, &zero, 1, 1, &r, rb, sizeof(rb));
+  s.function_id = 1;
+  CHECK(learn(&s, 1, 41, 2, &r, rb, sizeof(rb)) == MXS_DEFERRED);
+  call(&s, MXP_CMD_SET_FUNCTION, 9, &zero, 1, 3, &r, rb, sizeof(rb));
+  CHECK(mxs_peek_cancelled(&s, &seq, out, sizeof(out)) > 0 && seq == 40);
+  mxs_ack_cancelled(&s);
+  CHECK(mxs_peek_cancelled(&s, &seq, out, sizeof(out)) > 0 && seq == 41);
+  mxs_ack_cancelled(&s);
+  CHECK(mxs_peek_cancelled(&s, &seq, out, sizeof(out)) == 0);
 }
 
 int main(void)
