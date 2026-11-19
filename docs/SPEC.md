@@ -227,6 +227,8 @@ docs/          規格、協定、ADR
 - [ ] V1.3 擴展板：鏡頭和螢幕腳位已在實板驗證；I2C（41/42）和 UART（1/2）在 M4 驗證
 - [x] 協定 C 程式碼的位置（ADR-0006）
 - [ ] M4：Arduino 函式庫的發佈方式（把 `arduino-lib/` 打包成 release ZIP）
+- [ ] M4 開工前（M2 總審查建議）：service/link 改成與傳輸介面無關（`mxs_handle` 帶傳輸別、各傳輸自己的解碼器／outbox／回應路徑、state mutex 移出 USB 元件；UART/I2C 上 STREAM_START 回 NOT_SUPPORTED；R4 輪詢不能讓 USB 串流維持或點亮連線圖示）；Arduino 函式庫需要的 C 端 GET_LEARNED／FORGET 解析；outbox 以 seq 確認；AprilTag 信心度改用 decision_margin 縮放；顯示器故障時辨識仍可運作（R4 無螢幕使用）
+- [ ] M3：face 名稱是否支援、esp-dl 模型的 flash／PSRAM 用量與處理時間；辨識和 TFT 更新同在 core 1，若人臉偵測 >100 ms 考慮降頻或非同步
 - [x] M2 開工前（M1 總審查建議）——已在 M2 處理：
   - `mxcam_link` 改成非阻塞的推送佇列（`mxcam_link_push`），推送序號集中在 link；RESULTS 不可以讓 TFT 卡住
   - 需要 pipeline 資料才能回答的指令（例如 LEARN）：先決定用 BUSY＋輪詢，還是延後回應
