@@ -33,9 +33,17 @@ static apriltag_family_t *s_tf;
 static image_u8_t *s_gray;
 static float s_decimate = 2.0f;
 
-void mxt_set_quad_decimate(float decimate) {
-  s_decimate = decimate >= 1.0f ? decimate : 1.0f; /* also maps NaN to 1 */
+/* Upstream image_u8_decimate() only implements exactly 1.5 or an integer
+ * factor (it truncates anything else), while quad corners are rescaled by the
+ * raw value, so e.g. 2.5 would yield wrong coordinates. Only 1, 1.5, 2, 3, 4
+ * are accepted (exact comparisons on purpose; NaN/inf fail them all). */
+bool mxt_set_quad_decimate(float decimate) {
+  if (!(decimate == 1.0f || decimate == 1.5f || decimate == 2.0f || decimate == 3.0f ||
+        decimate == 4.0f))
+    return false;
+  s_decimate = decimate;
   if (s_td) s_td->quad_decimate = s_decimate;
+  return true;
 }
 
 void mxt_deinit(void) {

@@ -196,13 +196,69 @@ static void test_lifecycle(void) {
   CHECK(mxt_init());
   CHECK(mxt_init()); /* idempotent */
   CHECK(run(out, MXP_MAX_RESULTS) == 1);
-  /* setter: decimate 1 still finds the tag */
-  mxt_set_quad_decimate(1.0f);
+}
+
+/* Upstream only decimates by exactly 1.5 or an integer factor, but rescales
+ * corners by the raw value, so other values would give wrong coordinates. */
+static void test_decimate_setter(void) {
+  mxp_result_t out[MXP_MAX_RESULTS];
+  background();
+  draw_tag(3, 100, 120, 6, 0);
+  static const float good[] = {1.0f, 1.5f, 3.0f, 4.0f, 2.0f}; /* ends on the default */
+  for (unsigned i = 0; i < sizeof good / sizeof good[0]; i++) {
+    CHECK(mxt_set_quad_decimate(good[i]));
+    uint8_t n = run(out, MXP_MAX_RESULTS);
+    if (n != 1) printf("  decimate %.1f: %u results\n", (double)good[i], n);
+    CHECK(n == 1);
+    if (n == 1) check_record(&out[0], 3, 100, 120, 0);
+  }
+  static const float bad[] = {2.5f, 1.2f, 0.5f, 0.0f, -2.0f, 5.0f, 1.75f};
+  for (unsigned i = 0; i < sizeof bad / sizeof bad[0]; i++) {
+    CHECK(!mxt_set_quad_decimate(bad[i]));
+    uint8_t n = run(out, MXP_MAX_RESULTS); /* still decimate 2: unchanged */
+    CHECK(n == 1);
+    if (n == 1) check_record(&out[0], 3, 100, 120, 0);
+  }
+  CHECK(!mxt_set_quad_decimate((float)NAN));
+  CHECK(!mxt_set_quad_decimate((float)INFINITY));
   CHECK(run(out, MXP_MAX_RESULTS) == 1);
-  mxt_set_quad_decimate(2.0f);
+  if (out[0].extra_len == 18) check_record(&out[0], 3, 100, 120, 0);
+  /* accepted value survives deinit/init */
+  CHECK(mxt_set_quad_decimate(3.0f));
+  mxt_deinit();
+  CHECK(mxt_init());
+  CHECK(run(out, MXP_MAX_RESULTS) == 1);
+  CHECK(mxt_set_quad_decimate(2.0f));
+}
+
+/* Tag turned 45 degrees near the right edge: its right corner (fitted from the
+ * visible edges) lies outside the frame. Corners are reported unclipped, the
+ * bbox is clipped. x is the homography centre, not the bbox centre. */
+static void test_clipped_bbox(void) {
+  mxp_result_t out[MXP_MAX_RESULTS];
+  background();
+  draw_tag(3, 290, 120, 6, 45);
+  uint8_t n = run(out, MXP_MAX_RESULTS);
+  CHECK(n == 1);
+  if (n != 1) return;
+  CHECK(out[0].id == 3);
+  APPROX(out[0].x, 290, 3);
+  int minx = 9999, maxx = -9999;
+  for (int k = 0; k < 4; k++) {
+    int px = rd16(out[0].extra + 2 + 4 * k);
+    if (px < minx) minx = px;
+    if (px > maxx) maxx = px;
+  }
+  CHECK(maxx > MXT_FRAME_W);              /* a corner is off-frame */
+  CHECK(out[0].w > 0);
+  CHECK(out[0].w < maxx - minx);          /* clipped */
+  CHECK(minx + out[0].w <= MXT_FRAME_W + 1); /* bbox right edge at the frame edge (rounding) */
+  APPROX(minx + out[0].w, MXT_FRAME_W, 1);
+  CHECK(out[0].h > 0);
 }
 
 int main(void) {
+  setvbuf(stdout, NULL, _IONBF, 0); /* keep output if a test crashes */
   fam = tag36h11_create();
   CHECK(mxt_init());
   test_empty();
@@ -212,6 +268,8 @@ int main(void) {
   test_two_tags();
   report_timing();
   test_lifecycle();
+  test_decimate_setter();
+  test_clipped_bbox();
   mxt_deinit();
   tag36h11_destroy(fam);
   if (fails) {

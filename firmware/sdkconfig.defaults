@@ -15,4 +15,7 @@ CONFIG_SPIRAM_ALLOW_BSS_SEG_EXTERNAL_MEMORY=y
 # PSRAM and only requests <= 4 KB are tried in internal RAM first, so its large
 # working buffers land in PSRAM. DMA buffers use heap_caps_malloc explicitly.
 CONFIG_SPIRAM_USE_MALLOC=y
+# Consequence: plain malloc above 4 KB may return PSRAM. Any buffer that must be
+# internal (DMA, ISR/cache-disabled access) must be allocated with
+# heap_caps_malloc(..., MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA), never malloc.
 CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=4096

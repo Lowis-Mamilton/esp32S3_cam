@@ -159,6 +159,8 @@ M2 定稿於 2026-11-19（決策見 ADR-0007～0009）。
 
 AprilTag 的 `extra`（18 bytes）：`rotation_cdeg (i16，-18000～18000，百分之一度)`，接著四個角 `x0,y0,x1,y1,x2,y2,x3,y3 (i16 ×8)`。顏色和人臉的 `extra_len` 是 0。
 
+AprilTag 的 `x, y` 是由單應矩陣（homography）算出的 tag 中心，可能和外接框（`width, height`）的中心略有差異；四個角不裁切，可能落在畫面外，外接框則已裁到畫面內。
+
 ### 0x20 GET_RESULTS
 
 請求：空。回應 `0xA0`：

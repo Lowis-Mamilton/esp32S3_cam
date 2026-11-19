@@ -45,9 +45,11 @@ uint8_t mxt_detect(const uint16_t *frame, mxp_result_t *out, uint8_t cap, uint32
 /* Frees everything mxt_init allocated. Safe to call when not initialised. */
 void mxt_deinit(void);
 
-/* Changes quad_decimate for subsequent detections (values below 1 are clamped
- * to 1). Allowed before mxt_init; the value survives deinit/init. */
-void mxt_set_quad_decimate(float decimate);
+/* Changes quad_decimate for subsequent detections. Only 1, 1.5, 2, 3 and 4 are
+ * accepted (upstream decimates by exactly 1.5 or an integer factor); anything
+ * else, including NaN/inf, returns false and keeps the current value. Allowed
+ * before mxt_init; the value survives deinit/init. Default 2. */
+bool mxt_set_quad_decimate(float decimate);
 
 #ifdef __cplusplus
 }
