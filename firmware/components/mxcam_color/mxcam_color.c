@@ -141,6 +141,17 @@ bool mxc_same_color(const uint8_t a[3], const uint8_t b[3], uint8_t tolerance) {
   return hsv_match(rgb_to_hsv(a[0], a[1], a[2]), rgb_to_hsv(b[0], b[1], b[2]), tolerance);
 }
 
+bool mxc_match_px(uint16_t px_be, const uint8_t rgb[3], uint8_t tolerance) {
+  uint8_t r, g, b;
+  unpack(px_be, &r, &g, &b);
+  /* Fast reject: (max-min)/max < 0.14 is certainly below MIN_SAT (0.15), so
+   * hsv_match would say false; the exact float test decides everything else. */
+  uint8_t mx = r > g ? (r > b ? r : b) : (g > b ? g : b);
+  uint8_t mn = r < g ? (r < b ? r : b) : (g < b ? g : b);
+  if ((unsigned)(mx - mn) * 100u < 14u * mx) return false;
+  return hsv_match(rgb_to_hsv(r, g, b), rgb_to_hsv(rgb[0], rgb[1], rgb[2]), tolerance);
+}
+
 bool mxc_sample(const uint16_t *frame, uint16_t x, uint16_t y, uint16_t w, uint16_t h,
                 uint8_t rgb_out[3]) {
   uint32_t x1 = (uint32_t)x + w, y1 = (uint32_t)y + h;

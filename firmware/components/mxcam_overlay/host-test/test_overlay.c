@@ -184,6 +184,95 @@ static void test_mirror_x(void)
     CHECK(mxo_mirror_x(&c, mxo_mirror_x(&c, 37, 12), 12) == 37); /* involution */
 }
 
+static int count_color(const mxo_canvas_t *c, uint16_t color)
+{
+    int n = 0;
+    for (int i = 0; i < c->width * c->height; i++) if (c->pixels[i] == color) n++;
+    return n;
+}
+
+static void test_draw_line_horizontal_vertical_diagonal(void)
+{
+    guarded_t g; guarded_init(&g, MXO_BLACK);
+    mxo_canvas_t c = { g.buf + GUARD, W, H };
+    mxo_draw_line(&c, 1, 2, 12, 2, 1, MXO_WHITE); /* horizontal */
+    for (int x = 1; x <= 12; x++) CHECK(c.pixels[2 * W + x] == MXO_WHITE);
+    CHECK(c.pixels[2 * W + 0] == MXO_BLACK && c.pixels[2 * W + 13] == MXO_BLACK);
+    CHECK(c.pixels[1 * W + 6] == MXO_BLACK && c.pixels[3 * W + 6] == MXO_BLACK);
+    CHECK(count_color(&c, MXO_WHITE) == 12);
+
+    guarded_init(&g, MXO_BLACK);
+    mxo_draw_line(&c, 5, 14, 5, 3, 1, MXO_RED); /* vertical, drawn bottom-up */
+    for (int y = 3; y <= 14; y++) CHECK(c.pixels[y * W + 5] == MXO_RED);
+    CHECK(c.pixels[2 * W + 5] == MXO_BLACK && c.pixels[15 * W + 5] == MXO_BLACK);
+    CHECK(count_color(&c, MXO_RED) == 12);
+
+    guarded_init(&g, MXO_BLACK);
+    mxo_draw_line(&c, 15, 15, 0, 0, 1, MXO_GREEN); /* diagonal, reversed */
+    for (int i = 0; i < 16; i++) CHECK(c.pixels[i * W + i] == MXO_GREEN);
+    CHECK(count_color(&c, MXO_GREEN) == 16);
+
+    guarded_init(&g, MXO_BLACK);
+    mxo_draw_line(&c, 0, 0, 12, 4, 1, MXO_WHITE); /* shallow slope: one pixel per column */
+    CHECK(c.pixels[0] == MXO_WHITE && c.pixels[4 * W + 12] == MXO_WHITE);
+    CHECK(c.pixels[2 * W + 6] == MXO_WHITE); /* midpoint */
+    CHECK(count_color(&c, MXO_WHITE) == 13);
+
+    guarded_init(&g, MXO_BLACK);
+    mxo_draw_line(&c, 7, 9, 7, 9, 1, MXO_WHITE); /* single point */
+    CHECK(c.pixels[9 * W + 7] == MXO_WHITE && count_color(&c, MXO_WHITE) == 1);
+    CHECK(guards_ok(&g));
+}
+
+static void test_draw_line_clips(void)
+{
+    guarded_t g; guarded_init(&g, MXO_BLACK);
+    mxo_canvas_t c = { g.buf + GUARD, W, H };
+    mxo_draw_line(&c, -20, -12, 40, 36, 1, MXO_WHITE); /* passes through the canvas */
+    CHECK(guards_ok(&g));
+    CHECK(count_color(&c, MXO_WHITE) > 8);
+    /* the ideal line y = -12 + 0.8 (x + 20) passes (5,8) and (10,12); clipping
+     * may move the Bresenham path by at most one pixel */
+    CHECK(c.pixels[8 * W + 5] == MXO_WHITE || c.pixels[7 * W + 5] == MXO_WHITE || c.pixels[9 * W + 5] == MXO_WHITE);
+    CHECK(c.pixels[12 * W + 10] == MXO_WHITE || c.pixels[11 * W + 10] == MXO_WHITE || c.pixels[13 * W + 10] == MXO_WHITE);
+    CHECK(c.pixels[0] == MXO_BLACK && c.pixels[15 * W + 0] == MXO_BLACK);
+    guarded_init(&g, MXO_BLACK);
+    mxo_draw_line(&c, -100, 5, 100, 5, 3, MXO_RED); /* wider than canvas, thick */
+    CHECK(guards_ok(&g));
+    for (int x = 0; x < W; x++) CHECK(c.pixels[4 * W + x] == MXO_RED && c.pixels[6 * W + x] == MXO_RED);
+    guarded_init(&g, MXO_BLACK);
+    mxo_draw_line(&c, -50, -50, -10, 40, 5, MXO_RED);      /* fully outside (left) */
+    mxo_draw_line(&c, 20, -30, 90, -3, 2, MXO_RED);        /* fully outside (above) */
+    mxo_draw_line(&c, 2000000000, 0, -2000000000, 3, 1, MXO_GREEN); /* huge coordinates */
+    mxo_draw_line(&c, 0, 0, 5, 5, 0, MXO_RED);             /* thickness 0: nothing */
+    CHECK(guards_ok(&g));
+    CHECK(count_color(&c, MXO_RED) == 0);
+    CHECK(count_color(&c, MXO_GREEN) > 0); /* the huge line still crosses the canvas */
+    mxo_canvas_t bad = { NULL, W, H };
+    mxo_draw_line(&bad, 0, 0, 5, 5, 1, MXO_WHITE);
+    CHECK(guards_ok(&g));
+}
+
+static void test_draw_line_thickness(void)
+{
+    guarded_t g; guarded_init(&g, MXO_BLACK);
+    mxo_canvas_t c = { g.buf + GUARD, W, H };
+    mxo_draw_line(&c, 3, 8, 12, 8, 3, MXO_WHITE);
+    for (int x = 3; x <= 12; x++)
+        for (int y = 7; y <= 9; y++) CHECK(c.pixels[y * W + x] == MXO_WHITE);
+    for (int x = 0; x < W; x++) CHECK(c.pixels[6 * W + x] == MXO_BLACK && c.pixels[10 * W + x] == MXO_BLACK);
+    guarded_init(&g, MXO_BLACK);
+    mxo_draw_line(&c, 8, 2, 8, 13, 3, MXO_WHITE); /* vertical, 3 px wide */
+    for (int y = 2; y <= 13; y++)
+        CHECK(c.pixels[y * W + 7] == MXO_WHITE && c.pixels[y * W + 8] == MXO_WHITE && c.pixels[y * W + 9] == MXO_WHITE);
+    for (int y = 0; y < H; y++) CHECK(c.pixels[y * W + 6] == MXO_BLACK && c.pixels[y * W + 10] == MXO_BLACK);
+    guarded_init(&g, MXO_BLACK);
+    mxo_draw_line(&c, 0, 0, 15, 15, 4, MXO_WHITE); /* thick diagonal hugging the corners */
+    CHECK(guards_ok(&g));
+    CHECK(c.pixels[0] == MXO_WHITE && c.pixels[15 * W + 15] == MXO_WHITE);
+    CHECK(c.pixels[0 * W + 15] == MXO_BLACK && c.pixels[15 * W + 0] == MXO_BLACK);
+}
+
 int main(void)
 {
     test_rect_outline();
@@ -194,6 +283,9 @@ int main(void)
     test_colors();
     test_text_mirrored();
     test_mirror_x();
+    test_draw_line_horizontal_vertical_diagonal();
+    test_draw_line_clips();
+    test_draw_line_thickness();
     if (failures) { printf("%d failure(s)\n", failures); return 1; }
     printf("overlay: all tests passed\n");
     return 0;

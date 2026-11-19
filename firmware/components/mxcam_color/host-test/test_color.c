@@ -183,6 +183,39 @@ static void test_same_color(void) {
 }
 
 
+/* mxc_match_px uses the same HSV window as mxc_same_color: for every RGB565
+ * value (expanded to 8 bits exactly like the detector) the answers agree. */
+static void unpack_be(uint16_t p, uint8_t rgb[3]) {
+  uint16_t v = (uint16_t)((p >> 8) | (p << 8));
+  uint8_t r5 = (uint8_t)(v >> 11), g6 = (uint8_t)((v >> 5) & 63), b5 = (uint8_t)(v & 31);
+  rgb[0] = (uint8_t)((r5 << 3) | (r5 >> 2));
+  rgb[1] = (uint8_t)((g6 << 2) | (g6 >> 4));
+  rgb[2] = (uint8_t)((b5 << 3) | (b5 >> 2));
+}
+
+static void test_match_px_same_as_same_color(void) {
+  static const uint8_t refs[6][3] = {{230, 20, 20}, {20, 200, 20}, {20, 20, 220},
+                                     {128, 128, 128}, {230, 40, 40}, {200, 180, 40}};
+  static const uint8_t tols[4] = {0, 10, 30, 100};
+  long mismatches = 0, matches = 0;
+  for (int r = 0; r < 6; r++)
+    for (int t = 0; t < 4; t++)
+      for (uint32_t p = 0; p <= 0xFFFFu; p++) {
+        uint8_t rgb[3];
+        unpack_be((uint16_t)p, rgb);
+        bool want = mxc_same_color(rgb, refs[r], tols[t]);
+        bool got = mxc_match_px((uint16_t)p, refs[r], tols[t]);
+        if (want != got) mismatches++;
+        if (got) matches++;
+      }
+  CHECK(mismatches == 0);
+  CHECK(matches > 0);
+  /* spot checks with frame pixels */
+  CHECK(mxc_match_px(px(230, 20, 20), RED, 30));
+  CHECK(!mxc_match_px(px(20, 20, 220), RED, 30));
+  CHECK(!mxc_match_px(px(128, 128, 128), RED, 100));
+}
+
 static void fill_pattern(int mode, const uint8_t *c[3]) {
   for (int y = 0; y < MXC_FRAME_H; y++)
     for (int x = 0; x < MXC_FRAME_W; x++) {
@@ -264,6 +297,7 @@ int main(void) {
   test_grey_never_matches();
   test_sample();
   test_same_color();
+  test_match_px_same_as_same_color();
   test_label_overflow();
   test_concave_blob();
   test_nearest_hue_wins();

@@ -35,6 +35,57 @@ void mxo_draw_rect(mxo_canvas_t *c, int x, int y, int w, int h, int thickness, u
     mxo_fill_rect(c, x + w - thickness, y + thickness, thickness, h - 2 * thickness, color);  /* right */
 }
 
+/* Liang-Barsky clip of p0->p1 against [lo_x,hi_x] x [lo_y,hi_y]; false when
+ * nothing is left. Doubles: the input may be any int (no overflow). */
+static int clip_segment(double *x0, double *y0, double *x1, double *y1,
+                        double lo_x, double lo_y, double hi_x, double hi_y)
+{
+    double dx = *x1 - *x0, dy = *y1 - *y0, t0 = 0.0, t1 = 1.0;
+    const double p[4] = { -dx, dx, -dy, dy };
+    const double q[4] = { *x0 - lo_x, hi_x - *x0, *y0 - lo_y, hi_y - *y0 };
+    for (int i = 0; i < 4; i++) {
+        if (p[i] == 0.0) {
+            if (q[i] < 0.0) return 0; /* parallel and outside */
+            continue;
+        }
+        double t = q[i] / p[i];
+        if (p[i] < 0.0) { if (t > t1) return 0; if (t > t0) t0 = t; }
+        else            { if (t < t0) return 0; if (t < t1) t1 = t; }
+    }
+    double ox = *x0, oy = *y0;
+    if (t1 < 1.0) { *x1 = ox + t1 * dx; *y1 = oy + t1 * dy; } /* untouched ends stay exact */
+    if (t0 > 0.0) { *x0 = ox + t0 * dx; *y0 = oy + t0 * dy; }
+    return 1;
+}
+
+static int round_d(double v) { return (int)(v < 0.0 ? v - 0.5 : v + 0.5); }
+
+void mxo_draw_line(mxo_canvas_t *c, int x0, int y0, int x1, int y1, int thickness, uint16_t color)
+{
+    if (!canvas_ok(c) || thickness <= 0) return;
+    /* A pen at p covers [p - t/2, p - t/2 + t - 1]; keep points whose pen can touch the canvas. */
+    double lo = -(double)(thickness - thickness / 2 - 1), half = (double)(thickness / 2);
+    double fx0 = x0, fy0 = y0, fx1 = x1, fy1 = y1;
+    if (!clip_segment(&fx0, &fy0, &fx1, &fy1, lo, lo,
+                      (double)(c->width - 1) + half, (double)(c->height - 1) + half)) return;
+    int ax = round_d(fx0), ay = round_d(fy0), bx = round_d(fx1), by = round_d(fy1);
+    int dx = bx > ax ? bx - ax : ax - bx, sx = ax < bx ? 1 : -1;
+    int dy = by > ay ? ay - by : by - ay, sy = ay < by ? 1 : -1; /* dy <= 0 */
+    int err = dx + dy;
+    for (;;) {
+        if (thickness == 1) {
+            if (ax >= 0 && ax < c->width && ay >= 0 && ay < c->height)
+                c->pixels[(size_t)ay * (size_t)c->width + (size_t)ax] = color;
+        } else {
+            mxo_fill_rect(c, ax - thickness / 2, ay - thickness / 2, thickness, thickness, color);
+        }
+        if (ax == bx && ay == by) break;
+        int e2 = 2 * err;
+        if (e2 >= dy) { err += dy; ax += sx; }
+        if (e2 <= dx) { err += dx; ay += sy; }
+    }
+}
+
 int mxo_draw_text(mxo_canvas_t *c, int x, int y, const char *ascii, uint16_t fg, uint16_t bg)
 {
     if (!ascii) return 0;

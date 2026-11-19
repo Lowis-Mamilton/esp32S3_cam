@@ -49,6 +49,12 @@ bool mxc_sample(const uint16_t *frame, uint16_t x, uint16_t y, uint16_t w, uint1
 /* Same tolerance window as detection; false when either colour is grey. */
 bool mxc_same_color(const uint8_t a[3], const uint8_t b[3], uint8_t tolerance);
 
+/* One frame pixel (RGB565 big-endian, as in the frame) against a reference
+ * colour: exactly mxc_same_color(expanded pixel, rgb, tolerance). Grey pixels
+ * are rejected with integer math before any float work (used per pixel by the
+ * line function's learned-colour mode). Stateless and reentrant. */
+bool mxc_match_px(uint16_t px_be, const uint8_t rgb[3], uint8_t tolerance);
+
 #ifdef __cplusplus
 }
 #endif

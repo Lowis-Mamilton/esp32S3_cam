@@ -30,6 +30,13 @@ typedef struct {
 void mxo_fill_rect(mxo_canvas_t *c, int x, int y, int w, int h, uint16_t color);
 /* Hollow rectangle; the border is drawn inside the (x,y,w,h) box. */
 void mxo_draw_rect(mxo_canvas_t *c, int x, int y, int w, int h, int thickness, uint16_t color);
+/* Straight line (Bresenham) from (x0,y0) to (x1,y1), both ends included. Each
+ * point is a thickness x thickness square centred on it (top-left at
+ * p - thickness/2). The segment is first clipped to the canvas (plus the pen
+ * margin), so far-away or huge coordinates cost nothing and never write
+ * outside; the clipped path may differ from the unclipped one by one pixel.
+ * thickness <= 0 draws nothing. */
+void mxo_draw_line(mxo_canvas_t *c, int x0, int y0, int x1, int y1, int thickness, uint16_t color);
 /* 8x8 font, printable ASCII only (others blank). Returns text width in pixels (8 per char). */
 int  mxo_draw_text(mxo_canvas_t *c, int x, int y, const char *ascii, uint16_t fg, uint16_t bg);
 
