@@ -1,6 +1,13 @@
 import { useId, useRef, useState, type KeyboardEvent } from 'react'
+import type { Device, DeviceSnapshot, Result } from '../../device/types'
 import { useT, type MessageKey } from '../../i18n'
-import type { PanelTab } from './types'
+import CodeTab from '../panel/CodeTab'
+import { useGuard } from '../panel/guard'
+import LearnTab from '../panel/LearnTab'
+import ParamsTab from '../panel/ParamsTab'
+import ResultsTab from '../panel/ResultsTab'
+import SaveBar from '../panel/SaveBar'
+import type { FunctionId, PanelTab } from './types'
 
 const TABS: { id: PanelTab; key: MessageKey }[] = [
   { id: 'results', key: 'tabResults' },
@@ -9,8 +16,17 @@ const TABS: { id: PanelTab; key: MessageKey }[] = [
   { id: 'code', key: 'tabCode' },
 ]
 
-export default function RightPanel() {
+interface Props {
+  device: Device | null
+  snapshot: DeviceSnapshot
+  fn: FunctionId
+  results: Result[]
+}
+
+export default function RightPanel({ device, snapshot, fn, results }: Props) {
   const { t } = useT()
+  const guard = useGuard(device)
+  const blocked = !device || !snapshot.supported.includes(fn) || guard.needFirmware
   const [tab, setTab] = useState<PanelTab>('results')
   const base = useId()
   const refs = useRef<Record<PanelTab, HTMLButtonElement | null>>({ results: null, learn: null, params: null, code: null })
@@ -49,10 +65,19 @@ export default function RightPanel() {
           </button>
         ))}
       </div>
-      {/* Task 5 fills the tab contents. */}
       <div role="tabpanel" id={`${base}-panel`} aria-labelledby={`${base}-${tab}`} className="tabpanel">
-        <p className="muted">{t('panelEmpty')}</p>
+        {tab !== 'results' && tab !== 'code' && blocked && <p className="rp-hint rp-firmware">{t('needFirmware')}</p>}
+        {guard.error && (
+          <p role="alert" className="rp-error">
+            {guard.error}
+          </p>
+        )}
+        {tab === 'results' && <ResultsTab fn={fn} results={results} learned={snapshot.learned[fn]} />}
+        {tab === 'learn' && <LearnTab device={device} fn={fn} learned={snapshot.learned[fn]} disabled={blocked} guard={guard} />}
+        {tab === 'params' && <ParamsTab device={device} fn={fn} params={snapshot.params} disabled={blocked} guard={guard} />}
+        {tab === 'code' && <CodeTab fn={fn} />}
       </div>
+      <SaveBar device={device} dirty={snapshot.dirty} disabled={!snapshot.supported.includes(fn)} />
     </aside>
   )
 }

@@ -136,7 +136,13 @@ export class DemoDevice implements Device {
     this.touch()
   }
   async setName(fn: FunctionId, id: number, name: string) {
-    this.learned = { ...this.learned, [fn]: this.learned[fn].map((e) => (e.id === id ? { ...e, name } : e)) }
+    const list = this.learned[fn]
+    // Tags need no learning: naming an unseen tag id creates its entry.
+    const next =
+      fn === 2 && !list.some((e) => e.id === id)
+        ? [...list, { id, name }].sort((a, b) => a.id - b.id)
+        : list.map((e) => (e.id === id ? { ...e, name } : e))
+    this.learned = { ...this.learned, [fn]: next }
     this.touch()
   }
   async setParams(p: Partial<FunctionParams>) {

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import type { Device, Result } from './device/types'
+import type { Device, FunctionId, Result } from './device/types'
 import { useDevice } from './device/useDevice'
 import { describeError, type ErrorText } from './i18n/core'
 import { useT } from './i18n'
@@ -17,6 +17,12 @@ interface Props {
 export default function App({ serial }: Props) {
   const { t } = useT()
   const [view, setView] = useState<View>({ kind: 'function', id: 1 })
+  // The right panel keeps showing the last chosen function while a settings page is open.
+  const [lastFn, setLastFn] = useState<FunctionId>(1)
+  const select = (v: View) => {
+    setView(v)
+    if (v.kind === 'function') setLastFn(v.id)
+  }
   const resolved = serial ?? (typeof navigator !== 'undefined' && 'serial' in navigator ? navigator.serial : undefined)
   const { device, snapshot, demo, setDemo } = useDevice(resolved)
   const { status, lost, info, supported } = snapshot
@@ -69,7 +75,7 @@ export default function App({ serial }: Props) {
             )}
           </p>
         )}
-        <Sidebar view={view} supported={supported} onSelect={setView} />
+        <Sidebar view={view} supported={supported} onSelect={select} />
         <main className="center">
           {status === 'unsupported' ? (
             <p className="notice">{t('unsupported')}</p>
@@ -114,7 +120,7 @@ export default function App({ serial }: Props) {
             </section>
           )}
         </main>
-        <RightPanel />
+        <RightPanel device={device} snapshot={snapshot} fn={lastFn} results={results} />
       </div>
     </div>
   )

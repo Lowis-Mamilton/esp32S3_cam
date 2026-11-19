@@ -3,6 +3,19 @@ import { beforeEach, expect, test, vi } from 'vitest'
 import { I18nProvider } from '../../i18n'
 import RightPanel from './RightPanel'
 import Sidebar from './Sidebar'
+import { defaultParams, defaultSystem, emptyLearned, type DeviceSnapshot } from '../../device/types'
+
+const idleSnapshot: DeviceSnapshot = {
+  mode: 'demo',
+  status: 'connected',
+  supported: [1, 2, 3],
+  activeFunction: 1,
+  learned: emptyLearned(),
+  params: defaultParams(),
+  system: defaultSystem(),
+  dirty: false,
+  lost: false,
+}
 
 beforeEach(() => {
   try {
@@ -43,7 +56,7 @@ test('nav landmark is named as general navigation in both languages', () => {
 test('tabs use roving tabindex and arrow/Home/End keys move and select', () => {
   render(
     <I18nProvider>
-      <RightPanel />
+      <RightPanel device={null} snapshot={idleSnapshot} fn={1} results={[]} />
     </I18nProvider>,
   )
   const tab = (n: string) => screen.getByRole('tab', { name: n })
