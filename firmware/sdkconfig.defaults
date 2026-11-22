@@ -23,6 +23,14 @@ CONFIG_SPIRAM_USE_MALLOC=y
 # internal (DMA, ISR/cache-disabled access) must be allocated with
 # heap_caps_malloc(..., MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA), never malloc.
 CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=4096
+# No separate internal "DMA reserve" pool (IDF default: 32 KB carved out of the
+# internal heap at boot). It was always empty here, and
+# heap_caps_get_minimum_free_size() counts such a pool as 0, so the `min` in
+# the stats line read 32,031 bytes too low. Without it the same memory is part
+# of the main internal heap and `min` is the real low-water mark
+# (docs/measurements/internal-ram.md). Internal RAM never runs out here (floor
+# 60 KB, SPEC section 10), which is the case the pool exists for.
+CONFIG_SPIRAM_MALLOC_RESERVE_INTERNAL=0
 # app_main loads the store (mxst_load keeps an mxs_data_t, ~1.9 KB, on the stack).
 CONFIG_ESP_MAIN_TASK_STACK_SIZE=8192
 # Colour / AprilTag detection run per frame on core 1: build with -O2.

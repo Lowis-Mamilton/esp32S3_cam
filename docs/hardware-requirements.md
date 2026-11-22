@@ -7,7 +7,7 @@
 
 | 項目 | 規格 | 備註 |
 |---|---|---|
-| 主控 | ESP32-S3-WROOM-1 **N16R8**（16 MB flash、8 MB octal PSRAM） | 韌體約 2.1 MB（含人臉模型），之後加入更多模型會更大；PSRAM 必須是 octal 8 MB |
+| 主控 | ESP32-S3-WROOM-1 **N16R8**（16 MB flash、8 MB octal PSRAM） | 韌體約 3.55 MB（含人臉與手勢模型，factory 分割區 4 MB），之後加入更多模型要另外切模型分割區（ADR-0017）；PSRAM 必須是 octal 8 MB |
 | 鏡頭 | OV3660（DVP 8-bit） | 腳位見 SPEC §4；QVGA 320×240 使用 |
 | 螢幕 | 2.8 吋 ILI9341 SPI 320×240，**橫向** | 觸控 XPT2046 不需要 |
 | 狀態燈 | WS2812 RGB（GPIO48） | |

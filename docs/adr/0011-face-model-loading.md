@@ -14,4 +14,4 @@ esp-dl 配置失敗時直接 abort（沒有例外可接），所以要事先防�
 - `mxf_init` 的呼叫位置有硬性限制：只能在 `app_main` 啟動 task 之前；之後新增啟動順序時不能把它往後挪。
 - 載入失敗時功能 3 不列在 GET_INFO，其他功能照常。
 - 目前 `mxf_init` 的條件包含螢幕與鏡頭；M4 辨識不再需要螢幕（R4 無螢幕使用）時，條件改成只看鏡頭，並仍保持在建立 task 之前（見 SPEC §10 M4 項目）。
-- 內部 RAM 餘裕有限（最低剩餘約 105 KB、底線 60 KB；esp-dl 靜態約 24 KB），M4 加入 UART／I2C 時要重新檢查 heap guard 的門檻。
+- 內部 RAM 餘裕有限（最低剩餘約 105 KB、底線 60 KB；esp-dl 靜態約 24 KB），M4 加入 UART／I2C 時要重新檢查 heap guard 的門檻。（2026-11-22 補充：105 KB 少算了 32 KB，實際約 135 KB，見 `docs/measurements/internal-ram.md`。）

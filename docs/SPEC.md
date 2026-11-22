@@ -267,7 +267,7 @@ docs/          規格、協定、ADR
 - [x] M3：人臉不支援取名（無身分辨識）；模型放 flash rodata（映像 2.13 MiB）、PSRAM 約 425 KB；無串流 44–58 ms（0–2 張臉），串流時最多約 62 ms，每張都偵測，TFT 10–11 fps（`docs/measurements/m3.md`）
 - [ ] M4（M3 總審查建議）：
   - 辨識不再需要螢幕時，`mxf_init` 的條件改成只看鏡頭，並仍須放在建立 task 之前
-  - 內部 RAM 預算：最低剩餘約 105 KB（底線 60 KB）；esp-dl 即使不用人臉也靜態佔約 24 KB，留給 UART／I2C 的餘裕約 45 KB；重新檢查 `mxf_detect` 的 heap guard（32 KB／256 KB）餘裕
+  - 內部 RAM 預算：最低剩餘約 135 KB（底線 60 KB）。先前寫的「約 105 KB」少算了 32 KB：IDF 預設切出的內部保留池一直是空的，卻被算成 0；2026-11-22 起不切這個池子（`CONFIG_SPIRAM_MALLOC_RESERVE_INTERNAL=0`），統計行的 `min` 才是真正的最低值（`docs/measurements/internal-ram.md`）。esp-dl 即使不用人臉也靜態佔約 24 KB，留給 UART／I2C 的餘裕約 75 KB；重新檢查 `mxf_detect` 的 heap guard（32 KB／256 KB）餘裕
   - Arduino `MXCamResult` 要加 `confidence`、`width`、`height` 欄位，與 Studio 的程式範例一致
   - heap guard 跳過偵測時要回報為「跳過」，不可快取或推送成「0 張臉」（也不計入 face_ms）
   - Studio 的「需要更新韌體」分不出舊韌體與人臉初始化失敗（改用韌體版本判斷）
