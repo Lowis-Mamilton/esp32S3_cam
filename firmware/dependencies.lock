@@ -147,6 +147,16 @@ dependencies:
       registry_url: https://components.espressif.com/
       type: service
     version: 3.1.1
+  espressif/quirc:
+    component_hash: dacf4cb39a49598642b812462c7b9fbe4e75b31ed14612814fd1b005505ef875
+    dependencies:
+    - name: idf
+      require: private
+      version: '>=4.3.0'
+    source:
+      registry_url: https://components.espressif.com/
+      type: service
+    version: 1.2.0~1
   idf:
     source:
       type: idf
@@ -159,6 +169,7 @@ direct_dependencies:
 - espressif/hand_gesture_recognition
 - espressif/human_face_detect
 - espressif/led_strip
-manifest_hash: dc78175f6afdaa3a86fdf74252dfe7ef3259b1125aaa2ed3c996bb4858da29ca
+- espressif/quirc
+manifest_hash: 089b5bb06be82a0ec7b1c7b6e5e93819ede1090e08650d307fe376e745bc6c0b
 target: esp32s3
 version: 2.0.0

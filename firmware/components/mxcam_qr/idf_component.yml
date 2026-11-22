@@ -1,0 +1,6 @@
+## Espressif's port of quirc (QR code detection + decoding; ISC licence).
+## Built with QUIRC_FLOAT_TYPE=float + QUIRC_USE_TGMATH (the ESP32-S3 FPU is
+## single precision). Its README: identify + decode of a small code needs
+## about 10 KiB of stack, more for larger versions (ADR-0020).
+dependencies:
+  espressif/quirc: "~1.2.0"
