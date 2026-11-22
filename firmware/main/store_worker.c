@@ -19,7 +19,7 @@ static bool s_tick;
 static void worker_task(void *arg)
 {
     (void)arg;
-    static mxs_data_t snap; /* ~2.9 KB: keep it off the stack */
+    static mxs_data_t snap; /* ~4 KB (M7 QR table): keep it off the stack */
     uint8_t cmd = 0, seq = 0;
     for (;;) {
         vTaskDelay(pdMS_TO_TICKS(POLL_MS));

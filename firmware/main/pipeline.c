@@ -20,14 +20,16 @@
 #include "mxcam_overlay.h"
 #include "mxcam_store.h"
 #include "mxcam_tag.h"
+#include "scan.h"
 #include "status_led.h"
 #include "tracking.h"
 
 static const char *TAG = "pipeline";
 
 /* AprilTag (upstream apriltag, quad threshold + decode) needs a deep stack;
- * colour detection keeps ~3 KB of HSV tables on it. The 1 Hz log prints the
- * high-water mark. */
+ * colour detection keeps ~3 KB of HSV tables on it; QR decoding (quirc_decode)
+ * keeps an ~8.9 KB work struct on it (mxcam_qr.h: call with >= 12 KB free).
+ * The 1 Hz log prints the high-water mark. */
 #define PIPE_STACK (24 * 1024)
 #define PIPE_PRIO 5
 #define ICON_SIZE 12
@@ -63,7 +65,10 @@ static const char *fn_name(uint8_t fn)
     case MXP_FUNC_FACE: return "FACE";
     case MXP_FUNC_LINE: return "LINE";
     case MXP_FUNC_TRACK: return "TRACK";
+    case MXP_FUNC_QR: return "QR";
     case MXP_FUNC_GESTURE: return "GESTURE";
+    case MXP_FUNC_SHAPE: return "SHAPE";
+    case MXP_FUNC_MOTION: return "MOTION";
     default: return "?";
     }
 }
@@ -414,10 +419,14 @@ static void pipeline_task(void *arg)
             ctx.gesture = s_state->data->gesture_cfg;
             copy_colors(&ctx);
             tracking_sync(s_state); /* line / object config and learned data, on change */
+            scan_sync(s_state);     /* shape / motion config and learned QR codes, on change */
             learn = mxs_take_pending_learn(s_state, &lseq, &lreq);
             mxcam_link_state_unlock();
             streaming_now = ctx.streaming;
-            if (ctx.fn != prev_fn) tracking_on_function(ctx.fn);
+            if (ctx.fn != prev_fn) {
+                tracking_on_function(ctx.fn);
+                scan_on_function(ctx.fn);
+            }
             prev_fn = ctx.fn;
 
             /* JPEG work happens on the encoder task (core 0). Here we only
@@ -443,7 +452,11 @@ static void pipeline_task(void *arg)
              * learn is completed; the response is queued in the state's
              * outbox and sent by the link (core 0), so this core never
              * blocks on USB. A learn cancelled meanwhile changes nothing. */
-            if (learn && (lreq.function_id == MXP_FUNC_LINE || lreq.function_id == MXP_FUNC_TRACK)) {
+            /* LEARN 6 picks from this frame's decoded codes: after detection. */
+            bool learn_qr = learn && lreq.function_id == MXP_FUNC_QR;
+            if (learn_qr) {
+                /* below */
+            } else if (learn && (lreq.function_id == MXP_FUNC_LINE || lreq.function_id == MXP_FUNC_TRACK)) {
                 if (tracking_learn(s_state, lseq, &lreq, frame)) mxcam_link_kick_deferred();
             } else if (learn) {
                 uint8_t rgb[3];
@@ -508,7 +521,19 @@ static void pipeline_task(void *arg)
                 }
             } else if (ctx.fn == MXP_FUNC_LINE || ctx.fn == MXP_FUNC_TRACK) {
                 res.count = tracking_run(ctx.fn, frame, res.r);
+            } else if (ctx.fn == MXP_FUNC_QR || ctx.fn == MXP_FUNC_SHAPE || ctx.fn == MXP_FUNC_MOTION) {
+                int n = scan_run(ctx.fn, frame, res.r, MXP_MAX_RESULTS);
+                if (n < 0) {
+                    /* QR skipped (not initialised): no new result, not "no codes". */
+                    res.count = 0;
+                    publish = false;
+                } else {
+                    res.count = (uint8_t)n;
+                }
             }
+            /* With ctx.fn != 6 there are no codes: the learn answers BAD_PARAM
+             * (or nothing, when it was cancelled by the function change). */
+            if (learn_qr && scan_learn(s_state, lseq, &lreq)) mxcam_link_kick_deferred();
             if (ctx.fn != MXP_FUNC_FACE) {
                 face_phase = 0;
                 face_last_n = 0;
@@ -564,6 +589,7 @@ static void pipeline_task(void *arg)
                 mxcam_link_state_lock();
                 if (s_state->function_id == ctx.fn) {
                     mxs_set_results(s_state, packed, (uint16_t)plen);
+                    scan_publish_data(s_state, ctx.fn); /* QR content for GET_RESULT_DATA */
                     if (mxs_wants_results(s_state) && !mxcam_link_push(MXP_CMD_PUSH_RESULTS, packed, (uint16_t)plen))
                         results_push_fail++;
                 } else {
@@ -581,6 +607,7 @@ static void pipeline_task(void *arg)
             draw_results(&canvas, &res);
             bool tracking_fn = ctx.fn == MXP_FUNC_LINE || ctx.fn == MXP_FUNC_TRACK;
             if (tracking_fn) tracking_draw(&canvas, ctx.fn, &res);
+            scan_draw(&canvas, ctx.fn, &res); /* QR / shapes / motion only */
 
             char text[24];
             snprintf(text, sizeof(text), "%s  %d FPS", tracking_fn ? tracking_status(ctx.fn) : fn_name(ctx.fn), fps);
@@ -659,6 +686,7 @@ static void pipeline_task(void *arg)
                 gest_max_us = 0;
                 gest_runs = gest_skip = gest_dets = gest_lost = 0;
             }
+            scan_log_stats(TAG); /* "qr_ms=..." when QR ran this second */
 #ifdef MXCAM_GESTURE_BENCH
             if (frames)
                 ESP_LOGI(TAG, "bench frame_ms=%u grab_ms=%u lcd_ms=%u proc_ms=%u feed_ms=%u",

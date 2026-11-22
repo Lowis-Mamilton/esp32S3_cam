@@ -20,6 +20,7 @@
 #include "mxcam_link.h"
 #include "mxcam_overlay.h"
 #include "mxcam_proto.h"
+#include "mxcam_qr.h"
 #include "mxcam_service.h"
 #include "mxcam_store.h"
 #include "mxcam_tag.h"
@@ -133,6 +134,14 @@ void app_main(void)
         else
             ESP_LOGE(TAG, "gesture init failed (no memory?): function 8 disabled");
     }
+    /* QR decoder (quirc, ADR-0020): ~92 KB of PSRAM allocated with malloc
+     * steered to PSRAM, so the same rule as mxf_init / mxh_init (before any
+     * task is created). A failure just leaves function 6 out of GET_INFO. */
+    bool qr_ok = false;
+    if (display_ok && camera_ok) {
+        qr_ok = mxq_init();
+        if (!qr_ok) ESP_LOGE(TAG, "QR init failed (no memory?): function 6 disabled");
+    }
 #if defined(MXCAM_HANDLM_BENCH) && !defined(MXCAM_HANDLM_BENCH_EARLY)
     /* Hand landmark bench: same rule as mxh_init (before any task). */
     if (display_ok && camera_ok && gesture_ok) handlm_bench_boot();
@@ -141,6 +150,11 @@ void app_main(void)
              s_data.gesture_cfg.hand_threshold, s_data.gesture_cfg.gesture_threshold, s_data.gesture_cfg.max_hands);
     ESP_LOGI(TAG, "line: mode %u, colour %s; object tracking: %s", s_data.line_cfg.mode,
              s_data.line_has_color ? "learned" : "none", s_data.has_object ? "learned" : "none");
+    ESP_LOGI(TAG, "QR: %u learned; shape: mode %u, threshold %u, min_size %u, max %u; motion: threshold %u, "
+                  "min_size %u, max %u",
+             s_data.n_qr, s_data.shape_cfg.mode, s_data.shape_cfg.threshold, s_data.shape_cfg.min_size,
+             s_data.shape_cfg.max_results, s_data.motion_cfg.threshold, s_data.motion_cfg.min_size,
+             s_data.motion_cfg.max_results);
 
     mxp_info_t info;
     build_info(&info);
@@ -156,7 +170,11 @@ void app_main(void)
          * initialise (ADR-0018). */
         caps[n_caps++] = MXP_FUNC_LINE;
         caps[n_caps++] = MXP_FUNC_TRACK;
+        if (qr_ok) caps[n_caps++] = MXP_FUNC_QR;
         if (gesture_ok) caps[n_caps++] = MXP_FUNC_GESTURE;
+        /* Shapes and motion: pure C on static buffers (ADR-0021). */
+        caps[n_caps++] = MXP_FUNC_SHAPE;
+        caps[n_caps++] = MXP_FUNC_MOTION;
     }
     mxs_set_capabilities(&s_state, caps, n_caps);
     if (encoder_start() != ESP_OK) {
@@ -190,7 +208,9 @@ void app_main(void)
     /* Without the pipeline the worker also runs the stream/host timeout. */
     if (store_worker_start(&s_state, !run_pipeline) != ESP_OK) ESP_LOGE(TAG, "store worker start failed");
     if (!run_pipeline && display_ok) show_fatal(boot_error, "USB still answers GET_INFO");
-    ESP_LOGI(TAG, "boot done: internal heap free %u, PSRAM free %u",
+    /* main_stack_hw: mxst_load deserialises through an mxs_data_t (~4 KB since
+     * M7) on this task's stack (CONFIG_ESP_MAIN_TASK_STACK_SIZE). */
+    ESP_LOGI(TAG, "boot done: internal heap free %u, PSRAM free %u, main_stack_hw %u",
              (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
-             (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
+             (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM), (unsigned)uxTaskGetStackHighWaterMark(NULL));
 }

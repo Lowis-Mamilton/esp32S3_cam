@@ -96,3 +96,12 @@ jobs:
       - run: cmake -S firmware/components/mxcam_gesture/host-test -B build/gesture-host-test
       - run: cmake --build build/gesture-host-test
       - run: ctest --test-dir build/gesture-host-test --output-on-failure
+      - run: cmake -S firmware/components/mxcam_qr/host-test -B build/qr-host-test
+      - run: cmake --build build/qr-host-test
+      - run: ctest --test-dir build/qr-host-test --output-on-failure
+      - run: cmake -S firmware/components/mxcam_shape/host-test -B build/shape-host-test
+      - run: cmake --build build/shape-host-test
+      - run: ctest --test-dir build/shape-host-test --output-on-failure
+      - run: cmake -S firmware/components/mxcam_motion/host-test -B build/motion-host-test
+      - run: cmake --build build/motion-host-test
+      - run: ctest --test-dir build/motion-host-test --output-on-failure
