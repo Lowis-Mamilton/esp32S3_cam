@@ -1,5 +1,6 @@
 #include "mxcam_link.h"
 
+#include <stdint.h>
 #include <string.h>
 
 #include "driver/usb_serial_jtag.h"
@@ -24,13 +25,15 @@
 
 #define MAX_FRAME_PAYLOAD PUSHQ_MAX_FRAME_PAYLOAD /* hard cap: larger FRAMEs are dropped and counted */
 #define MUTEX_WAIT_MS 150 /* how long a sender may wait for the tx mutex (a big push holds it) */
+#define MAX_PORTS 2 /* 0 = USB (always there), 1 = the optional second host port (BLE) */
+#define USB_PORT 0
 #define MAX_RESULTS_PAYLOAD 512u
 #define FRAME_SLOTS 3   /* one being sent + at most 2 pending */
 #define RESULTS_SLOTS 2 /* one being sent + the latest */
 #define MAX_SLOTS 3
 
 /* Push queues: FRAME keeps 2 pending (drops the oldest), RESULTS only the
- * latest. Payloads are copied in by the producer; the TX task owns the USB. */
+ * latest. Payloads are copied in by the producer; the TX task sends them. */
 typedef struct {
     pushq_t q;
     uint8_t *buf[MAX_SLOTS];
@@ -39,9 +42,19 @@ typedef struct {
     uint8_t cmd;
 } push_kind_t;
 
+/* One host port: where its bytes come from and go to, and its own tx mutex
+ * (a packet is never interleaved with another one on the same port). */
+typedef struct {
+    const mxcam_link_port_t *io;
+    SemaphoreHandle_t tx_mutex;
+} port_t;
+
 static mxs_state_t *s_state;
 static SemaphoreHandle_t s_state_mutex;
-static SemaphoreHandle_t s_tx_mutex;
+static port_t s_ports[MAX_PORTS];
+/* The port of the latest valid request. Pushes and deferred responses go
+ * there: one host at a time (ADR-0022). Written by the RX tasks. */
+static volatile int s_active = USB_PORT;
 static push_kind_t s_results_kind, s_frame_kind;
 static portMUX_TYPE s_push_lock = portMUX_INITIALIZER_UNLOCKED;
 static TaskHandle_t s_tx_task;
@@ -65,16 +78,13 @@ void mxcam_link_state_unlock(void)
     xSemaphoreGive(s_state_mutex);
 }
 
-/* Holds the tx mutex for the whole packet (a response is never interleaved
- * inside another packet's bytes). The transfer budget starts once the mutex is
- * ours; waiting for it is bounded separately by MUTEX_WAIT_MS. */
-static bool send_packet(const uint8_t *data, size_t len, uint32_t budget_us)
+static int usb_read(uint8_t *buf, size_t cap, uint32_t timeout_ms)
 {
-    if (!s_tx_mutex || !data || len == 0) return false;
+    return usb_serial_jtag_read_bytes(buf, cap, pdMS_TO_TICKS(timeout_ms));
+}
 
-    if (xSemaphoreTake(s_tx_mutex, pdMS_TO_TICKS(MUTEX_WAIT_MS)) != pdTRUE) return false;
-    int64_t deadline = esp_timer_get_time() + budget_us;
-    bool ok = true;
+static bool usb_write(const uint8_t *data, size_t len, int64_t deadline_us)
+{
     size_t off = 0;
     while (off < len) {
         size_t chunk = len - off;
@@ -85,18 +95,37 @@ static bool send_packet(const uint8_t *data, size_t len, uint32_t budget_us)
         if (n > 0) off += (size_t)n;
         /* Checked every iteration so a slowly draining host cannot hold the
          * tx mutex past the budget. */
-        if (off < len && esp_timer_get_time() >= deadline) {
-            ok = false;
-            break;
-        }
+        if (off < len && esp_timer_get_time() >= deadline_us) return false;
     }
-    xSemaphoreGive(s_tx_mutex);
+    return true;
+}
+
+static const mxcam_link_port_t s_usb_io = {
+    .read = usb_read,
+    .write = usb_write,
+    .reply_budget_us = SEND_BUDGET_US,
+    .push_budget_us = pushq_send_budget_us,
+    .mutex_wait_ms = MUTEX_WAIT_MS,
+};
+
+/* Holds the port's tx mutex for the whole packet (a response is never
+ * interleaved inside another packet's bytes). The transfer budget starts once
+ * the mutex is ours; waiting for it is bounded separately by mutex_wait_ms. */
+static bool send_packet(int port, const uint8_t *data, size_t len, uint32_t budget_us)
+{
+    port_t *p = &s_ports[port];
+    if (!p->io || !p->tx_mutex || !data || len == 0) return false;
+
+    if (xSemaphoreTake(p->tx_mutex, pdMS_TO_TICKS(p->io->mutex_wait_ms)) != pdTRUE) return false;
+    bool ok = p->io->write(data, len, esp_timer_get_time() + budget_us);
+    xSemaphoreGive(p->tx_mutex);
     return ok;
 }
 
 bool mxcam_link_send(const uint8_t *data, size_t len)
 {
-    return send_packet(data, len, SEND_BUDGET_US);
+    int port = s_active;
+    return send_packet(port, data, len, s_ports[port].io ? s_ports[port].io->reply_budget_us : 0);
 }
 
 void mxcam_link_flush_deferred(void)
@@ -200,8 +229,9 @@ static void tx_task(void *arg)
             size_t n = mxp_encode(k->cmd, s_push_seq++, k->buf[idx], k->len[idx], s_tx_buf,
                                   MAX_FRAME_PAYLOAD + MXP_OVERHEAD);
             /* Whole packet under one mutex hold (nothing interleaves inside it),
-             * with a length-scaled budget. */
-            bool ok = n > 0 && send_packet(s_tx_buf, n, pushq_send_budget_us(n));
+             * with a length-scaled budget, to the host that spoke last. */
+            int port = s_active;
+            bool ok = n > 0 && send_packet(port, s_tx_buf, n, s_ports[port].io->push_budget_us(n));
 
             portENTER_CRITICAL(&s_push_lock);
             pushq_done(&k->q, idx);
@@ -211,44 +241,87 @@ static void tx_task(void *arg)
     }
 }
 
+/* One RX task per port: its own decoder and buffers. `arg` is the port index. */
 static void rx_task(void *arg)
 {
-    (void)arg;
-    static uint8_t payload_buf[MXP_MAX_REQUEST_PAYLOAD];
-    static uint8_t out[MXS_RESPONSE_MAX]; /* largest: GET_LEARNED with 32 tag names */
+    int port = (int)(intptr_t)arg;
+    const mxcam_link_port_t *io = s_ports[port].io;
+    static uint8_t usb_payload_buf[MXP_MAX_REQUEST_PAYLOAD];
+    static uint8_t usb_out[MXS_RESPONSE_MAX]; /* largest: GET_LEARNED with 32 tag names */
+    uint8_t *payload_buf = usb_payload_buf, *out = usb_out;
+    if (port != USB_PORT) {
+        /* The second port's buffers live in PSRAM: internal RAM is scarce. */
+        payload_buf = heap_caps_malloc(MXP_MAX_REQUEST_PAYLOAD, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        out = heap_caps_malloc(MXS_RESPONSE_MAX, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        if (!payload_buf || !out) {
+            ESP_LOGE("mxlink", "no memory for port %d", port);
+            vTaskDelete(NULL);
+        }
+    }
     uint8_t rx[64];
     mxp_decoder_t dec;
-    mxp_decoder_init(&dec, payload_buf, sizeof(payload_buf));
+    mxp_decoder_init(&dec, payload_buf, MXP_MAX_REQUEST_PAYLOAD);
 
     for (;;) {
-        int n = usb_serial_jtag_read_bytes(rx, sizeof(rx), pdMS_TO_TICKS(100));
+        int n = io->read(rx, sizeof(rx), 100);
         /* Deferred responses (LEARN results, cancels after a timeout or
          * function change) go out here too, also on idle wakeups (n <= 0). */
         mxcam_link_flush_deferred();
         for (int i = 0; i < n; i++) {
             mxp_frame_t req;
             if (!mxp_decoder_feed(&dec, rx[i], &req)) continue;
+            s_active = port; /* this host is the one talking now */
             mxcam_link_state_lock();
-            size_t m = mxs_handle(s_state, &req, now_ms(), out, sizeof(out));
+            size_t m = mxs_handle(s_state, &req, now_ms(), out, MXS_RESPONSE_MAX);
             /* Function changed: queued RESULTS were computed for the old one. */
             if (mxs_take_results_invalidated(s_state)) mxcam_link_drop_results_locked();
             mxcam_link_state_unlock();
             /* MXS_DEFERRED: the answer is queued in the outbox later (pipeline /
              * store worker) and sent by mxcam_link_flush_deferred. A send
              * failure here: host will time out and retry. */
-            if (m > 0 && m != MXS_DEFERRED) mxcam_link_send(out, m);
+            if (m > 0 && m != MXS_DEFERRED) send_packet(port, out, m, io->reply_budget_us);
             mxcam_link_flush_deferred();
         }
     }
+}
+
+esp_err_t mxcam_link_add_port(const mxcam_link_port_t *io)
+{
+    port_t *p = &s_ports[1];
+    if (!s_state || !io || !io->read || !io->write || !io->push_budget_us) return ESP_ERR_INVALID_ARG;
+    if (p->io) return ESP_ERR_INVALID_STATE; /* only one extra port */
+    p->tx_mutex = xSemaphoreCreateMutex();
+    if (!p->tx_mutex) return ESP_ERR_NO_MEM;
+    /* This task's stack is in PSRAM: internal RAM is at its floor in the
+     * Bluetooth build, and the task only decodes requests and sends replies.
+     * It must never call flash functions itself (cache off = stack gone);
+     * SAVE and FACTORY_RESET already run in the store worker. */
+    static StaticTask_t tcb;
+    StackType_t *stack = heap_caps_malloc(RX_TASK_STACK, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (!stack) return ESP_ERR_NO_MEM;
+    p->io = io;
+    if (!xTaskCreateStaticPinnedToCore(rx_task, "mxlink_rx2", RX_TASK_STACK, (void *)(intptr_t)1, RX_TASK_PRIO, stack,
+                                       &tcb, 0)) {
+        p->io = NULL;
+        heap_caps_free(stack);
+        return ESP_ERR_NO_MEM;
+    }
+    return ESP_OK;
+}
+
+void mxcam_link_port_closed(void)
+{
+    s_active = USB_PORT;
 }
 
 esp_err_t mxcam_link_start(mxs_state_t *state)
 {
     s_state = state;
     s_state_mutex = xSemaphoreCreateMutex();
-    s_tx_mutex = xSemaphoreCreateMutex();
+    s_ports[USB_PORT].tx_mutex = xSemaphoreCreateMutex();
+    s_ports[USB_PORT].io = &s_usb_io;
     s_flush_mutex = xSemaphoreCreateMutex();
-    if (!s_state_mutex || !s_tx_mutex || !s_flush_mutex) return ESP_ERR_NO_MEM;
+    if (!s_state_mutex || !s_ports[USB_PORT].tx_mutex || !s_flush_mutex) return ESP_ERR_NO_MEM;
 
     pushq_init(&s_frame_kind.q, FRAME_SLOTS, 2);
     s_frame_kind.cap = MAX_FRAME_PAYLOAD;
@@ -276,7 +349,8 @@ esp_err_t mxcam_link_start(mxs_state_t *state)
 
     if (xTaskCreatePinnedToCore(tx_task, "mxlink_tx", TX_TASK_STACK, NULL, TX_TASK_PRIO, &s_tx_task, 0) != pdPASS)
         return ESP_ERR_NO_MEM;
-    if (xTaskCreatePinnedToCore(rx_task, "mxlink_rx", RX_TASK_STACK, NULL, RX_TASK_PRIO, NULL, 0) != pdPASS)
+    if (xTaskCreatePinnedToCore(rx_task, "mxlink_rx", RX_TASK_STACK, (void *)(intptr_t)USB_PORT, RX_TASK_PRIO, NULL,
+                                0) != pdPASS)
         return ESP_ERR_NO_MEM;
     return ESP_OK;
 }

@@ -1,8 +1,9 @@
 import type { DeviceInfo } from '../protocol/messages'
 import type { ConnectionStatus } from '../serial/connection'
+import type { TransportKind } from '../transport/types'
 import type { FunctionId } from '../ui/layout/types'
 
-export type { ConnectionStatus, DeviceInfo, FunctionId }
+export type { ConnectionStatus, DeviceInfo, FunctionId, TransportKind }
 
 export interface Result {
   id: number // 0 = not learned
@@ -78,6 +79,13 @@ export interface DeviceSnapshot {
   configKnown: boolean
   /** Preview paused: the device keeps sending RESULTS but no FRAME (STREAM_START flags 0x02). Reset on (re)connect. */
   previewPaused: boolean
+  /** Real mode: how this browser can connect, USB first. Empty in demo mode and when nothing is supported. */
+  transports: TransportKind[]
+  /**
+   * Real mode: the transport being opened or in use. After an unexpected drop (`lost`) it stays on the
+   * transport that dropped; otherwise null when not connected. Always null in demo mode.
+   */
+  transport: TransportKind | null
 }
 /** Real mode and not connected: nothing can be configured yet; the hint is "connect first". */
 export const needsConnection = (s: DeviceSnapshot): boolean => s.mode === 'real' && s.status !== 'connected'
@@ -97,7 +105,11 @@ export interface Device {
   onFunctionChange(cb: (fn: FunctionId | 0) => void): () => void
   /** Extension: stream statistics for the live view. */
   onStats(cb: (s: { fps: number; kbps: number }) => void): () => void
-  connect(): Promise<void>
+  /**
+   * Lets the user pick a board and connects to it; call from a click handler.
+   * Without `kind`: USB when the browser has it, otherwise Bluetooth.
+   */
+  connect(kind?: TransportKind): Promise<void>
   disconnect(): Promise<void>
   setFunction(id: FunctionId): Promise<void>
   /** Learn from a picture region: colour (1), line colour (4) or the object to track (5). Resolves to the learned ID. */

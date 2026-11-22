@@ -2,7 +2,7 @@ idf_component_register(SRCS "main.c" "pipeline.c" "encoder.c" "status_led.c" "st
                             "tracking.c"
                        REQUIRES esp_psram esp_timer freertos log heap mxcam_protocol mxcam_camera mxcam_display
                                 mxcam_overlay mxcam_service mxcam_link mxcam_store mxcam_color mxcam_tag
-                                mxcam_face mxcam_gesture mxcam_line mxcam_track mxcam_gray esp_hw_support)
+                                mxcam_face mxcam_gesture mxcam_line mxcam_track mxcam_gray mxcam_ble esp_hw_support)
 
 # Face detection on-board benchmark (pipeline.c face_bench), local builds only:
 #   idf.py -DMXCAM_FACE_BENCH=ON build   (and -DMXCAM_FACE_BENCH=OFF to go back;

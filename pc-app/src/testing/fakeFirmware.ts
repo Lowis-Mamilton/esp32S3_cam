@@ -1,6 +1,14 @@
-// Test helper: a fake Web Serial port that behaves like the M2 firmware (docs/protocol.md §3, §6, §7).
+// Test helper: a fake board that behaves like the M2 firmware (docs/protocol.md §3, §6, §7), reachable through
+// a fake Web Serial port (serial()) or a fake Web Bluetooth device (bluetooth()).
 import { Decoder, encodeFrame, type Frame } from '../protocol/codec'
 import { Cmd, ErrorCode, encodeConfig, parseConfig, responseOf, type DeviceConfig } from '../protocol/messages'
+import type { BluetoothCharacteristicLike, BluetoothDeviceLike, BluetoothLike } from '../transport/webBluetooth'
+
+// The Bluetooth contract with the firmware, written out again here on purpose: a wrong constant in
+// src/transport/webBluetooth.ts must fail the tests.
+const BLE_SERVICE = '4d584300-0010-4b1e-9c5a-7f3e2a1d0c9b'
+const BLE_RX = '4d584300-0011-4b1e-9c5a-7f3e2a1d0c9b'
+const BLE_TX = '4d584300-0012-4b1e-9c5a-7f3e2a1d0c9b'
 
 /** Gesture config v1 values (docs/protocol.md section 10). */
 export interface FakeGestureConfig {
@@ -171,6 +179,24 @@ export class FakeFirmware {
   private ctl!: ReadableStreamDefaultController<Uint8Array>
   private pushSeq = 0
 
+  // ---- Bluetooth ----
+  /** What the device chooser does: hands over this board, is closed by the user, or finds no adapter. */
+  btPicker: 'device' | 'cancel' | 'no-adapter' = 'device'
+  /** false: the board has no MXCam Bluetooth service (firmware without Bluetooth). */
+  btHasService = true
+  /** A notification carries at most this many bytes, so packets arrive in pieces. */
+  btNotifyChunk = 20
+  /** Length of every write to the RX characteristic, in order. */
+  btWrites: number[] = []
+  /** Most RX writes ever in progress at once; Web Bluetooth allows one. */
+  btMaxConcurrentWrites = 0
+  /** Options of the last requestDevice() call. */
+  btRequestOptions: unknown
+  /** true while a GATT connection is up. */
+  btConnected = false
+  private btNotify: ((bytes: Uint8Array) => void) | null = null
+  private btDropLink: (() => void) | null = null
+
   constructor() {
     const dec = new Decoder()
     this.port = {
@@ -198,6 +224,99 @@ export class FakeFirmware {
       getPorts: async () => [this.port],
       requestPort: async () => this.port,
     } as unknown as Serial
+  }
+
+  /** A navigator.bluetooth whose device chooser offers this firmware (see btPicker). */
+  bluetooth(): BluetoothLike {
+    const valueListeners = new Set<(ev: Event) => void>()
+    const lostListeners = new Set<() => void>()
+    let dec = new Decoder()
+    let notifying = false
+    let inFlight = 0
+    const tx: BluetoothCharacteristicLike = {
+      value: null,
+      startNotifications: async () => {
+        notifying = true
+      },
+      writeValueWithResponse: async () => {
+        throw new DOMException('GATT operation not permitted.', 'NotSupportedError')
+      },
+      addEventListener: (_type, l) => void valueListeners.add(l),
+      removeEventListener: (_type, l) => void valueListeners.delete(l),
+    }
+    const rx: BluetoothCharacteristicLike = {
+      value: null,
+      startNotifications: async () => {},
+      writeValueWithResponse: async (data) => {
+        if (!this.btConnected) throw new DOMException('GATT Server is disconnected.', 'NetworkError')
+        inFlight++
+        this.btMaxConcurrentWrites = Math.max(this.btMaxConcurrentWrites, inFlight)
+        await Promise.resolve() // a real write takes a round trip: overlapping writes would show up here
+        inFlight--
+        this.btWrites.push(data.length)
+        for (const f of dec.push(data)) {
+          this.requests.push(f)
+          this.answer(f)
+        }
+      },
+      addEventListener: () => {},
+      removeEventListener: () => {},
+    }
+    const down = () => {
+      this.btConnected = false
+      this.btNotify = null
+      this.btDropLink = null
+      notifying = false
+    }
+    const device: BluetoothDeviceLike = {
+      name: 'MXCam-0506',
+      gatt: {
+        connect: async () => {
+          dec = new Decoder()
+          this.btConnected = true
+          this.btNotify = (bytes) => {
+            if (!notifying) return
+            for (let off = 0; off < bytes.length; off += this.btNotifyChunk) {
+              const piece = bytes.slice(off, off + this.btNotifyChunk)
+              tx.value = new DataView(piece.buffer)
+              for (const l of [...valueListeners]) l({ target: tx } as unknown as Event)
+            }
+          }
+          this.btDropLink = () => {
+            down()
+            for (const l of [...lostListeners]) l()
+          }
+          return {
+            getPrimaryService: async (uuid: string) => {
+              if (!this.btHasService || uuid !== BLE_SERVICE) throw new DOMException('No Services matching UUID found in Device.', 'NotFoundError')
+              return {
+                getCharacteristic: async (u: string) => {
+                  if (u === BLE_RX) return rx
+                  if (u === BLE_TX) return tx
+                  throw new DOMException('No Characteristics matching UUID found in Service.', 'NotFoundError')
+                },
+              }
+            },
+          }
+        },
+        disconnect: down,
+      },
+      addEventListener: (_type, l) => void lostListeners.add(l),
+      removeEventListener: (_type, l) => void lostListeners.delete(l),
+    }
+    return {
+      requestDevice: async (options) => {
+        this.btRequestOptions = options
+        if (this.btPicker === 'cancel') throw new DOMException('User cancelled the requestDevice() chooser.', 'NotFoundError')
+        if (this.btPicker === 'no-adapter') throw new DOMException('Bluetooth adapter not available.', 'NotFoundError')
+        return device
+      },
+    }
+  }
+
+  /** The Bluetooth link drops on its own (board out of range or switched off). */
+  btDrop() {
+    this.btDropLink?.()
   }
 
   cmds(): number[] {
@@ -228,8 +347,11 @@ export class FakeFirmware {
     this.ctl.close()
   }
 
+  /** Replies and pushes go out on the Bluetooth link while one is up, otherwise on the serial port. */
   private send(cmd: number, seq: number, payload: Uint8Array) {
-    this.ctl.enqueue(encodeFrame(cmd, seq, payload))
+    const bytes = encodeFrame(cmd, seq, payload)
+    if (this.btNotify) this.btNotify(bytes)
+    else this.ctl.enqueue(bytes)
   }
 
   private reply(f: Frame, r: Reply) {

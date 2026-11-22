@@ -19,6 +19,7 @@ import {
 } from '../protocol/messages'
 import type { Frame } from '../protocol/codec'
 import { MxcamConnection, MxcamError, type ConnectionStatus } from '../serial/connection'
+import type { BluetoothLike } from '../transport/webBluetooth'
 import { parseConfig } from './config'
 import {
   DeviceOpError,
@@ -46,6 +47,7 @@ import {
   type Result,
   type ResultsMeta,
   type SystemConfig,
+  type TransportKind,
 } from './types'
 
 const FRAME_W = 320
@@ -174,7 +176,7 @@ function toResult(r: ResultRecord, kind: Result['kind']): Result {
 
 type ErrorMap = (code: number) => Error | undefined
 
-/** Drives an M2 MXCam over MXCam Protocol v1 (docs/protocol.md §6-§7). The snapshot is read from the device. */
+/** Drives an MXCam over MXCam Protocol v1 (docs/protocol.md §6-§7), by USB or Bluetooth. The snapshot is read from the device. */
 export class RealDevice implements Device {
   private readonly conn: MxcamConnection
   private readonly changes = new Emitter<[]>()
@@ -187,6 +189,8 @@ export class RealDevice implements Device {
   private info: DeviceInfo | undefined
   private lost = false
   private userClosed = false
+  /** Transport of the current connection; kept after an unexpected drop so the UI can say which link was lost. */
+  private kind: TransportKind | null = null
   /** null: not read (not connected, or firmware without GET_CONFIG). */
   private config: DeviceConfig | null = null
   /** false once the firmware answered GET_CONFIG with UNKNOWN_CMD / NOT_SUPPORTED. */
@@ -213,9 +217,9 @@ export class RealDevice implements Device {
   private readonly auto: ReturnType<typeof setTimeout>
   private disposed = false
 
-  constructor(serial: Serial | undefined, now: () => number = () => performance.now()) {
+  constructor(serial: Serial | undefined, now: () => number = () => performance.now(), bluetooth?: BluetoothLike) {
     this.now = now
-    this.status = serial ? 'disconnected' : 'unsupported'
+    this.status = serial || bluetooth ? 'disconnected' : 'unsupported'
     this.conn = new MxcamConnection(
       serial,
       {
@@ -225,10 +229,12 @@ export class RealDevice implements Device {
           if (s === 'connecting') {
             this.userClosed = false
             this.lost = false
+            this.kind = this.conn.transport
             this.reset()
           } else if (s === 'disconnected') {
             // lost only when an established connection dropped; a failed open/auto-connect is not a loss
             this.lost = wasConnected && !this.userClosed
+            if (!this.lost) this.kind = null
             this.info = undefined
             this.reset()
           }
@@ -243,7 +249,7 @@ export class RealDevice implements Device {
         setup: () => this.loadAll(),
         results: (r) => this.onResultsPush(r),
       },
-      { streamResults: true },
+      { streamResults: true, bluetooth },
     )
     // Deferred so StrictMode's mount/unmount/mount does not race two opens of one port.
     this.auto = setTimeout(() => void this.conn.autoConnect(), 0)
@@ -287,6 +293,8 @@ export class RealDevice implements Device {
       lost: this.lost,
       configKnown: c !== null,
       previewPaused: this.previewPaused,
+      transports: this.conn.kinds,
+      transport: this.kind,
     })
   }
 
@@ -306,8 +314,8 @@ export class RealDevice implements Device {
     return this.stats.on(cb)
   }
 
-  async connect() {
-    await this.conn.connect()
+  async connect(kind?: TransportKind) {
+    await this.conn.connect(kind)
   }
   async disconnect() {
     this.userClosed = true

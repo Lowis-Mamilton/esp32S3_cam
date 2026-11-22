@@ -11,6 +11,7 @@
 - ESP32-S3 上只跑**小型模型與傳統演算法**，螢幕只顯示即時畫面與辨識結果，**沒有選單**。
 - HUSKYLENS 2 機身上的系統功能（切換功能、學習、調參數、設定）全部搬到**電腦端網頁軟體**，網頁介面模仿 HUSKYLENS 的螢幕介面。
 - 電腦只在**設定時**連接；設定存進板子後拔掉電腦，MXCam 單獨與 R4 運作。
+- 藍牙版韌體（選用，ADR-0022）讓 Studio 不接線也能連上 MXCam，方便 MXCam 裝在車上時觀看與調整；預設韌體沒有藍牙。
 
 ## 2. 系統組成
 
@@ -167,6 +168,7 @@ USB、UART、I2C 三種傳輸用同一套封包。
 - 鏡頭用 `esp32-camera` 元件，人臉偵測用 `espressif/human_face_detect`（esp-dl），螢幕用 `esp_lcd`（ILI9341）
 - 設定與學習資料存在 NVS（單一 blob）；blob v2（M8a）：多一份各功能參數的紀錄清單（func config：線條、物體追蹤、手勢），可讀 v1；不認得的紀錄略過。blob v3（M6）：再多一份學習資料的紀錄清單（學到的線色、物體範本），最大約 3 KB（2,993 B），可讀 v1、v2；M7：形狀／動態參數加進 func config 紀錄清單，QR 對照表（最多 8 個 ID、內容 128 bytes）是 v3 學習資料清單的一筆，blob 最大 4,054 B（版本不變）；分割表不改，之後的新分割區只從 `storage` 切（ADR-0017）
 - USB 連線先用 USB-Serial-JTAG（網頁燒錄最省事），在 M1 實測頻寬；不夠再改用 TinyUSB CDC
+- **藍牙連線（選用，ADR-0022）**：`sdkconfig.ble` 疊在 `sdkconfig.defaults` 上建置才有（元件 `mxcam_ble`，NimBLE，只當 peripheral、一個連線、不配對）。`mxcam_link` 多一個主機埠：請求在哪條連線收到就回到哪條，推送與延後回應送給最後發出請求的主機。實測（`docs/measurements/ble-spike.md`，在 `spike/ble` 分支）：映像 3,772,720 B（離 90% 上限 2.2 KB）、內部 RAM 最低 63 KB、上限約 57 KB/s；以 5 fps 傳即時畫面時人臉速度不變、手勢慢約 10%。預設韌體不含藍牙，因為這兩項餘裕都用完了。
 - 鏡頭輸出 **RGB565**（辨識和螢幕直接用）；傳給網頁時才用軟體壓 JPEG，預覽上限每秒 10 張，M1 實測約 6 張（目標 ≥ 5，見 `docs/measurements/m1.md`），把 CPU 留給辨識
 - 效能設定：CPU 240 MHz、PSRAM 80 MHz、flash QIO 80 MHz（M1 起固定，作為量測基準）；資料快取 32 KB、**64 B 快取線**（M8a 加速起，所有功能都變快、內部 RAM 不變，ADR-0019 補充）
 - 人臉模型放在 app 的 flash rodata（不改分割表），映像檔約 2.1 MiB（4 MB factory 分割區剩 47%）；開機時在其他 task 啟動前載入（約 80 ms、PSRAM 約 425 KB），失敗時功能 3 不列在 GET_INFO（見 ADR-0011）
@@ -180,6 +182,7 @@ USB、UART、I2C 三種傳輸用同一套封包。
 - 介面細節（版面、功能頁、學習、參數、展示模式、外觀）見 **`docs/studio-ui.md`**；Studio UI 已依此實作（含展示模式），GitHub Pages 已上線：https://lowis-mamilton.github.io/esp32S3_cam/
 - 支援 Windows、macOS 上的 Chrome / Edge；Safari 不支援 Web Serial
 - 發佈到 GitHub Pages（已完成）；可安裝到桌面、離線可用（**尚未完成**，M5 做 PWA）
+- 連線方式：USB（Web Serial）或藍牙（Web Bluetooth，要藍牙版韌體）。藍牙每次都要按一下「藍牙連線」並在瀏覽器的清單裡選 `MXCam-XXXX`；即時畫面最多 5 fps；韌體燒錄只能用 USB。
 - 介面模仿 HUSKYLENS 的螢幕介面：即時畫面＋辨識框、功能切換、顏色學習、參數調整、存到板子
 - 內建網頁燒錄韌體（esptool-js），使用者不需安裝 ESP-IDF
 - 語言：繁體中文、English（從一開始就做多語系）
@@ -241,6 +244,7 @@ docs/          規格、協定、ADR
 | M6 | 架構前置、線條追蹤、物體追蹤 | 兩個功能 TFT ≥ 10 fps（不串流）、實機驗收通過（**已完成**，2026-11-19 實機驗收通過，`docs/measurements/m6.md`） |
 | M7 | QR、幾何形狀、動態偵測（功能 6、11、12） | 形狀／動態 TFT ≥ 10 fps、QR 沒有碼 ≥ 8 fps、一張碼 ≥ 3 fps、實機驗收通過 |
 | M8a | 手勢辨識（功能 8） | 一隻手 ≥ 3 fps、實機 9 種手勢驗收通過 |
+| M10 | Studio 藍牙連線（選用的藍牙版韌體，ADR-0022） | Studio 用藍牙連上後即時畫面、切功能、學習、存檔都能用；USB 行為不變 |
 
 ## 9. 測試策略
 
@@ -256,6 +260,13 @@ docs/          規格、協定、ADR
 - [x] 320×240 影像的擺法：螢幕改橫向（第 4 節）
 - [x] 協定封包、指令代碼、錯誤碼定稿（`docs/protocol.md`）
 - [ ] M4：I2C 傳輸方式定稿
+- [ ] M10 藍牙（ADR-0022）待辦：
+  - 使用者用 Studio 實機驗收（韌體端已用 `tools/ble/smoke.py` 驗證）
+  - TFT 顯示藍牙名稱 `MXCam-XXXX`（教室裡多台時才分得出來）；`mxcam_ble_name()` 已備好
+  - 預設韌體要不要含藍牙：等 M8 的模型分割區騰出 flash、再找出 10 KB 以上的內部 RAM 之後決定
+  - 沒有配對也沒有開關：附近的人能連上並改設定。之後加「關閉無線」設定
+  - USB 與藍牙同時各連一個 Studio 會互搶；M4 把 service 改成各傳輸自己的 outbox 時一併解決，並把 BLE 當成一種傳輸別
+  - 沒量過：運作電流；其他電腦、手機的速度與 2M PHY
 - [x] M1：`firmware/dependencies.lock` 已 commit
 - [x] M1：效能實測（`docs/measurements/m1.md`）
 - [x] M2：預覽回到約 10 fps（esp_new_jpeg，見 `docs/measurements/m2.md`）

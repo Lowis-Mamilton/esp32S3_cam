@@ -1,6 +1,6 @@
 # MXCam Protocol v1
 
-主機（MXCam Studio 或 MATRIX Mini R4）與 MXCam 之間的通訊協定。USB、UART、I2C 共用同一種封包。
+主機（MXCam Studio 或 MATRIX Mini R4）與 MXCam 之間的通訊協定。USB、UART、I2C、BLE 共用同一種封包（BLE 只有藍牙版韌體才有，見 §12）。
 測試資料：`docs/protocol-vectors.json`（C 與 TypeScript 兩份實作都必須通過）。
 
 > 狀態：M1 定稿封包格式、錯誤處理和 M1 用到的指令。M2 之後**只新增指令**，不改既有欄位。
@@ -46,7 +46,7 @@ CRC 錯誤的封包**不回應**：因為內容不可信，連 `seq` 都不能�
 - **請求**：主機送出，`cmd` 介於 `0x01`–`0x7F`，`seq` 由主機自行遞增（0–255 循環）。
 - **回應**：MXCam 回 `cmd = 0x80 | 請求的 cmd`，`seq` 原樣帶回。每個合法的請求一定只有一個回應（成功的回應或 ERROR）。
 - **錯誤**：`cmd = 0xFF`，`seq` 原樣帶回，payload 為 `[原本的 cmd (u8), 錯誤碼 (u8)]`。
-- **推送**：MXCam 主動送出，`cmd` 介於 `0x60`–`0x6F`，`seq` 是 MXCam 自己的推送計數器（0–255 循環）。只在 USB 上、而且主機訂閱之後才會出現。推送序號在推送被取出準備傳送時遞增：被佇列丟掉的推送不會留下序號缺口，但傳送失敗的推送仍會用掉一個序號；要偵測掉幀請看 FRAME 的 `frame_id`。
+- **推送**：MXCam 主動送出，`cmd` 介於 `0x60`–`0x6F`，`seq` 是 MXCam 自己的推送計數器（0–255 循環）。只在 USB 或 BLE 上、而且主機訂閱之後才會出現。推送序號在推送被取出準備傳送時遞增：被佇列丟掉的推送不會留下序號缺口，但傳送失敗的推送仍會用掉一個序號；要偵測掉幀請看 FRAME 的 `frame_id`。
 
 ### 錯誤碼
 
@@ -90,8 +90,8 @@ CRC 錯誤的封包**不回應**：因為內容不可信，連 `seq` 都不能�
 | 0x40–0x43 | GET_CONFIG / SET_CONFIG / SAVE / FACTORY_RESET | M2 |
 | 0x44 | GET_FUNC_CONFIG | M6 |
 | 0x45 | SET_FUNC_CONFIG | M6 |
-| 0x50 | STREAM_START（僅 USB） | M1 |
-| 0x51 | STREAM_STOP（僅 USB） | M1 |
+| 0x50 | STREAM_START（僅 USB／BLE） | M1 |
+| 0x51 | STREAM_STOP（僅 USB／BLE） | M1 |
 | 0x60 | 推送 FRAME | M1 |
 | 0x61 | 推送 RESULTS | M2 |
 
@@ -125,7 +125,7 @@ M1 的 `function_count` 是 0。`function_count` 超過 32 的回應是不合法
 - SET_FUNCTION 請求：`function_id (u8)`。回應 `0x90`：生效後的 `function_id (u8)`。不支援的 ID 回 `BAD_PARAM`。
 - GET_FUNCTION 請求：空。回應 `0x91`：目前的 `function_id (u8)`。
 
-### 0x50 STREAM_START / 0x51 STREAM_STOP（僅 USB）
+### 0x50 STREAM_START / 0x51 STREAM_STOP（僅 USB／BLE）
 
 STREAM_START 請求：
 
@@ -193,7 +193,7 @@ AprilTag 的 `x, y` 是由單應矩陣（homography）算出的 tag 中心，可
 
 回傳的是**最近一張處理完的畫面**的結果，不會等下一張。開機後還沒處理完任何畫面時回 `frame_id = 0`、`count = 0`（`function_id` 為目前功能）。
 
-### 0x61 推送 RESULTS（僅 USB，需 STREAM_START 的 flags bit1）
+### 0x61 推送 RESULTS（僅 USB／BLE，需 STREAM_START 的 flags bit1）
 
 payload 與 GET_RESULTS 的回應相同。每處理完一張畫面推送一次（沒有變化也推送），沒有限速以外的節流。
 
@@ -551,3 +551,24 @@ QR 沒有 func config（GET_FUNC_CONFIG 6 → `BAD_PARAM`）。
 ### 速度
 
 目標：形狀、動態 TFT（不串流）≥ 10 fps；QR 畫面上沒有碼時 ≥ 8 fps、有一張碼時 ≥ 3 fps。實測以 `docs/measurements/m7.md` 為準。
+
+## 12. BLE 傳輸（藍牙版韌體，ADR-0022）
+
+只有用 `sdkconfig.ble` 建置的韌體才有。封包、指令、錯誤碼與 USB 完全相同；BLE 只是另一條位元組流。
+
+- 廣播名稱 `MXCam-XXXX`（藍牙位址最後兩個 byte 的十六進位）。一次只接受一個連線，不配對、不加密。
+- GATT 服務 `4d584300-0010-4b1e-9c5a-7f3e2a1d0c9b`，兩個特徵：
+
+| 特徵 | UUID | 屬性 | 用途 |
+|---|---|---|---|
+| RX | `4d584300-0011-4b1e-9c5a-7f3e2a1d0c9b` | write、write without response | 主機 → MXCam：請求封包的位元組流 |
+| TX | `4d584300-0012-4b1e-9c5a-7f3e2a1d0c9b` | notify | MXCam → 主機：回應與推送的位元組流 |
+
+- **寫入**：一個請求可以分成多次寫入，每次不超過 `MTU − 3` bytes（Studio 每次最多 180 bytes，用 write with response，一次一筆、照順序）。MXCam 把收到的 bytes 依序餵給這條連線自己的解碼器。
+- **通知**：MXCam 把回應與推送切成多個通知（每個最多 495 bytes），封包邊界和通知邊界無關。主機把每個通知的 bytes 依序餵給解碼器。主機要先開啟 TX 的通知再送第一個請求。
+- **主機不要改連線參數**：MXCam 連上後不會主動要求 PHY、資料長度或連線間隔，主機也不要要求 2M PHY（實測會讓連線中斷）。
+- **速度**：實測上限約 57 KB/s（1M PHY、15 ms 間隔）。STREAM_START 的 `max_fps` 請設 5 以下；設到 10 時 JPEG 壓縮會被擠到 300 ms 以上。
+- **逾時**：MXCam 送一個回應最多等 300 ms，送一個推送最多等 150 ms＋每 KB 25 ms；超過就放棄，封包可能只送出一部分，主機靠 CRC 重新同步（和 USB 相同的規則，§2）。
+- **一次只服務一個主機**：請求的回應送回發出請求的那條連線；推送和延後回應送給「最後發出請求」的主機。USB 和 BLE 同時各連一個 Studio 不支援（兩邊會互搶畫面）。BLE 斷線後回到 USB。
+- 串流逾時（3 秒沒有請求就停，§6）對 BLE 一樣適用，Studio 一樣每秒送 PING。
+- 檢查工具：`tools/ble/smoke.py`（不用瀏覽器，直接用 BLE 講協定）。

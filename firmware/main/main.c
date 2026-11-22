@@ -10,6 +10,8 @@
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "sdkconfig.h"
+#include "mxcam_ble.h"
 #include "mxcam_camera.h"
 #include "mxcam_display.h"
 #include "mxcam_face.h"
@@ -166,6 +168,12 @@ void app_main(void)
         ESP_LOGE(TAG, "USB link start failed");
         if (!boot_error) boot_error = "USB LINK FAILED";
     }
+#if CONFIG_BT_NIMBLE_ENABLED
+    /* Bluetooth build only (sdkconfig.ble, ADR-0022): a second host port for
+     * Studio. After mxf_init / mxh_init (their malloc redirect is over) and
+     * after the link exists. A failure leaves USB working. */
+    if (mxcam_ble_start() != ESP_OK) ESP_LOGE(TAG, "BLE start failed (USB still works)");
+#endif
 
     bool run_pipeline = display_ok && camera_ok;
     /* Before the pipeline starts: from then on only the pipeline drives the LED. */

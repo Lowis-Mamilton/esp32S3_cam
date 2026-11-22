@@ -41,5 +41,5 @@ _Avoid_: 訓練、learn
 _Avoid_: knock、握手
 
 **訂閱**：
-只有 MXCam Studio 使用：請 MXCam 透過 USB 持續主動推送畫面與結果。
+只有 MXCam Studio 使用：請 MXCam 透過 USB 或藍牙持續主動推送畫面與結果。
 _Avoid_: 串流模式、推播

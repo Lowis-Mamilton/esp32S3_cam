@@ -19,6 +19,8 @@ const idleSnapshot: DeviceSnapshot = {
   lost: false,
   previewPaused: false,
   configKnown: true,
+  transports: ['usb'],
+  transport: 'usb',
 }
 
 beforeEach(() => {

@@ -456,3 +456,93 @@ test('demo: the pause-preview toggle pauses and resumes the preview (placeholder
   fireEvent.click(screen.getByRole('checkbox', { name: '暫停預覽' }))
   await waitFor(() => expect(screen.queryByText('預覽已暫停（辨識照常進行）')).toBeNull())
 })
+
+// ---- Bluetooth next to USB ----
+test('with both USB and Bluetooth there is one connect button for each', () => {
+  const fw = new FakeFirmware()
+  renderApp({ serial: idleSerial, bluetooth: fw.bluetooth() })
+  expect(screen.getByRole('button', { name: 'USB 連線' })).toBeEnabled()
+  expect(screen.getByRole('button', { name: '藍牙連線' })).toBeEnabled()
+  expect(screen.queryByRole('button', { name: '連線' })).not.toBeInTheDocument()
+  fireEvent.click(screen.getByRole('button', { name: 'English' }))
+  expect(screen.getByRole('button', { name: 'Connect USB' })).toBeInTheDocument()
+  expect(screen.getByRole('button', { name: 'Connect Bluetooth' })).toBeInTheDocument()
+})
+
+test('with USB only there is no Bluetooth button', () => {
+  renderApp({ serial: idleSerial })
+  expect(screen.getByRole('button', { name: '連線' })).toBeEnabled()
+  expect(screen.queryByRole('button', { name: /藍牙/ })).not.toBeInTheDocument()
+})
+
+test('with Bluetooth only the browser is supported and the single button connects over Bluetooth', async () => {
+  const fw = new FakeFirmware()
+  renderApp({ bluetooth: fw.bluetooth() })
+  expect(screen.queryByText('此瀏覽器不支援，請用 Chrome 或 Edge')).not.toBeInTheDocument()
+  expect(screen.queryByRole('button', { name: /USB/ })).not.toBeInTheDocument()
+  fireEvent.click(screen.getByRole('button', { name: '連線' }))
+  expect(await screen.findByText('已連線')).toBeInTheDocument()
+  expect(fw.btConnected).toBe(true)
+})
+
+test('demo mode hides both connect buttons', async () => {
+  localStorage.setItem('mxcam.demo', '1')
+  const fw = new FakeFirmware()
+  renderApp({ serial: idleSerial, bluetooth: fw.bluetooth() })
+  expect(await screen.findByText('DEMO')).toBeInTheDocument()
+  expect(screen.queryByRole('button', { name: /連線/ })).not.toBeInTheDocument()
+})
+
+test('connecting over Bluetooth says so; a drop shows 已斷線 and how to reconnect; disconnect works', async () => {
+  const fw = new FakeFirmware()
+  const { container } = renderApp({ serial: idleSerial, bluetooth: fw.bluetooth() })
+  fireEvent.click(screen.getByRole('button', { name: '藍牙連線' }))
+  expect(await screen.findByText('已連線')).toBeInTheDocument()
+  expect(container.querySelector('.conn-status .tb-via')).toHaveTextContent('藍牙')
+  expect(screen.getByRole('button', { name: 'USB 連線' })).toBeDisabled()
+  expect(screen.getByRole('button', { name: '藍牙連線' })).toBeDisabled()
+  expect(fw.requests.find((r) => r.cmd === Cmd.StreamStart)!.payload[1]).toBe(5)
+
+  fw.btDrop()
+  expect(await screen.findByText('已斷線')).toBeInTheDocument()
+  expect(screen.getByText('藍牙斷線了，請再按一次「藍牙連線」')).toBeInTheDocument()
+  expect(container.querySelector('.tb-via')).toBeNull()
+
+  fireEvent.click(screen.getByRole('button', { name: '藍牙連線' }))
+  expect(await screen.findByText('已連線')).toBeInTheDocument()
+  expect(screen.queryByText('藍牙斷線了，請再按一次「藍牙連線」')).not.toBeInTheDocument()
+  fireEvent.click(screen.getByRole('button', { name: '中斷' }))
+  expect(await screen.findByText('未連線')).toBeInTheDocument()
+  expect(fw.btConnected).toBe(false)
+  expect(screen.queryByText('藍牙斷線了，請再按一次「藍牙連線」')).not.toBeInTheDocument()
+})
+
+test('a USB connection is labelled USB', async () => {
+  const fw = new FakeFirmware()
+  const { container } = renderApp({ serial: fw.serial(), bluetooth: fw.bluetooth() })
+  expect(await screen.findByText('已連線')).toBeInTheDocument()
+  expect(container.querySelector('.conn-status .tb-via')).toHaveTextContent('USB')
+})
+
+test('closing the Bluetooth chooser shows no error; Bluetooth being off does', async () => {
+  const fw = new FakeFirmware()
+  fw.btPicker = 'cancel'
+  renderApp({ serial: idleSerial, bluetooth: fw.bluetooth() })
+  fireEvent.click(screen.getByRole('button', { name: '藍牙連線' }))
+  await new Promise((r) => setTimeout(r, 30))
+  expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+  expect(screen.getByText('未連線')).toBeInTheDocument()
+
+  fw.btPicker = 'no-adapter'
+  fireEvent.click(screen.getByRole('button', { name: '藍牙連線' }))
+  expect(await screen.findByRole('alert')).toHaveTextContent('這台電腦的藍牙沒有開，或是沒有藍牙')
+})
+
+test('a board whose firmware has no Bluetooth service says so, not a serial-port message', async () => {
+  const fw = new FakeFirmware()
+  fw.btHasService = false
+  renderApp({ serial: idleSerial, bluetooth: fw.bluetooth() })
+  fireEvent.click(screen.getByRole('button', { name: '藍牙連線' }))
+  expect(await screen.findByRole('alert')).toHaveTextContent('這台 MXCam 的韌體沒有藍牙功能，請改用 USB')
+  expect(screen.getByText('未連線')).toBeInTheDocument()
+})

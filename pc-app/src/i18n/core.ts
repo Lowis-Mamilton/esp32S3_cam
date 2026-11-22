@@ -1,3 +1,5 @@
+import type { TransportKind } from '../transport/types'
+import { BluetoothError, errName, errText } from '../transport/webBluetooth'
 import { en } from './en'
 import { zhTW } from './zh-TW'
 
@@ -19,10 +21,26 @@ export interface ErrorText {
   detail?: string
 }
 
-/** Map a connect/open failure to a message key (resolved with t() at render time). */
-export function describeError(e: unknown): ErrorText {
-  const name = e instanceof Error ? e.name : ''
-  const msg = e instanceof Error ? e.message : String(e)
+const BLUETOOTH_ERROR: Record<BluetoothError['code'], MessageKey> = {
+  unavailable: 'errBtUnavailable',
+  'connect-failed': 'errBtConnect',
+  'no-service': 'errBtFirmware',
+}
+
+/**
+ * Map a connect/open failure to a message key (resolved with t() at render time).
+ * `kind` is the transport the user asked for; the serial-port messages only apply to USB.
+ */
+export function describeError(e: unknown, kind?: TransportKind): ErrorText {
+  if (e instanceof BluetoothError) return { key: BLUETOOTH_ERROR[e.code] }
+  const name = errName(e)
+  const msg = errText(e)
+  if (kind === 'bluetooth') {
+    if (/timeout|not responding/i.test(msg)) return { key: 'errNoResponse' }
+    // Browser GATT failures (link dropped while setting up, operation failed).
+    if (name === 'NetworkError' || name === 'InvalidStateError' || /gatt/i.test(msg)) return { key: 'errBtConnect' }
+    return { key: 'errGeneric', detail: msg }
+  }
   if (name === 'NetworkError' || /failed to open/i.test(msg)) return { key: 'errPortBusy' }
   if (name === 'InvalidStateError') return { key: 'errAlreadyOpen' }
   if (/timeout|not responding/i.test(msg)) return { key: 'errNoResponse' }

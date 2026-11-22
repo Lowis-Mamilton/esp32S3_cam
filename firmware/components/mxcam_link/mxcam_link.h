@@ -1,5 +1,9 @@
-/* MXCam USB link: USB-Serial-JTAG (the "OTG" port) carries the protocol only.
- * Nothing in this component may log to that port (console is UART0). */
+/* MXCam host link: the protocol session with MXCam Studio. USB-Serial-JTAG
+ * (the "OTG" port) is always there and carries the protocol only: nothing in
+ * this component may log to that port (console is UART0). One more host port
+ * (BLE, mxcam_ble) can be added; requests are answered on the port they came
+ * from, pushes and deferred responses go to the port that spoke last. One
+ * host at a time: two Studios connected at once are not supported (ADR-0022). */
 #ifndef MXCAM_LINK_H
 #define MXCAM_LINK_H
 
@@ -20,14 +24,34 @@ extern "C" {
  * between mxcam_link_state_lock() and mxcam_link_state_unlock(). */
 esp_err_t mxcam_link_start(mxs_state_t *state);
 
+/* A second host port (BLE). All calls come from link tasks on core 0. */
+typedef struct {
+    /* Waits up to timeout_ms for request bytes; returns how many were read. */
+    int (*read)(uint8_t *buf, size_t cap, uint32_t timeout_ms);
+    /* Sends bytes in order; false when it gave up at deadline_us (esp_timer
+     * time) or the peer is gone. Part of the bytes may have been sent: host
+     * decoders resync through the CRC. */
+    bool (*write)(const uint8_t *data, size_t len, int64_t deadline_us);
+    uint32_t reply_budget_us;               /* time one response packet may take */
+    uint32_t (*push_budget_us)(size_t len); /* time one FRAME / RESULTS packet may take */
+    uint32_t mutex_wait_ms;                 /* >= the longest push, so a response can wait for it */
+} mxcam_link_port_t;
+
+/* Adds the second host port and starts its RX task (core 0). Call after
+ * mxcam_link_start; `io` must stay valid. Only one extra port. */
+esp_err_t mxcam_link_add_port(const mxcam_link_port_t *io);
+/* The second port lost its peer: pushes and deferred responses go back to USB. */
+void mxcam_link_port_closed(void);
+
 /* The one mutex that guards the mxs_state_t. */
 void mxcam_link_state_lock(void);
 void mxcam_link_state_unlock(void);
 
-/* Sends one complete packet. Never blocks long: waits at most ~150 ms for the tx
- * mutex (a big push may hold it) and gives up ~50 ms after getting it (e.g.
- * nobody reads the port), returning false; a partial packet may then
- * have been queued, which host decoders resync from via the CRC. */
+/* Sends one complete packet to the host that spoke last. Never blocks long: on
+ * USB it waits at most ~150 ms for the tx mutex (a big push may hold it) and
+ * gives up ~50 ms after getting it (e.g. nobody reads the port), returning
+ * false; a partial packet may then have been queued, which host decoders
+ * resync from via the CRC. The second port has its own, longer limits. */
 bool mxcam_link_send(const uint8_t *data, size_t len);
 
 /* Non-blocking push (FRAME 0x60 / RESULTS 0x61): copies the payload into a slot

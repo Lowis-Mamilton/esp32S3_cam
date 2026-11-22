@@ -1,4 +1,5 @@
-// Web Serial connection to an MXCam. Protocol: docs/protocol.md.
+// Protocol session with one MXCam (docs/protocol.md), over USB (Web Serial) or Bluetooth (Web Bluetooth).
+// How the bytes travel lives in ../transport; everything here is the same for both.
 import { Decoder, encodeFrame, type Frame } from '../protocol/codec'
 import {
   Cmd,
@@ -12,7 +13,11 @@ import {
   type FramePush,
   type ResultsPush,
 } from '../protocol/messages'
+import type { ByteTransport, TransportCandidate, TransportKind, TransportProvider } from '../transport/types'
+import { WebBluetoothProvider, type BluetoothLike } from '../transport/webBluetooth'
+import { WebSerialProvider } from '../transport/webSerial'
 
+export type { TransportKind }
 export type ConnectionStatus = 'unsupported' | 'disconnected' | 'connecting' | 'connected'
 
 export interface ConnectionEvents {
@@ -30,6 +35,8 @@ export interface ConnectionEvents {
 export interface ConnectionOptions {
   /** Subscribe to RESULTS pushes (STREAM_START flags bit1). Default false. */
   streamResults?: boolean
+  /** navigator.bluetooth (or a fake). Omit when the browser has no Web Bluetooth. */
+  bluetooth?: BluetoothLike
 }
 
 /** Device answered a request with an ERROR frame (protocol.md §3). */
@@ -52,16 +59,15 @@ interface Pending {
 }
 
 interface Session {
-  port: SerialPort
+  transport: ByteTransport
   reader: ReadableStreamDefaultReader<Uint8Array>
   writer: WritableStreamDefaultWriter<Uint8Array>
   decoder: Decoder
   loopDone: Promise<void>
 }
 
-// Native USB-Serial-JTAG of the ESP32-S3 (the OTG port on the board).
-const MXCAM_USB_VID = 0x303a
-const MXCAM_USB_PID = 0x1001
+/** Preview rate asked for in STREAM_START. Bluetooth tops out near 57 KB/s, about 5 frames a second. */
+const STREAM_MAX_FPS: Record<TransportKind, number> = { usb: 10, bluetooth: 5 }
 const MAX_PING_FAILURES = 3 // matches the firmware's 3 s stream timeout
 const PING_INTERVAL_MS = 1000
 const STATS_INTERVAL_MS = 1000
@@ -75,7 +81,10 @@ const GET_INFO_GAP_MS = 250
 const STOP_ON_DISCONNECT_TIMEOUT_MS = 300
 
 export class MxcamConnection {
-  private readonly serial: Serial | undefined
+  private readonly providers: TransportProvider[] = []
+  private readonly detach: Array<() => void> = []
+  /** Transport being opened or in use; null when idle. */
+  private activeKind: TransportKind | null = null
   private readonly events: ConnectionEvents
   private readonly streamResults: boolean
   private status: ConnectionStatus
@@ -93,41 +102,46 @@ export class MxcamConnection {
   private frameCount = 0
   private byteCount = 0
 
-  private readonly onSerialConnect = (ev: Event) => {
-    if (this.status !== 'disconnected' || this.opening) return
-    const t = ev.target as SerialPort | null
-    void this.autoConnect(t && this.isMxcam(t) ? t : undefined)
-  }
   private readonly onVisibility = () => {
     if (typeof document !== 'undefined' && document.visibilityState === 'visible') this.resendStreamStart()
   }
-  private readonly onSerialDisconnect = (ev: Event) => {
-    const s = this.session
-    // Real events target the port; ignore ones for other ports.
-    if (s && ev.target === s.port) {
-      void this.teardown(s, new Error('device disconnected'))
-    }
-  }
 
   constructor(serial: Serial | undefined, events: ConnectionEvents, options: ConnectionOptions = {}) {
-    this.serial = serial
     this.events = events
     this.streamResults = options.streamResults ?? false
-    if (!serial) {
+    if (serial) this.providers.push(new WebSerialProvider(serial))
+    if (options.bluetooth) this.providers.push(new WebBluetoothProvider(options.bluetooth))
+    if (this.providers.length === 0) {
       this.status = 'unsupported'
       events.status('unsupported')
       return
     }
     this.status = 'disconnected'
-    serial.addEventListener('connect', this.onSerialConnect)
-    serial.addEventListener('disconnect', this.onSerialDisconnect)
+    for (const p of this.providers) {
+      // A known device appeared (USB plugged in): connect to it without asking.
+      this.detach.push(
+        p.onAttach((candidate) => {
+          if (this.status !== 'disconnected' || this.opening) return
+          void this.autoOpen(candidate)
+        }),
+      )
+    }
     if (typeof document !== 'undefined') document.addEventListener('visibilitychange', this.onVisibility)
   }
 
-  /** Remove serial listeners and close the port. */
+  /** Transports this browser offers, USB first. */
+  get kinds(): TransportKind[] {
+    return this.providers.map((p) => p.kind)
+  }
+
+  /** The transport being opened or in use; null when not connected. */
+  get transport(): TransportKind | null {
+    return this.activeKind
+  }
+
+  /** Remove listeners and close the link. */
   dispose(): Promise<void> {
-    this.serial?.removeEventListener('connect', this.onSerialConnect)
-    this.serial?.removeEventListener('disconnect', this.onSerialDisconnect)
+    for (const off of this.detach.splice(0)) off()
     if (typeof document !== 'undefined') document.removeEventListener('visibilitychange', this.onVisibility)
     return this.disconnect()
   }
@@ -136,11 +150,6 @@ export class MxcamConnection {
     if (this.status === s) return
     this.status = s
     this.events.status(s)
-  }
-
-  private isMxcam(port: SerialPort): boolean {
-    const i = port.getInfo()
-    return i.usbVendorId === MXCAM_USB_VID && i.usbProductId === MXCAM_USB_PID
   }
 
   /** Run `fn` as the single in-flight open; the flag is set synchronously. */
@@ -154,34 +163,37 @@ export class MxcamConnection {
     }
   }
 
-  async connect(): Promise<void> {
-    if (!this.serial || this.opening || this.status === 'connecting' || this.status === 'connected') return
-    const serial = this.serial
+  /**
+   * Lets the user pick a device and connects to it. Call from a click handler: both pickers need a user gesture.
+   * Without `kind`: USB when the browser has it, otherwise Bluetooth.
+   */
+  async connect(kind?: TransportKind): Promise<void> {
+    if (this.opening || this.status === 'connecting' || this.status === 'connected') return
+    const provider = kind ? this.providers.find((p) => p.kind === kind) : this.providers[0]
+    if (!provider) return
     await this.exclusive(async () => {
-      let port: SerialPort
-      try {
-        port = await serial.requestPort({ filters: [{ usbVendorId: MXCAM_USB_VID, usbProductId: MXCAM_USB_PID }] })
-      } catch (e) {
-        if (e instanceof DOMException && e.name === 'NotFoundError') return // user cancelled the picker
-        throw e
-      }
-      await this.openPort(port)
+      const candidate = await provider.request()
+      if (!candidate) return // user closed the picker
+      await this.open(candidate)
     })
   }
 
-  /** Returns false when already opening/connected or no matching granted port exists. */
-  async autoConnect(preferred?: SerialPort): Promise<boolean> {
-    if (!this.serial || this.opening || this.status === 'connecting' || this.status === 'connected') return false
-    const serial = this.serial
+  /** Returns false when already opening/connected or no device can be opened without asking the user. */
+  autoConnect(): Promise<boolean> {
+    return this.autoOpen()
+  }
+
+  private async autoOpen(preferred?: TransportCandidate): Promise<boolean> {
+    if (this.providers.length === 0 || this.opening || this.status === 'connecting' || this.status === 'connected') return false
     try {
       return await this.exclusive(async () => {
-        const candidates = preferred ? [preferred] : (await serial.getPorts()).filter((p) => this.isMxcam(p))
-        for (const port of candidates) {
+        const candidates = preferred ? [preferred] : (await Promise.all(this.providers.map((p) => p.granted()))).flat()
+        for (const candidate of candidates) {
           try {
-            await this.openPort(port)
+            await this.open(candidate)
             return true
           } catch {
-            // try the next granted port
+            // try the next granted device
           }
         }
         return false
@@ -191,31 +203,24 @@ export class MxcamConnection {
     }
   }
 
-  private async openPort(port: SerialPort): Promise<void> {
+  private async open(candidate: TransportCandidate): Promise<void> {
     await this.cleanup
+    this.activeKind = candidate.kind
     this.setStatus('connecting')
     let s: Session | null = null
+    let transport: ByteTransport | null = null
     try {
-      await port.open({ baudRate: 115200 }) // baud is ignored by USB-Serial-JTAG but required by the API
-      // The ESP32-S3 USB-Serial-JTAG treats DTR/RTS changes as reset/bootloader control, and
-      // closing the port re-asserts them (RTS=1 with DTR=0 resets the chip). Drop RTS first,
-      // then DTR, as two separate calls so the lines never pass through DTR=0/RTS=1.
-      try {
-        await port.setSignals({ requestToSend: false })
-        await port.setSignals({ dataTerminalReady: false })
-      } catch (e) {
-        console.warn('setSignals failed, continuing', e)
-      }
-      if (!port.readable || !port.writable) throw new Error('port streams unavailable')
+      transport = await candidate.open()
       const created: Session = {
-        port,
-        reader: port.readable.getReader(),
-        writer: port.writable.getWriter(),
+        transport,
+        reader: transport.readable.getReader(),
+        writer: transport.writable.getWriter(),
         decoder: new Decoder(),
         loopDone: Promise.resolve(),
       }
       s = created
       this.session = created
+      transport.onLost(() => void this.teardown(created, new Error('device disconnected')))
       created.loopDone = this.readLoop(created)
       let infoFrame: Frame | undefined
       for (let attempt = 1; !infoFrame; attempt++) {
@@ -233,13 +238,14 @@ export class MxcamConnection {
         await this.events.setup(info)
         if (this.session !== created) throw new Error('disconnected during setup')
       }
-      await this.startStream()
+      await this.startStream(STREAM_MAX_FPS[transport.kind])
       if (this.session !== created) throw new Error('disconnected during setup')
       this.setStatus('connected')
     } catch (e) {
       if (s) await this.teardown(s, e instanceof Error ? e : new Error(String(e)))
       else {
-        await port.close().catch(() => {})
+        await transport?.close().catch(() => {})
+        this.activeKind = null
         this.setStatus('disconnected')
       }
       throw e
@@ -433,10 +439,11 @@ export class MxcamConnection {
     await this.cleanup
   }
 
-  /** Idempotent per session: reject pending, stop timers, release locks, close the port. */
+  /** Idempotent per session: reject pending, stop timers, release locks, close the link. */
   private teardown(s: Session, reason: Error): Promise<void> {
     if (this.session !== s) return this.cleanup
     this.session = null
+    this.activeKind = null
     this.stopTimers()
     this.rejectAll(reason)
     this.events.stats({ fps: 0, kbps: 0 })
@@ -450,7 +457,7 @@ export class MxcamConnection {
       } catch {
         // ignore
       }
-      await s.port.close().catch(() => {})
+      await s.transport.close().catch(() => {})
     })()
     return this.cleanup
   }

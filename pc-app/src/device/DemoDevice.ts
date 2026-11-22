@@ -120,6 +120,8 @@ export class DemoDevice implements Device {
       lost: false,
       configKnown: true,
       previewPaused: this.previewPaused,
+      transports: [],
+      transport: null,
     })
   }
 

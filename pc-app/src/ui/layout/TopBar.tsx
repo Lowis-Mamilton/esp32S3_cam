@@ -1,6 +1,7 @@
-import { Plug, Unplug } from 'lucide-react'
+import { Bluetooth, Plug, Unplug } from 'lucide-react'
 import type { DeviceInfo } from '../../protocol/messages'
 import type { ConnectionStatus } from '../../serial/connection'
+import type { TransportKind } from '../../transport/types'
 import { useT } from '../../i18n'
 
 interface Props {
@@ -10,12 +11,20 @@ interface Props {
   info: DeviceInfo | null
   demo: boolean
   onToggleDemo(on: boolean): void
-  onConnect(): void
+  /** How this browser can connect; one connect button each. Default: USB only. */
+  transports?: TransportKind[]
+  /** The transport being opened or in use. */
+  transport?: TransportKind | null
+  onConnect(kind: TransportKind): void
   onDisconnect(): void
 }
 
-export default function TopBar({ status, lost, info, demo, onToggleDemo, onConnect, onDisconnect }: Props) {
+const USB_ONLY: TransportKind[] = ['usb']
+
+export default function TopBar({ status, lost, info, demo, onToggleDemo, transports = USB_ONLY, transport = null, onConnect, onDisconnect }: Props) {
   const { t, lang, setLang } = useT()
+  // With a single way to connect the button just says "Connect"; with two, each names its transport.
+  const connectLabel = (k: TransportKind) => (transports.length < 2 ? t('connect') : k === 'usb' ? t('connectUsb') : t('connectBluetooth'))
   const busy = status === 'connecting' || status === 'connected'
   const unsupported = status === 'unsupported'
   const statusText =
@@ -40,6 +49,11 @@ export default function TopBar({ status, lost, info, demo, onToggleDemo, onConne
           <div className="conn-status" data-tone={tone}>
             <span className="lamp" aria-hidden="true" />
             <span>{statusText}</span>
+            {busy && transport && (
+              <span className="tb-via" data-transport={transport}>
+                {transport === 'usb' ? t('viaUsb') : t('viaBluetooth')}
+              </span>
+            )}
             {info && <span className="fw-version">{info.firmwareVersion}</span>}
           </div>
         )}
@@ -66,10 +80,19 @@ export default function TopBar({ status, lost, info, demo, onToggleDemo, onConne
         </div>
         {!unsupported && !demo && (
           <>
-            <button type="button" className="btn tb-btn primary" onClick={onConnect} disabled={busy}>
-              <Plug size={16} aria-hidden="true" />
-              {t('connect')}
-            </button>
+            {transports.map((k, i) => (
+              <button
+                key={k}
+                type="button"
+                className={i === 0 ? 'btn tb-btn primary' : 'btn tb-btn tb-alt'}
+                data-transport={k}
+                onClick={() => onConnect(k)}
+                disabled={busy}
+              >
+                {k === 'usb' ? <Plug size={16} aria-hidden="true" /> : <Bluetooth size={16} aria-hidden="true" />}
+                {connectLabel(k)}
+              </button>
+            ))}
             <button type="button" className="btn tb-btn" onClick={onDisconnect} disabled={!busy}>
               <Unplug size={16} aria-hidden="true" />
               {t('disconnect')}

@@ -1,0 +1,35 @@
+# Bluetooth build (ADR-0022): MXCam Studio can connect over BLE as well as USB.
+# Not part of the default build: with BLE the image and the internal RAM sit
+# right at their limits (docs/measurements/ble-spike.md). Build it on top of
+# sdkconfig.defaults, in its own directory:
+#   idf.py -B ../build/fw-ble -D SDKCONFIG=../build/fw-ble/sdkconfig
+#          -D "SDKCONFIG_DEFAULTS=sdkconfig.defaults;sdkconfig.ble" build
+CONFIG_BT_ENABLED=y
+CONFIG_BT_NIMBLE_ENABLED=y
+# Peripheral only, one connection, no pairing: the smallest stack.
+CONFIG_BT_NIMBLE_ROLE_CENTRAL=n
+CONFIG_BT_NIMBLE_ROLE_OBSERVER=n
+CONFIG_BT_NIMBLE_ROLE_PERIPHERAL=y
+CONFIG_BT_NIMBLE_ROLE_BROADCASTER=y
+CONFIG_BT_NIMBLE_MAX_CONNECTIONS=1
+CONFIG_BT_NIMBLE_SECURITY_ENABLE=n
+CONFIG_BT_NIMBLE_EXT_ADV=n
+CONFIG_BT_NIMBLE_LL_CFG_FEAT_LE_CODED_PHY=n
+# Host allocations (mbuf pools included) go to PSRAM: internal RAM is the
+# scarce resource on this board.
+CONFIG_BT_NIMBLE_MEM_ALLOC_MODE_EXTERNAL=y
+# Largest ATT MTU, so one notification carries up to 514 bytes.
+CONFIG_BT_NIMBLE_ATT_PREFERRED_MTU=517
+# Room for ~10 queued notifications of that size (default 12 blocks).
+CONFIG_BT_NIMBLE_MSYS_1_BLOCK_COUNT=24
+# Radio work on core 0; core 1 stays with the vision pipeline.
+CONFIG_BT_NIMBLE_PINNED_TO_CORE_0=y
+CONFIG_BT_CTRL_PINNED_TO_CORE_0=y
+# Controller: one advertiser + one connection is all we use (828 bytes per
+# instance); a peripheral never scans; no direct test mode.
+CONFIG_BT_CTRL_BLE_MAX_ACT=2
+CONFIG_BT_CTRL_BLE_SCAN=n
+CONFIG_BT_CTRL_DTM_ENABLE=n
+# Controller code stays in IRAM (the default). Running it from flash
+# (CONFIG_BT_CTRL_RUN_IN_FLASH_ONLY) would save ~16 KB of internal RAM but made
+# gesture detection ~20% slower while streaming: do not turn it on.

@@ -1,10 +1,19 @@
 import { X } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { ResultsStore } from './device/resultsStore'
-import { needsConnection, NotSupportedError, type Device, type DeviceSnapshot, type FunctionId, type LearnableFn } from './device/types'
+import {
+  needsConnection,
+  NotSupportedError,
+  type Device,
+  type DeviceSnapshot,
+  type FunctionId,
+  type LearnableFn,
+  type TransportKind,
+} from './device/types'
 import { useDevice } from './device/useDevice'
 import { describeError, type ErrorText } from './i18n/core'
 import { useT, type MessageKey } from './i18n'
+import { browserBluetooth, type BluetoothLike } from './transport/webBluetooth'
 import RightPanel from './ui/layout/RightPanel'
 import Sidebar from './ui/layout/Sidebar'
 import TopBar from './ui/layout/TopBar'
@@ -30,9 +39,11 @@ const SET_FUNCTION_RETRY_MS = 500
 interface Props {
   /** Injectable for tests; defaults to navigator.serial. */
   serial?: Serial
+  /** Injectable for tests; defaults to navigator.bluetooth. */
+  bluetooth?: BluetoothLike
 }
 
-export default function App({ serial }: Props) {
+export default function App({ serial, bluetooth }: Props) {
   const { t } = useT()
   const [view, setView] = useState<View>({ kind: 'function', id: 1 })
   // The right panel keeps showing the last chosen function while a settings page is open.
@@ -42,7 +53,7 @@ export default function App({ serial }: Props) {
     if (v.kind === 'function') setLastFn(v.id)
   }
   const resolved = serial ?? (typeof navigator !== 'undefined' && 'serial' in navigator ? navigator.serial : undefined)
-  const { device, snapshot, demo, setDemo } = useDevice(resolved)
+  const { device, snapshot, demo, setDemo } = useDevice(resolved, bluetooth ?? browserBluetooth())
   const { status, lost, info, supported } = snapshot
   // Errors and stats belong to one device instance; ignore them once it is replaced.
   const [errorOf, setErrorOf] = useState<{
@@ -123,12 +134,12 @@ export default function App({ serial }: Props) {
     })
   }, [device, connected, lastFn, active])
 
-  const onConnect = () => {
+  const onConnect = (kind: TransportKind) => {
     if (!device) return
     userClosed.current = false
     setErrorOf(null)
-    device.connect().catch((e: unknown) => {
-      if (!userClosed.current) setErrorOf({ device, error: describeError(e) })
+    device.connect(kind).catch((e: unknown) => {
+      if (!userClosed.current) setErrorOf({ device, error: describeError(e, kind) })
     })
   }
   const learnFn: LearnableFn = lastFn === 4 || lastFn === 5 ? lastFn : 1
@@ -148,7 +159,17 @@ export default function App({ serial }: Props) {
 
   return (
     <div className="app">
-      <TopBar status={status} lost={lost} info={info ?? null} demo={demo} onToggleDemo={setDemo} onConnect={onConnect} onDisconnect={onDisconnect} />
+      <TopBar
+        status={status}
+        lost={lost}
+        info={info ?? null}
+        demo={demo}
+        onToggleDemo={setDemo}
+        transports={snapshot.transports}
+        transport={snapshot.transport}
+        onConnect={onConnect}
+        onDisconnect={onDisconnect}
+      />
       {error && (
         <p role="alert" className="app-alert">
           <span>
@@ -163,6 +184,12 @@ export default function App({ serial }: Props) {
           <button type="button" className="app-alert-close" aria-label={t('dismiss')} onClick={() => setErrorOf(null)}>
             <X size={16} aria-hidden="true" />
           </button>
+        </p>
+      )}
+      {/* Bluetooth cannot reconnect on its own (the browser wants a click each time): say what to do. */}
+      {lost && snapshot.transport === 'bluetooth' && (
+        <p role="status" className="app-info">
+          {t('errBtLost')}
         </p>
       )}
       {notice !== null && (

@@ -15,7 +15,7 @@ MXCam：ESP32-S3 視覺感測器，搭配 MATRIX Mini R4 使用，設定由電�
 - C（正本，韌體和 Arduino 函式庫共用，ADR-0006）：`arduino-lib/src/protocol/`；韌體元件 `firmware/components/mxcam_protocol/` 直接引用
 - TypeScript：`pc-app/src/protocol/`
 
-韌體裡純 C、可在電腦上測的元件（各有 `host-test/`，CI 的 host-tests job 全部跑）：`mxcam_overlay`（畫框寫字，含鏡像文字）、`mxcam_service`（指令處理、延後回應佇列）、`mxcam_color`（顏色辨識）、`mxcam_tag`（包裝 vendored `apriltag`，單精度、PSRAM）、`mxcam_store`（NVS 存檔格式）、`mxcam_link/pushq`（推送佇列策略）、`mxcam_gray`（灰階轉換）、`mxcam_line`（線條追蹤）、`mxcam_track`（物體追蹤，NCC）、`mxcam_gesture` 的 post（手勢後處理；模型本體只能在板子上跑）、`mxcam_face` 的 `mxcam_face_post.c`（人臉框換算、排序；偵測本體 `mxcam_face.cpp` 包裝 Espressif `human_face_detect`／esp-dl，只能在板子上跑，基準量測用 `idf.py -DMXCAM_FACE_BENCH=ON build`）。碰硬體的：`mxcam_camera`、`mxcam_display`、`mxcam_link`（USB-Serial-JTAG RX/TX task）。功能 ID：1 顏色、2 AprilTag、3 人臉、4 線條、5 物體追蹤、8 手勢。流程在 `firmware/main/pipeline.c`（core 1 辨識＋TFT；追蹤狀態在 `tracking.c`，無主機測試）、`encoder.c`（core 0 esp_new_jpeg）。
+韌體裡純 C、可在電腦上測的元件（各有 `host-test/`，CI 的 host-tests job 全部跑）：`mxcam_overlay`（畫框寫字，含鏡像文字）、`mxcam_service`（指令處理、延後回應佇列）、`mxcam_color`（顏色辨識）、`mxcam_tag`（包裝 vendored `apriltag`，單精度、PSRAM）、`mxcam_store`（NVS 存檔格式）、`mxcam_link/pushq`（推送佇列策略）、`mxcam_gray`（灰階轉換）、`mxcam_line`（線條追蹤）、`mxcam_track`（物體追蹤，NCC）、`mxcam_gesture` 的 post（手勢後處理；模型本體只能在板子上跑）、`mxcam_face` 的 `mxcam_face_post.c`（人臉框換算、排序；偵測本體 `mxcam_face.cpp` 包裝 Espressif `human_face_detect`／esp-dl，只能在板子上跑，基準量測用 `idf.py -DMXCAM_FACE_BENCH=ON build`）。碰硬體的：`mxcam_camera`、`mxcam_display`、`mxcam_link`（主機連線：USB-Serial-JTAG RX/TX task，可再掛一個主機埠）、`mxcam_ble`（選用的藍牙主機埠，只在藍牙版韌體編進去，ADR-0022）。功能 ID：1 顏色、2 AprilTag、3 人臉、4 線條、5 物體追蹤、8 手勢。流程在 `firmware/main/pipeline.c`（core 1 辨識＋TFT；追蹤狀態在 `tracking.c`，無主機測試）、`encoder.c`（core 0 esp_new_jpeg）。
 
 **鏡像規則（ADR-0010）**：鏡頭輸出真實影像，所有辨識與協定座標都是真實影像座標；只有 TFT（面板翻轉＋鏡像文字）和 Studio（「鏡像顯示」開關）顯示鏡像。不要在辨識路徑上做任何翻轉。
 
@@ -38,6 +38,9 @@ $env:IDF_TOOLS_PATH = "C:\Espressif"; . C:\Espressif\frameworks\esp-idf-v5.5.6\e
 idf.py build
 idf.py -p COMx flash        # TTL 或 OTG 的 COM 皆可
 idf.py -p COMy monitor      # COMy 必須是 TTL 埠
+# 藍牙版韌體（選用，ADR-0022）：獨立的建置目錄，不影響預設建置
+idf.py -B ../build/fw-ble -D SDKCONFIG=../build/fw-ble/sdkconfig -D "SDKCONFIG_DEFAULTS=sdkconfig.defaults;sdkconfig.ble" build
+idf.py -B ../build/fw-ble -p COMx flash
 ```
 注意：log 只從 UART0（TTL 埠）輸出；在 OTG 埠的 COM 上 monitor 過了 ROM banner 就沒有任何輸出（console 僅 UART0）。
 埠號（此開發機的範例，各機器不同，重插也可能變）：TTL = CH340（VID 1A86，2026-11-19 是 COM7，之前曾是 COM9），OTG = COM5（VID 303A / PID 1001）；不確定時用 `python -m serial.tools.list_ports -v` 看。
@@ -73,6 +76,7 @@ CI（`.github/workflows/ci.yml`）：firmware、pc-app、arduino-lib、host-test
 - 開發路徑是 `C:\dev\esp32S3_cam`。ESP-IDF 不支援路徑有空白，不要在舊的 `...\K230 Smart Cam\esp32S3_cam` 副本建置。
 - 實機除錯：每秒一行的統計 log 在 TTL 埠（fps、proc_ms、enc_ms、heap、stack_hw…）。要從電腦送協定指令前，先關掉所有連著板子的 Studio 分頁（自動重連會佔住 OTG 埠）。驗證 AprilTag／影像方向可以把 FRAME 存成 JPEG 用 OpenCV（`cv2.aruco.DICT_APRILTAG_36h11`）離線比對。
 - 除錯訊息走 TTL 孔（UART0），協定走 OTG 孔（原生 USB），不要混用。
+- 藍牙版韌體：不用瀏覽器也能檢查藍牙連線，`python tools/ble/smoke.py --ttl COMy`（需要 `pip install bleak pyserial`、電腦藍牙開啟）。規則見 `docs/protocol.md` §12：連上後不要要求 PHY 或連線參數（Windows 會卡 10–60 秒），不要用 2M PHY，即時畫面最多 5 fps。
 - 硬體腳位以 `docs/SPEC.md` 第 4 節為準；鏡頭（實際是 OV3660）和螢幕腳位已在實板驗證，I2C／UART 腳位到 M4 才驗證。
 - 實機量測紀錄在 `docs/measurements/`。
 
