@@ -41,6 +41,42 @@ export interface FakeTrackConfig {
 export const DEFAULT_TRACK: FakeTrackConfig = { threshold: 50, adapt: 10, reacquire: 1, scale: 1 }
 const clampN = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v))
 
+/** Shape config v1 / Motion config v1 values (docs/protocol.md section 11). */
+export interface FakeShapeConfig {
+  mode: number
+  threshold: number
+  minSize: number
+  maxResults: number
+}
+export const DEFAULT_SHAPE: FakeShapeConfig = { mode: 0, threshold: 0, minSize: 32, maxResults: 4 }
+export interface FakeMotionConfig {
+  threshold: number
+  minSize: number
+  maxResults: number
+}
+export const DEFAULT_MOTION: FakeMotionConfig = { threshold: 25, minSize: 24, maxResults: 4 }
+const QR_FN = 6
+const SHAPE_FN = 11
+const MOTION_FN = 12
+/** Longest data GET_RESULT_DATA / GET_LEARNED_DATA send (MXP_RESULT_DATA_MAX). */
+const DATA_MAX = 128
+const MAX_QR_IDS = 8
+
+/** QR content comparison like the firmware: same total length and the same first (up to) 128 bytes. */
+const sameQr = (a: Uint8Array, b: Uint8Array) =>
+  a.length === b.length && a.subarray(0, DATA_MAX).every((v, i) => v === b[i])
+
+/** The data part of 0xA1 / 0xB5: flags, total_len u16, len, data (truncated to 128 bytes). */
+function dataPart(bytes: Uint8Array): Uint8Array {
+  const len = Math.min(bytes.length, DATA_MAX)
+  const out = new Uint8Array(4 + len)
+  out[0] = bytes.length > DATA_MAX ? 1 : 0
+  new DataView(out.buffer).setUint16(1, bytes.length, true)
+  out[3] = len
+  out.set(bytes.subarray(0, len), 4)
+  return out
+}
+
 export const DEFAULT_CONFIG: DeviceConfig = {
   tolerance: 30,
   minArea: 100,
@@ -144,6 +180,20 @@ export class FakeFirmware {
   trackObject: { rgb: [number, number, number] } | null = null
   /** LEARN 5 succeeds; false = region too small or without texture (BAD_PARAM). */
   learnObjectOk = true
+  /** Shape config v1 (function 11) and Motion config v1 (function 12). Add 11 / 12 to functionIds to enable them. */
+  shape: FakeShapeConfig = { ...DEFAULT_SHAPE }
+  shapeLayoutVersion = 1
+  motion: FakeMotionConfig = { ...DEFAULT_MOTION }
+  motionLayoutVersion = 1
+  /**
+   * QR codes in front of the camera (function 6): their RESULTS records (put the corners in `tag`) and contents.
+   * pushQr() sends them; GET_RESULT_DATA and LEARN 6 read them. Add 6 to functionIds to enable QR.
+   */
+  qrCodes: { record: FakeRecord; bytes: Uint8Array }[] = []
+  /** Learned QR contents (LEARN 6), ids 1-8; names live in `names` ("6:id"). */
+  qrLearned: { id: number; bytes: Uint8Array }[] = []
+  /** The latest processed frame, as GET_RESULT_DATA reads it; set by pushResults / pushQr, moved on by nextFrame. */
+  private latest: { frameId: number; data: Uint8Array[] } | null = null
   /** flags byte of the last STREAM_START (bit0 FRAME, bit1 RESULTS); pushFrame sends nothing when bit0 is 0, like the firmware. */
   streamFlags = 0
   colors: { id: number; rgb: [number, number, number] }[] = []
@@ -323,8 +373,19 @@ export class FakeFirmware {
     return this.requests.map((r) => r.cmd).filter((c) => c !== Cmd.Ping)
   }
 
-  pushResults(frameId: number, functionId: number, records: FakeRecord[]) {
+  pushResults(frameId: number, functionId: number, records: FakeRecord[], data: Uint8Array[] = records.map(() => new Uint8Array(0))) {
+    this.latest = { frameId, data }
     this.send(Cmd.PushResults, this.pushSeq++ & 0xff, encodeResults(frameId, functionId, records))
+  }
+
+  /** A QR frame (function 6): RESULTS with the `qrCodes` records; GET_RESULT_DATA then answers with their contents. */
+  pushQr(frameId: number) {
+    this.pushResults(frameId, QR_FN, this.qrCodes.map((c) => c.record), this.qrCodes.map((c) => c.bytes))
+  }
+
+  /** The firmware finishes another frame (same records) before the host asks: GET_RESULT_DATA answers with this frame id. */
+  nextFrame(frameId: number) {
+    if (this.latest) this.latest = { ...this.latest, frameId }
   }
 
   pushFrame(frameId: number) {
@@ -378,6 +439,8 @@ export class FakeFirmware {
       for (const c of this.colors) items.push({ id: c.id, rgb: c.rgb, name: enc.encode(this.names.get(`1:${c.id}`) ?? '') })
     } else if (fn === TRACK_FN) {
       if (this.trackObject) items.push({ id: 1, rgb: this.trackObject.rgb, name: enc.encode(this.names.get(`${TRACK_FN}:1`) ?? '') })
+    } else if (fn === QR_FN) {
+      for (const q of [...this.qrLearned].sort((a, b) => a.id - b.id)) items.push({ id: q.id, rgb: [0, 0, 0], name: enc.encode(this.names.get(`${QR_FN}:${q.id}`) ?? '') })
     } else {
       for (const [k, n] of this.names) {
         const [f, id] = k.split(':').map(Number)
@@ -463,16 +526,42 @@ export class FakeFirmware {
         return this.reply(f, this.configPayload())
       }
       case Cmd.GetLearned:
-        if (p[0] !== 1 && p[0] !== 2 && !this.hasFuncFn(p[0])) return this.reply(f, { error: ErrorCode.BadParam })
+        // motion (12) has nothing learned or named, like face
+        if ((p[0] !== 1 && p[0] !== 2 && !this.hasFuncFn(p[0])) || p[0] === MOTION_FN) return this.reply(f, { error: ErrorCode.BadParam })
         return this.reply(f, this.learnedPayload(p[0]))
+      case Cmd.GetResultData: {
+        if (p.length !== 1) return this.reply(f, { error: ErrorCode.BadLength })
+        const l = this.latest
+        if (!l || p[0] >= l.data.length) return this.reply(f, { error: ErrorCode.BadParam })
+        const head = new Uint8Array(5)
+        new DataView(head.buffer).setUint32(0, l.frameId, true)
+        head[4] = p[0]
+        const part = dataPart(l.data[p[0]])
+        const out = new Uint8Array(head.length + part.length)
+        out.set(head)
+        out.set(part, head.length)
+        return this.reply(f, out)
+      }
+      case Cmd.GetLearnedData: {
+        if (p.length !== 3) return this.reply(f, { error: ErrorCode.BadLength })
+        const id = v.getUint16(1, true)
+        const q = p[0] === QR_FN && this.hasFuncFn(QR_FN) ? this.qrLearned.find((e) => e.id === id) : undefined
+        if (!q) return this.reply(f, { error: ErrorCode.BadParam })
+        const part = dataPart(q.bytes)
+        const out = new Uint8Array(3 + part.length)
+        out.set(p.subarray(0, 3))
+        out.set(part, 3)
+        return this.reply(f, out)
+      }
       case Cmd.Learn: {
-        // like the firmware: only the colour function learns, and only while it is the active one
-        const learnable = p[0] === 1 || (this.hasFuncFn(p[0]) && (p[0] === LINE_FN || p[0] === TRACK_FN))
+        // like the firmware: only the learnable functions learn, and only while they are the active one
+        const learnable = p[0] === 1 || (this.hasFuncFn(p[0]) && (p[0] === LINE_FN || p[0] === TRACK_FN || p[0] === QR_FN))
         if (!learnable || this.active !== p[0] || p.length !== 9) return this.reply(f, { error: ErrorCode.BadParam })
         if (this.pendingLearn) return this.reply(f, { error: ErrorCode.Busy })
         const timer = setTimeout(() => {
           this.pendingLearn = null
           if (this.learnReply) return this.reply(f, this.learnReply)
+          if (p[0] === QR_FN) return this.reply(f, this.learnQr(v.getUint16(1, true), v.getUint16(3, true), v.getUint16(5, true), v.getUint16(7, true)))
           const rgb = this.learnRgb
           if (p[0] === TRACK_FN) {
             if (!this.learnObjectOk) return this.reply(f, { error: ErrorCode.BadParam })
@@ -506,7 +595,7 @@ export class FakeFirmware {
         const id = v.getUint16(1, true)
         // face (3) has nothing to forget: answers OK like firmware (protocol.md 0x31)
         if (fn !== 1 && fn !== 2 && fn !== 3 && !this.hasFuncFn(fn)) return this.reply(f, { error: ErrorCode.BadParam })
-        const count = () => this.colors.length + this.names.size + (this.lineColor ? 1 : 0) + (this.trackObject ? 1 : 0)
+        const count = () => this.colors.length + this.names.size + (this.lineColor ? 1 : 0) + (this.trackObject ? 1 : 0) + this.qrLearned.length
         const modeBefore = this.line.mode
         const before = count() // like firmware: dirty only if something was removed
         if (fn === LINE_FN && (id === 1 || id === 0xffff)) {
@@ -515,6 +604,7 @@ export class FakeFirmware {
           if (this.line.mode === 2) this.line.mode = 0
         }
         if (fn === TRACK_FN && (id === 1 || id === 0xffff)) this.trackObject = null
+        if (fn === QR_FN) this.qrLearned = id === 0xffff ? [] : this.qrLearned.filter((q) => q.id !== id)
         if (fn === 1) this.colors = id === 0xffff ? [] : this.colors.filter((c) => c.id !== id)
         for (const k of [...this.names.keys()]) if (k.startsWith(`${fn}:`) && (id === 0xffff || k === `${fn}:${id}`)) this.names.delete(k)
         if (count() !== before || this.line.mode !== modeBefore) this.config.dirty = true
@@ -528,6 +618,9 @@ export class FakeFirmware {
         if (fn === LINE_FN) return this.reply(f, { error: ErrorCode.BadParam }) // the line cannot be named
         if (fn === TRACK_FN && !(id === 1 && this.trackObject)) return this.reply(f, { error: ErrorCode.BadParam })
         if (fn === GESTURE_FN && (id < 1 || id > 9)) return this.reply(f, { error: ErrorCode.BadParam }) // 9 fixed gestures
+        if (fn === SHAPE_FN && (id < 1 || id > 4)) return this.reply(f, { error: ErrorCode.BadParam }) // 4 fixed shapes
+        if (fn === QR_FN && !this.qrLearned.some((q) => q.id === id)) return this.reply(f, { error: ErrorCode.BadParam })
+        if (fn === MOTION_FN) return this.reply(f, { error: ErrorCode.BadParam }) // motion cannot be named
         if (fn === 1 && !this.colors.some((c) => c.id === id)) return this.reply(f, { error: ErrorCode.BadParam })
         if (name === '') this.names.delete(`${fn}:${id}`)
         else {
@@ -549,6 +642,9 @@ export class FakeFirmware {
           this.gesture = { ...DEFAULT_GESTURE }
           this.line = { ...DEFAULT_LINE }
           this.track = { ...DEFAULT_TRACK }
+          this.shape = { ...DEFAULT_SHAPE }
+          this.motion = { ...DEFAULT_MOTION }
+          this.qrLearned = []
           this.lineColor = null
           this.trackObject = null
           this.colors = []
@@ -561,21 +657,49 @@ export class FakeFirmware {
     }
   }
 
-  /** Functions with a func config and learned data beyond colour/tag/face, as listed by GET_INFO. */
+  /** Functions beyond colour/tag/face (func config, learned data or names), as listed by GET_INFO. */
   private hasFuncFn(fn: number): boolean {
-    return (fn === GESTURE_FN || fn === LINE_FN || fn === TRACK_FN) && this.functionIds.includes(fn)
+    return [GESTURE_FN, LINE_FN, TRACK_FN, QR_FN, SHAPE_FN, MOTION_FN].includes(fn) && this.functionIds.includes(fn)
   }
+  /** QR has no func config (GET_FUNC_CONFIG 6 -> BAD_PARAM). */
   private hasFuncConfig(fn: number): boolean {
-    return this.hasFuncFn(fn)
+    return fn !== QR_FN && this.hasFuncFn(fn)
   }
   private layoutVersion(fn: number): number {
+    if (fn === SHAPE_FN) return this.shapeLayoutVersion
+    if (fn === MOTION_FN) return this.motionLayoutVersion
     return fn === GESTURE_FN ? this.gestureLayoutVersion : fn === LINE_FN ? this.lineLayoutVersion : this.trackLayoutVersion
   }
   private funcState(fn: number) {
+    if (fn === SHAPE_FN) return this.shape
+    if (fn === MOTION_FN) return this.motion
     return fn === GESTURE_FN ? this.gesture : fn === LINE_FN ? this.line : this.track
   }
+
+  /**
+   * LEARN 6 like the firmware: of the codes whose centre is in the region, the largest; content already learned ->
+   * its id; otherwise the lowest free id 1-8; FULL when all 8 are taken; BAD_PARAM when no code is in the region.
+   */
+  private learnQr(x: number, y: number, w: number, h: number): Reply {
+    const inside = this.qrCodes.filter(({ record: r }) => r.x >= x && r.x < x + w && r.y >= y && r.y < y + h)
+    if (inside.length === 0) return { error: ErrorCode.BadParam }
+    const code = inside.reduce((a, b) => (b.record.width * b.record.height > a.record.width * a.record.height ? b : a))
+    const same = this.qrLearned.find((q) => sameQr(q.bytes, code.bytes))
+    if (same) return new Uint8Array([same.id])
+    let id = 1
+    while (this.qrLearned.some((q) => q.id === id)) id++
+    if (id > MAX_QR_IDS) return { error: ErrorCode.Full }
+    this.qrLearned.push({ id, bytes: code.bytes })
+    this.config.dirty = true
+    return new Uint8Array([id])
+  }
+
   private applyFuncConfig(p: Uint8Array) {
-    if (p[0] === GESTURE_FN) {
+    if (p[0] === SHAPE_FN) {
+      this.shape = { mode: p[2] > 1 ? 0 : p[2], threshold: p[3], minSize: clampN(p[4], 16, 240), maxResults: clampN(p[5], 1, 8) }
+    } else if (p[0] === MOTION_FN) {
+      this.motion = { threshold: clampN(p[2], 5, 100), minSize: clampN(p[3], 8, 240), maxResults: clampN(p[4], 1, 8) }
+    } else if (p[0] === GESTURE_FN) {
       this.gesture = { handThreshold: clampN(p[2], 10, 95), gestureThreshold: Math.min(100, p[3]), maxHands: clampN(p[4], 1, 2) }
     } else if (p[0] === LINE_FN) {
       const minWidth = clampN(p[6], 1, 100)
@@ -593,6 +717,14 @@ export class FakeFirmware {
     }
   }
   private funcPayload(fn: number): Uint8Array {
+    if (fn === SHAPE_FN) {
+      const s = this.shape
+      return new Uint8Array([fn, this.shapeLayoutVersion, s.mode, s.threshold, s.minSize, s.maxResults, 0, 0, 0, 0])
+    }
+    if (fn === MOTION_FN) {
+      const m = this.motion
+      return new Uint8Array([fn, this.motionLayoutVersion, m.threshold, m.minSize, m.maxResults, 0, 0, 0, 0, 0])
+    }
     if (fn === LINE_FN) {
       const l = this.line
       return new Uint8Array([fn, this.lineLayoutVersion, l.mode, l.threshold, l.roiPct, l.bands, l.minWidth, l.maxWidth, l.colorTolerance, 0])

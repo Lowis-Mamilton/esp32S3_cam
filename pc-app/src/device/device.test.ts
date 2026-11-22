@@ -56,12 +56,12 @@ function serialWithInfo(info: Uint8Array): Serial {
   return { ...idleSerial, getPorts: async () => [port] } as unknown as Serial
 }
 
-test('DemoDevice starts connected with all three functions and DEMO firmware', () => {
+test('DemoDevice starts connected with every function and DEMO firmware', () => {
   const d = new DemoDevice(() => 0)
   const s = d.snapshot()
   expect(s.mode).toBe('demo')
   expect(s.status).toBe('connected')
-  expect(s.supported).toEqual([1, 2, 3, 4, 5, 8])
+  expect(s.supported).toEqual([1, 2, 3, 4, 5, 6, 8, 11, 12])
   expect(s.info?.firmwareVersion).toBe('DEMO')
   expect(s.dirty).toBe(false)
   d.dispose()
@@ -202,7 +202,7 @@ test('useDevice: demo toggle persists, disposes the old device, and demo -> real
   expect(batches.length).toBeGreaterThanOrEqual(2)
   expect(batches.some((b) => b.length > 0)).toBe(true)
   expect(batches.every((b) => (b as { kind: string }[]).every((r) => r.kind === 'color'))).toBe(true)
-  expect(result.current.snapshot.learned).toEqual({ 1: [], 2: [], 3: [], 4: [], 5: [], 8: [] })
+  expect(result.current.snapshot.learned).toEqual({ 1: [], 2: [], 3: [], 4: [], 5: [], 6: [], 8: [], 11: [], 12: [] })
   expect(result.current.snapshot.dirty).toBe(false)
   expect(result.current.snapshot.status).toBe('connected')
 })
@@ -339,7 +339,7 @@ test('demo learn on gesture is rejected', async () => {
 
 test('demo names gesture ids 1-9 only, and supports function 8', async () => {
   const d = new DemoDevice(() => 0)
-  expect(d.snapshot().supported).toEqual([1, 2, 3, 4, 5, 8])
+  expect(d.snapshot().supported).toContain(8)
   await d.setName(8, 6, '前進')
   expect(d.snapshot().learned[8]).toEqual([{ id: 6, name: '前進' }])
   await expect(d.setName(8, 0, 'x')).rejects.toThrow()
@@ -379,10 +379,11 @@ test('demo gesture params are clamped like the firmware', async () => {
   d.dispose()
 })
 
-test('emptyLearned has functions 4, 5 and 8; toFunctionIds keeps them', () => {
-  expect(Object.keys(emptyLearned()).sort()).toEqual(['1', '2', '3', '4', '5', '8'])
+test('emptyLearned has functions 4, 5, 6, 8, 11 and 12; toFunctionIds keeps them', () => {
+  expect(Object.keys(emptyLearned()).map(Number).sort((a, b) => a - b)).toEqual([1, 2, 3, 4, 5, 6, 8, 11, 12])
   expect(toFunctionIds([1, 4, 5, 9])).toEqual([1, 4, 5])
   expect(toFunctionIds([1, 4, 8, 9])).toEqual([1, 4, 8])
+  expect(toFunctionIds([1, 6, 7, 11, 12, 13])).toEqual([1, 6, 11, 12])
 })
 
 // ---- M6: DemoDevice line (4) and object tracking (5) ----

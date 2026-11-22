@@ -1,7 +1,11 @@
-import { expect, test } from 'vitest'
+import { expect, test, vi } from 'vitest'
+import { DemoDevice } from '../DemoDevice'
 import { defaultParams, type FunctionParams, type LearnedId } from '../types'
 import { createBoundsRecorder, drawGestureScene, gestureSceneAt, recognizeGestures, type DemoHand } from './gesture'
 import { detectLine, drawLineScene, lineSceneAt } from './line'
+import { detectMotion, drawMotionScene, motionSceneAt } from './motion'
+import { detectQr, drawQrScene, qrCorners, qrSceneAt, type DemoQr } from './qr'
+import { detectShapes, drawShapeScene, shapeSceneAt } from './shapes'
 import { pickTarget, trackResult } from './track'
 import { DemoLearnError, colorAt, matchLearned, recognize } from './recognize'
 import { sceneAt, type SceneObject } from './scene'
@@ -311,4 +315,178 @@ test('trackResult: tracked blob off-frame yields no result; a partly hidden one 
   const half = trackResult(blob(0, 100, 20, RED), p)[0]
   expect(half.confidence!).toBeLessThan(full.confidence!)
   expect(trackResult(blob(0, 100, 20, RED), { ...p, threshold: 90 })).toEqual([])
+})
+
+// ---- M7: QR code, shapes and motion scenes ----
+
+/** A canvas stand-in that records the calls and accepts every property. */
+function recordingCtx() {
+  const calls: string[] = []
+  const ctx = new Proxy({}, { get: (_t, k) => (k === 'createLinearGradient' ? () => ({ addColorStop() {} }) : () => void calls.push(String(k))), set: () => true })
+  return { ctx: ctx as unknown as CanvasRenderingContext2D, calls }
+}
+
+test('qrSceneAt is deterministic', () => {
+  expect(qrSceneAt(4321)).toEqual(qrSceneAt(4321))
+  expect(qrSceneAt(0)).not.toEqual(qrSceneAt(3000))
+  expect(qrSceneAt(0).map((c) => c.text)).toEqual(['MXCam', 'LEFT'])
+  // the cards stay whole inside the frame and never overlap, so both are always reported
+  for (let t = 0; t < 60000; t += 250) {
+    const cards = qrSceneAt(t)
+    for (const c of cards) for (const [x, y] of qrCorners(c)) expect(x >= 0 && x < 320 && y >= 0 && y < 240, `t=${t}`).toBe(true)
+    expect(detectQr(cards, [])).toHaveLength(2)
+  }
+})
+
+test('detectQr returns corners and learned ids', () => {
+  const card: DemoQr = { cx: 100, cy: 80, size: 40, angleDeg: 0, text: 'LEFT' }
+  const learned: LearnedId[] = [{ id: 3, name: '', text: 'LEFT' }]
+  const [r] = detectQr([card, { cx: 220, cy: 150, size: 60, angleDeg: 90, text: 'MXCam' }], learned).filter((x) => x.text === 'LEFT')
+  expect(r).toMatchObject({ id: 3, kind: 'qr', x: 100, y: 80, width: 41, height: 41, rotationDeg: 0, text: 'LEFT', truncated: false })
+  expect(r.confidence).toBeUndefined()
+  expect(r.corners).toEqual([[80, 60], [120, 60], [120, 100], [80, 100]]) // top-left, top-right, bottom-right, bottom-left
+  // turned 90 degrees clockwise: the code's top-left corner is now top right on screen, rotation +90
+  const [turned] = detectQr([{ ...card, angleDeg: 90 }], [])
+  expect(turned.id).toBe(0)
+  expect(turned.rotationDeg).toBe(90)
+  expect(turned.corners![0]).toEqual([120, 60])
+  // largest first, at most 4, and a code cut by the frame edge is not decoded
+  const many = [10, 20, 30, 40, 50].map((size, i): DemoQr => ({ cx: 30 + i * 60, cy: 120, size, angleDeg: 0, text: `c${size}` }))
+  expect(detectQr(many, []).map((x) => x.text)).toEqual(['c50', 'c40', 'c30', 'c20'])
+  expect(detectQr([{ ...card, cx: 5 }], [])).toEqual([])
+})
+
+test('demo learn(6) on a card learns its text', async () => {
+  const d = new DemoDevice(() => 0)
+  await d.setFunction(6)
+  const [big, small] = detectQr(qrSceneAt(0), [])
+  const box = (r: { x: number; y: number }) => ({ x: r.x - 10, y: r.y - 10, width: 20, height: 20 })
+  expect(await d.learn(6, box(big))).toBe(1)
+  expect(await d.learn(6, box(small))).toBe(2)
+  expect(await d.learn(6, box(big))).toBe(1) // same content: same ID
+  expect(d.snapshot().learned[6]).toEqual([
+    { id: 1, name: '', text: 'MXCam' },
+    { id: 2, name: '', text: 'LEFT' },
+  ])
+  expect(d.snapshot().dirty).toBe(true)
+  // the whole frame: the larger card wins
+  await d.forgetAll(6)
+  expect(await d.learn(6, { x: 0, y: 0, width: 320, height: 240 })).toBe(1)
+  expect(d.snapshot().learned[6][0].text).toBe('MXCam')
+  // names need a learned ID
+  await d.setName(6, 1, '起點')
+  await d.setName(6, 5, 'ghost')
+  expect(d.snapshot().learned[6]).toEqual([{ id: 1, name: '起點', text: 'MXCam' }])
+  d.dispose()
+})
+
+test('demo learn(6) on empty floor is no-code', async () => {
+  const d = new DemoDevice(() => 0)
+  await d.setFunction(6)
+  await expect(d.learn(6, { x: 0, y: 0, width: 8, height: 8 })).rejects.toMatchObject({ code: 'no-code' })
+  expect(d.snapshot().learned[6]).toEqual([])
+  d.dispose()
+})
+
+test('demo learn(6) is full after 8 contents', async () => {
+  const d = new DemoDevice(() => 0)
+  await d.importConfig(
+    JSON.stringify({
+      version: 1,
+      learned: { 1: [], 2: [], 3: [], 6: [1, 2, 3, 4, 5, 6, 7, 8].map((id) => ({ id, name: '', text: `other${id}` })) },
+      params: d.snapshot().params,
+      system: d.snapshot().system,
+    }),
+  )
+  await d.setFunction(6)
+  await expect(d.learn(6, { x: 0, y: 0, width: 320, height: 240 })).rejects.toMatchObject({ code: 'full' })
+  d.dispose()
+})
+
+test('drawQrScene, drawShapeScene and drawMotionScene paint without throwing', () => {
+  const draws = [
+    (c: CanvasRenderingContext2D) => drawQrScene(c, qrSceneAt(1000)),
+    (c: CanvasRenderingContext2D) => drawShapeScene(c, shapeSceneAt(1000)),
+    (c: CanvasRenderingContext2D) => drawMotionScene(c, motionSceneAt(1000)),
+  ]
+  for (const draw of draws) {
+    const { ctx, calls } = recordingCtx()
+    draw(ctx)
+    expect(calls.length).toBeGreaterThan(0)
+  }
+})
+
+const shapeParams = (o: Partial<FunctionParams['shape']> = {}): FunctionParams['shape'] => ({ ...defaultParams().shape, ...o })
+
+test('detectShapes finds the four shapes', () => {
+  expect(shapeSceneAt(2500)).toEqual(shapeSceneAt(2500))
+  for (let t = 0; t < 40000; t += 500) {
+    const found = detectShapes(shapeSceneAt(t), shapeParams())
+    expect(found.map((r) => r.id).sort(), `t=${t}`).toEqual([1, 2, 3, 4])
+    expect(found.every((r) => r.kind === 'shape' && r.confidence! >= 80 && r.confidence! <= 100)).toBe(true)
+  }
+  const two = detectShapes(shapeSceneAt(0), shapeParams({ maxResults: 2 }))
+  expect(two).toHaveLength(2)
+  expect(detectShapes(shapeSceneAt(0), shapeParams({ mode: 'light' }))).toEqual([]) // the scene has dark shapes
+  expect(detectShapes(shapeSceneAt(0), shapeParams({ minSize: 240 }))).toEqual([])
+  // a shape touching the frame edge is not reported
+  expect(detectShapes([{ id: 3, cx: 10, cy: 100, size: 40, angleDeg: 0 }], shapeParams())).toEqual([])
+})
+
+const motionParams = (o: Partial<FunctionParams['motion']> = {}): FunctionParams['motion'] => ({ ...defaultParams().motion, ...o })
+
+test('detectMotion reports only while moving', () => {
+  expect(motionSceneAt(1234)).toEqual(motionSceneAt(1234))
+  let moving = 0
+  let still = 0
+  for (let t = 0; t < 20000; t += 100) {
+    const s = motionSceneAt(t)
+    const r = detectMotion(s, motionParams())
+    if (s.moving) {
+      moving++
+      expect(r).toHaveLength(1)
+      expect(r[0]).toMatchObject({ id: 0, kind: 'motion' })
+      expect(Math.abs(r[0].x - s.x)).toBeLessThanOrEqual(1)
+    } else {
+      still++
+      expect(r).toEqual([]) // nothing while the ball rests
+    }
+  }
+  expect(moving).toBeGreaterThan(0)
+  expect(still).toBeGreaterThan(0)
+  const rolling = motionSceneAt(1000)
+  expect(rolling.moving).toBe(true)
+  expect(detectMotion(rolling, motionParams({ threshold: 100 }))).toEqual([]) // less sensitive than the ball's contrast
+  expect(detectMotion(rolling, motionParams({ minSize: 200 }))).toEqual([])
+})
+
+test('demo names shape ids', async () => {
+  const d = new DemoDevice(() => 0)
+  await d.setName(11, 1, '圓')
+  expect(d.snapshot().learned[11]).toEqual([{ id: 1, name: '圓' }])
+  await expect(d.setName(11, 0, 'x')).rejects.toThrow()
+  await expect(d.setName(11, 5, 'x')).rejects.toThrow()
+  await expect(d.setName(12, 1, 'x')).rejects.toThrow() // motion cannot be named
+  await expect(d.learn(6, { x: 0, y: 0, width: 320, height: 240 })).rejects.toMatchObject({ code: 'no-code' }) // QR is not running
+  d.dispose()
+})
+
+test('demo emits QR, shape and motion results for functions 6, 11 and 12; params are clamped', async () => {
+  vi.useFakeTimers()
+  let clock = 0
+  const d = new DemoDevice(() => clock)
+  const got: { kind: string }[][] = []
+  d.onResults((r) => got.push(r))
+  for (const [fn, kind] of [[6, 'qr'], [11, 'shape'], [12, 'motion']] as const) {
+    await d.setFunction(fn)
+    clock = 1000 // the ball rolls during the first 3 s of each 5 s
+    vi.advanceTimersByTime(100)
+    expect(got.at(-1)!.length, kind).toBeGreaterThan(0)
+    expect(got.at(-1)!.every((r) => r.kind === kind)).toBe(true)
+  }
+  await d.setParams({ shape: { mode: 'light', threshold: 300, minSize: 2, maxResults: 20 }, motion: { threshold: 1, minSize: 999, maxResults: 0 } })
+  expect(d.snapshot().params.shape).toEqual({ mode: 'light', threshold: 255, minSize: 16, maxResults: 8 })
+  expect(d.snapshot().params.motion).toEqual({ threshold: 5, minSize: 240, maxResults: 1 })
+  d.dispose()
+  vi.useRealTimers()
 })

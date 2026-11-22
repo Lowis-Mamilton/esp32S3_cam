@@ -1,5 +1,10 @@
+import { waitFor } from '@testing-library/react'
 import { expect, test } from 'vitest'
+import { Cmd } from '../protocol/messages'
+import { FakeFirmware } from '../testing/fakeFirmware'
 import { ConfigFileError, parseConfig } from './config'
+import { DemoDevice } from './DemoDevice'
+import { RealDevice } from './RealDevice'
 import { defaultParams, defaultSystem, emptyLearned } from './types'
 
 const base = () => ({ version: 1, learned: emptyLearned(), params: defaultParams(), system: defaultSystem() })
@@ -168,4 +173,109 @@ test('learned[4] and learned[5] only accept id 1', () => {
     expect(() => parseConfig(make((c) => void (c.learned[fn] = [{ id: 0, name: '' }])))).toThrow(ConfigFileError)
     expect(() => parseConfig(make((c) => void (c.learned[fn] = [{ id: 1, name: '' }])))).not.toThrow()
   }
+})
+
+// ---- M7: QR code, shapes and motion in the config file ----
+
+test('an old file without params.shape / params.motion / learned[6, 11, 12] imports and gets the defaults', async () => {
+  const raw = JSON.parse(JSON.stringify(base()))
+  delete raw.params.shape
+  delete raw.params.motion
+  for (const fn of [6, 11, 12]) delete raw.learned[fn]
+  const c = parseConfig(JSON.stringify(raw))
+  expect(c.params.shape).toBeUndefined()
+  expect(c.params.motion).toBeUndefined()
+  expect([c.learned[6], c.learned[11], c.learned[12]]).toEqual([[], [], []])
+  const d = new DemoDevice(() => 0)
+  await d.setParams({ shape: { ...defaultParams().shape, minSize: 100 } })
+  await d.importConfig(JSON.stringify(raw)) // absent keys leave the current values
+  expect(d.snapshot().params.shape.minSize).toBe(100)
+  expect(d.snapshot().params.motion).toEqual(defaultParams().motion)
+  d.dispose()
+})
+
+test('shape and motion params round-trip; limits are enforced', () => {
+  const c = parseConfig(
+    make((c) => {
+      c.params.shape = { mode: 'light', threshold: 255, minSize: 16, maxResults: 8 }
+      c.params.motion = { threshold: 5, minSize: 240, maxResults: 1 }
+    }),
+  )
+  expect(c.params.shape).toEqual({ mode: 'light', threshold: 255, minSize: 16, maxResults: 8 })
+  expect(c.params.motion).toEqual({ threshold: 5, minSize: 240, maxResults: 1 })
+  type P = ReturnType<typeof defaultParams>
+  const badParams: ((p: P) => void)[] = [
+    (p) => void (p.shape.minSize = 8),
+    (p) => void (p.shape.minSize = 241),
+    (p) => void (p.shape.threshold = 256),
+    (p) => void (p.shape.maxResults = 0),
+    (p) => void ((p.shape as { mode: string }).mode = 'learned'),
+    (p) => void (p.motion.threshold = 4),
+    (p) => void (p.motion.threshold = 101),
+    (p) => void (p.motion.minSize = 7),
+    (p) => void (p.motion.maxResults = 9),
+  ]
+  for (const m of badParams) expect(() => parseConfig(make((c) => m(c.params)))).toThrow(ConfigFileError)
+})
+
+test('learned[11] ids are 1-4, learned[6] ids 1-8 with an optional text, learned[12] must be empty', () => {
+  expect(() => parseConfig(make((c) => void (c.learned[11] = [{ id: 4, name: 'rect' }])))).not.toThrow()
+  for (const id of [0, 5]) expect(() => parseConfig(make((c) => void (c.learned[11] = [{ id, name: 'x' }])))).toThrow(ConfigFileError)
+  const ok = parseConfig(make((c) => void (c.learned[6] = [{ id: 8, name: 'go', text: 'LEFT' }, { id: 1, name: '' }])))
+  expect(ok.learned[6]).toEqual([{ id: 8, name: 'go', text: 'LEFT' }, { id: 1, name: '' }])
+  expect(() => parseConfig(make((c) => void (c.learned[6] = [{ id: 9, name: '' }])))).toThrow(ConfigFileError)
+  expect(() => parseConfig(make((c) => void (c.learned[6] = [{ id: 1, name: '', text: 'x'.repeat(129) }])))).toThrow(ConfigFileError)
+  expect(() => parseConfig(make((c) => void (c.learned[6] = [{ id: 1, name: '', text: 5 as unknown as string }])))).toThrow(ConfigFileError)
+  expect(() => parseConfig(make((c) => void (c.learned[1] = [{ id: 1, name: '', text: 'x' }])))).toThrow(ConfigFileError) // text is QR only
+  expect(() => parseConfig(make((c) => void (c.learned[12] = [{ id: 1, name: 'x' }])))).toThrow(ConfigFileError)
+})
+
+async function m7Device(setup: (fw: FakeFirmware) => void) {
+  const fw = new FakeFirmware()
+  fw.functionIds = [1, 2, 3, 4, 5, 6, 8, 11, 12]
+  setup(fw)
+  const d = new RealDevice(fw.serial())
+  await waitFor(() => expect(d.snapshot().status).toBe('connected'))
+  return { fw, d }
+}
+const utf8 = (s: string) => new TextEncoder().encode(s)
+
+test('a file with learned[6] the board does not hold: colorsNeedRelearn', async () => {
+  const { d } = await m7Device(() => {})
+  const file = JSON.parse(d.exportConfig())
+  file.learned[6] = [{ id: 1, name: 'go', text: 'LEFT' }]
+  expect((await d.importConfig(JSON.stringify(file))).colorsNeedRelearn).toBe(true)
+  expect(d.snapshot().learned[6]).toEqual([]) // a file cannot teach the board a QR code
+  d.dispose()
+})
+
+test('QR names are applied only where the board ID holds the same text', async () => {
+  const { fw, d } = await m7Device((fw) => {
+    fw.qrLearned = [
+      { id: 1, bytes: utf8('LEFT') },
+      { id: 2, bytes: utf8('RIGHT') },
+    ]
+  })
+  const file = JSON.parse(d.exportConfig())
+  expect(file.learned[6]).toEqual([
+    { id: 1, name: '', text: 'LEFT' },
+    { id: 2, name: '', text: 'RIGHT' },
+  ])
+  file.learned[6] = [
+    { id: 1, name: '左', text: 'LEFT' }, // same content: the name is applied
+    { id: 2, name: '停', text: 'STOP' }, // ID 2 holds another content on the board: not applied, relearn
+  ]
+  const out = await d.importConfig(JSON.stringify(file))
+  expect(out.colorsNeedRelearn).toBe(true)
+  expect(fw.names.get('6:1')).toBe('左')
+  expect(fw.names.has('6:2')).toBe(false)
+  expect(d.snapshot().learned[6]).toEqual([
+    { id: 1, name: '左', text: 'LEFT' },
+    { id: 2, name: '', text: 'RIGHT' },
+  ])
+  // everything already on the board: nothing to relearn, and no QR request beyond the reads
+  file.learned[6] = [{ id: 1, name: '左', text: 'LEFT' }]
+  expect((await d.importConfig(JSON.stringify(file))).colorsNeedRelearn).toBe(false)
+  expect(fw.requests.filter((r) => r.cmd === Cmd.Learn)).toHaveLength(0)
+  d.dispose()
 })

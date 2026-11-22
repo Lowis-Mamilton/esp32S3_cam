@@ -3,7 +3,7 @@ import { afterEach, expect, test, vi } from 'vitest'
 import { Cmd, ErrorCode, parseConfig as parseWireConfig } from '../protocol/messages'
 import { FakeFirmware } from '../testing/fakeFirmware'
 import { RealDevice } from './RealDevice'
-import { LearnError, NotConnectedError, NotSupportedError, type FunctionId, type Result } from './types'
+import { LearnError, NotConnectedError, NotSupportedError, defaultParams, type FunctionId, type Result } from './types'
 
 let devices: RealDevice[] = []
 afterEach(() => {
@@ -813,6 +813,284 @@ test('importConfig applies track params and the track name; absent keys leave th
   expect(fw.track).toEqual({ threshold: 80, adapt: 0, reacquire: 0, scale: 0 })
   expect(fw.line.bands).toBe(10)
   expect(fw.names.get('5:1')).toBe('ball')
+})
+
+// ---- M7: QR code (6), shapes (11), motion (12) ----
+
+const m7Fw = () => {
+  const fw = new FakeFirmware()
+  fw.functionIds = [1, 2, 3, 4, 5, 6, 8, 11, 12]
+  return fw
+}
+const utf8 = (s: string) => new TextEncoder().encode(s)
+const square = (x: number, y: number, s: number): [number, number][] => [
+  [x - s / 2, y - s / 2],
+  [x + s / 2, y - s / 2],
+  [x + s / 2, y + s / 2],
+  [x - s / 2, y + s / 2],
+]
+/** Two codes in front of the camera: 'LEFT' centred at (80, 100), a larger 'MXCam' at (220, 120). */
+function twoCodes(fw: FakeFirmware) {
+  fw.qrCodes = [
+    { record: { id: 0, x: 80, y: 100, width: 41, height: 41, tag: { rotationDeg: 0, corners: square(80, 100, 40) } }, bytes: utf8('LEFT') },
+    { record: { id: 0, x: 220, y: 120, width: 51, height: 51, tag: { rotationDeg: 12.5, corners: square(220, 120, 50) } }, bytes: utf8('MXCam') },
+  ]
+}
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
+/** Pushes QR frames until `check` passes on the latest batch (the content arrives a few frames after the box). */
+async function pushQrUntil(fw: FakeFirmware, d: RealDevice, firstFrame: number, check: (r: Result[]) => void) {
+  let got: Result[] = []
+  const off = d.onResults((r) => (got = r))
+  let frame = firstFrame
+  await waitFor(() => {
+    fw.pushQr(frame++)
+    check(got)
+  })
+  off()
+  return got
+}
+
+test('connect loads func config for 11 and 12', async () => {
+  const fw = m7Fw()
+  fw.shape = { mode: 1, threshold: 120, minSize: 40, maxResults: 2 }
+  fw.motion = { threshold: 50, minSize: 30, maxResults: 3 }
+  const d = await connected(fw)
+  expect(sent(fw, Cmd.GetFuncConfig).map((r) => r.payload[0])).toEqual([4, 5, 8, 11, 12])
+  expect(d.snapshot().supported).toEqual([1, 2, 3, 4, 5, 6, 8, 11, 12])
+  expect(d.snapshot().params.shape).toEqual({ mode: 'light', threshold: 120, minSize: 40, maxResults: 2 })
+  expect(d.snapshot().params.motion).toEqual({ threshold: 50, minSize: 30, maxResults: 3 })
+  // learned lists: QR (6) and shape names (11) are read; motion (12) has none, like face (3)
+  expect(sent(fw, Cmd.GetLearned).map((r) => r.payload[0])).toEqual([1, 2, 4, 5, 6, 8, 11])
+  const j = JSON.parse(d.exportConfig())
+  expect(j.params.shape).toEqual({ mode: 'light', threshold: 120, minSize: 40, maxResults: 2 })
+  expect(j.params.motion).toEqual({ threshold: 50, minSize: 30, maxResults: 3 })
+})
+
+test('setParams shape and motion send SET_FUNC_CONFIG', async () => {
+  const fw = m7Fw()
+  const d = await connected(fw)
+  await d.setParams({ shape: { ...d.snapshot().params.shape } })
+  await d.setParams({ motion: { ...d.snapshot().params.motion } })
+  expect(sent(fw, Cmd.SetFuncConfig)).toHaveLength(0) // the current values: nothing sent
+  expect(d.snapshot().dirty).toBe(false)
+  await d.setParams({ shape: { mode: 'light', threshold: 0, minSize: 5, maxResults: 20 } })
+  expect([...sent(fw, Cmd.SetFuncConfig)[0].payload]).toEqual([11, 1, 1, 0, 16, 8, 0, 0, 0, 0]) // clamped on our side too
+  expect(d.snapshot().params.shape).toEqual({ mode: 'light', threshold: 0, minSize: 16, maxResults: 8 })
+  await d.setParams({ motion: { threshold: 200, minSize: 4, maxResults: 3 } })
+  expect([...sent(fw, Cmd.SetFuncConfig)[1].payload]).toEqual([12, 1, 100, 8, 3, 0, 0, 0, 0, 0])
+  expect(d.snapshot().params.motion).toEqual({ threshold: 100, minSize: 8, maxResults: 3 })
+  expect(fw.motion).toEqual({ threshold: 100, minSize: 8, maxResults: 3 })
+  expect(d.snapshot().dirty).toBe(true)
+})
+
+test('qr results get text through GET_RESULT_DATA', async () => {
+  const fw = m7Fw()
+  twoCodes(fw)
+  let clock = 0
+  const d = await connected(fw, () => clock)
+  await d.setFunction(6)
+  const got = await pushQrUntil(fw, d, 10, (r) => expect(r.map((x) => x.text)).toEqual(['LEFT', 'MXCam']))
+  expect(got[1]).toMatchObject({ id: 0, kind: 'qr', x: 220, y: 120, width: 51, height: 51, rotationDeg: 12.5, text: 'MXCam', truncated: false })
+  expect(got[1].corners).toEqual(square(220, 120, 50))
+  expect(got[1].confidence).toBeUndefined()
+  expect(sent(fw, Cmd.GetResultData).map((r) => r.payload[0])).toEqual([0, 1]) // one read of the batch
+  // all codes matched: no more reads within a second, however many frames come
+  for (let f = 50; f < 60; f++) fw.pushQr(f)
+  await sleep(30)
+  expect(sent(fw, Cmd.GetResultData)).toHaveLength(2)
+  // a second later the contents are read once more (a card swapped in place)
+  clock = 1500
+  fw.pushQr(60)
+  await waitFor(() => expect(sent(fw, Cmd.GetResultData)).toHaveLength(4))
+})
+
+test('qr text: long and invalid UTF-8 content is shown truncated with replacement characters', async () => {
+  const fw = m7Fw()
+  const long = new Uint8Array(200).fill(0x41)
+  long[1] = 0xff
+  fw.qrCodes = [{ record: { id: 0, x: 100, y: 100, width: 60, height: 60, tag: { rotationDeg: 0, corners: square(100, 100, 60) } }, bytes: long }]
+  const d = await connected(fw)
+  await d.setFunction(6)
+  const [r] = await pushQrUntil(fw, d, 1, (b) => expect(b[0]?.text).toBeDefined())
+  expect(r.truncated).toBe(true)
+  expect(r.text).toBe(`A�${'A'.repeat(126)}`)
+})
+
+test('stale frame id discards text', async () => {
+  const fw = m7Fw()
+  twoCodes(fw)
+  const d = await connected(fw, () => 0)
+  await d.setFunction(6)
+  const batches: { frameId: number; texts: (string | undefined)[] }[] = []
+  d.onResults((r, m) => batches.push({ frameId: m!.frameId, texts: r.map((x) => x.text) }))
+  fw.pushQr(10)
+  fw.nextFrame(11) // the board finishes frame 11 before Studio asks about frame 10
+  await waitFor(() => expect(sent(fw, Cmd.GetResultData)).toHaveLength(1))
+  await sleep(30)
+  expect(sent(fw, Cmd.GetResultData)).toHaveLength(1) // dropped at the first mismatch: index 1 is not asked
+  fw.pushQr(12)
+  await waitFor(() => expect(batches).toHaveLength(2))
+  expect(batches[1].texts).toEqual([undefined, undefined]) // frame 11's contents were never attached
+  await pushQrUntil(fw, d, 13, (r) => expect(r.map((x) => x.text)).toEqual(['LEFT', 'MXCam']))
+})
+
+test('QR listed but GET_RESULT_DATA unknown: boxes without text, asked only once', async () => {
+  const fw = m7Fw()
+  twoCodes(fw)
+  fw.unknown.add(Cmd.GetResultData)
+  const d = await connected(fw)
+  await d.setFunction(6)
+  let got: Result[] = []
+  d.onResults((r) => (got = r))
+  for (let f = 1; f <= 5; f++) {
+    fw.pushQr(f)
+    await sleep(10)
+  }
+  expect(got.map((r) => r.kind)).toEqual(['qr', 'qr'])
+  expect(got.every((r) => r.text === undefined)).toBe(true)
+  expect(sent(fw, Cmd.GetResultData)).toHaveLength(1)
+})
+
+test('learn(6) maps BAD_PARAM to no-code and FULL to full', async () => {
+  const fw = m7Fw()
+  twoCodes(fw)
+  fw.learnDelayMs = 0
+  const d = await connected(fw)
+  await d.setFunction(6)
+  const err = await d.learn(6, { x: 0, y: 0, width: 20, height: 20 }).catch((e: unknown) => e)
+  expect(err).toBeInstanceOf(LearnError)
+  expect((err as LearnError).code).toBe('no-code')
+  fw.qrLearned = [1, 2, 3, 4, 5, 6, 7, 8].map((id) => ({ id, bytes: utf8(`other${id}`) }))
+  await expect(d.learn(6, { x: 0, y: 0, width: 320, height: 240 })).rejects.toMatchObject({ code: 'full' })
+  fw.unknown.add(Cmd.Learn)
+  await expect(d.learn(6, { x: 0, y: 0, width: 320, height: 240 })).rejects.toBeInstanceOf(NotSupportedError)
+})
+
+test('learn(6) refreshes learned[6] with text', async () => {
+  const fw = m7Fw()
+  twoCodes(fw)
+  fw.learnDelayMs = 0
+  const d = await connected(fw)
+  await d.setFunction(6)
+  expect(await d.learn(6, { x: 60, y: 80, width: 40, height: 40 })).toBe(1) // the region holds the centre of 'LEFT'
+  expect(sent(fw, Cmd.Learn)[0].payload).toHaveLength(9) // never the 11-byte form
+  expect(d.snapshot().learned[6]).toEqual([{ id: 1, name: '', text: 'LEFT' }])
+  expect(await d.learn(6, { x: 0, y: 0, width: 320, height: 240 })).toBe(2) // the whole frame: the larger code
+  expect(await d.learn(6, { x: 0, y: 0, width: 320, height: 240 })).toBe(2) // same content: same ID
+  await d.setName(6, 2, '起點')
+  expect(d.snapshot().learned[6]).toEqual([
+    { id: 1, name: '', text: 'LEFT' },
+    { id: 2, name: '起點', text: 'MXCam' },
+  ])
+  expect(sent(fw, Cmd.GetLearnedData).at(-1)!.payload[0]).toBe(6)
+  await d.forget(6, 1)
+  expect(d.snapshot().learned[6].map((l) => l.id)).toEqual([2])
+  // results carry the learned ID from the board
+  fw.qrCodes[1].record.id = 2
+  await pushQrUntil(fw, d, 1, (r) => expect(r.map((x) => [x.id, x.text])).toEqual([[0, 'LEFT'], [2, 'MXCam']]))
+})
+
+test('connect reads the QR contents of every learned ID; a firmware without 0x35 still connects', async () => {
+  const fw = m7Fw()
+  fw.qrLearned = [
+    { id: 3, bytes: utf8('右轉') },
+    { id: 1, bytes: utf8('LEFT') },
+  ]
+  fw.names.set('6:3', 'right')
+  const d = await connected(fw)
+  expect(sent(fw, Cmd.GetLearnedData).map((r) => [...r.payload])).toEqual([
+    [6, 1, 0],
+    [6, 3, 0],
+  ])
+  expect(d.snapshot().learned[6]).toEqual([
+    { id: 1, name: '', text: 'LEFT' },
+    { id: 3, name: 'right', text: '右轉' },
+  ])
+  const fw2 = m7Fw()
+  fw2.qrLearned = [{ id: 1, bytes: utf8('LEFT') }]
+  fw2.unknown.add(Cmd.GetLearnedData)
+  const d2 = await connected(fw2)
+  expect(d2.snapshot().learned[6]).toEqual([{ id: 1, name: '' }])
+})
+
+test('shape and motion results kinds', async () => {
+  const fw = m7Fw()
+  const d = await connected(fw)
+  let got: Result[] = []
+  d.onResults((r) => (got = r))
+  await d.setFunction(11)
+  fw.pushResults(5, 11, [{ id: 3, x: 100, y: 90, width: 50, height: 50, confidence: 91 }])
+  await waitFor(() => expect(got).toHaveLength(1))
+  expect(got[0]).toEqual({ id: 3, kind: 'shape', x: 100, y: 90, width: 50, height: 50, confidence: 91 })
+  await d.setFunction(12)
+  fw.pushResults(6, 12, [{ id: 0, x: 200, y: 120, width: 60, height: 40, confidence: 63 }])
+  await waitFor(() => expect(got[0]?.kind).toBe('motion'))
+  expect(got[0]).toEqual({ id: 0, kind: 'motion', x: 200, y: 120, width: 60, height: 40, confidence: 63 })
+  expect(sent(fw, Cmd.GetResultData)).toHaveLength(0) // only QR results have data
+  // shape names 1-4; motion cannot be named
+  await d.setName(11, 4, '長方形')
+  expect(d.snapshot().learned[11]).toEqual([{ id: 4, name: '長方形' }])
+  await expect(d.setName(11, 5, 'x')).rejects.toThrow()
+  await expect(d.setName(12, 1, 'x')).rejects.toThrow()
+  await d.forgetAll(12) // nothing to forget: OK like face
+})
+
+test('old firmware: no m7 requests', async () => {
+  const fw = new FakeFirmware()
+  fw.functionIds = [1, 2, 3, 4, 5, 8]
+  const d = await connected(fw)
+  expect(d.snapshot().supported).toEqual([1, 2, 3, 4, 5, 8])
+  await expect(d.setFunction(6)).rejects.toBeInstanceOf(NotSupportedError)
+  await expect(d.learn(6, { x: 0, y: 0, width: 10, height: 10 })).rejects.toBeInstanceOf(NotSupportedError)
+  await expect(d.setParams({ shape: defaultParams().shape })).rejects.toBeInstanceOf(NotSupportedError)
+  await expect(d.setParams({ motion: defaultParams().motion })).rejects.toBeInstanceOf(NotSupportedError)
+  const file = JSON.parse(d.exportConfig())
+  expect(file.params.shape).toBeUndefined()
+  expect(file.params.motion).toBeUndefined()
+  file.params.shape = { mode: 'light', threshold: 0, minSize: 32, maxResults: 4 }
+  file.learned[6] = [{ id: 1, name: 'x', text: 'LEFT' }]
+  file.learned[11] = [{ id: 1, name: '圓' }]
+  expect((await d.importConfig(JSON.stringify(file))).colorsNeedRelearn).toBe(false)
+  expect(sent(fw, Cmd.GetResultData)).toHaveLength(0)
+  expect(sent(fw, Cmd.GetLearnedData)).toHaveLength(0)
+  expect(sent(fw, Cmd.GetFuncConfig).map((r) => r.payload[0])).not.toContain(11)
+  expect(sent(fw, Cmd.GetFuncConfig).map((r) => r.payload[0])).not.toContain(12)
+  expect(sent(fw, Cmd.SetFuncConfig).map((r) => r.payload[0])).not.toContain(11)
+  expect(sent(fw, Cmd.SetName).map((r) => r.payload[0])).not.toContain(11)
+  expect(sent(fw, Cmd.GetLearned).map((r) => r.payload[0])).not.toContain(6)
+})
+
+test('func config unsupported drops shape', async () => {
+  const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+  const fw = new FakeFirmware()
+  fw.functionIds = [1, 2, 3, 11, 12]
+  fw.unknown.add(Cmd.GetFuncConfig)
+  const d = await connected(fw)
+  expect(d.snapshot().status).toBe('connected')
+  expect(d.snapshot().supported).toEqual([1, 2, 3])
+  // an unknown layout_version drops only that function
+  const fw2 = m7Fw()
+  fw2.shapeLayoutVersion = 2
+  const d2 = await connected(fw2)
+  expect(d2.snapshot().supported).toEqual([1, 2, 3, 4, 5, 6, 8, 12])
+  warn.mockRestore()
+})
+
+test('importConfig applies shape and motion params and shape names; absent keys leave the board alone', async () => {
+  const fw = m7Fw()
+  fw.motion = { threshold: 40, minSize: 24, maxResults: 4 }
+  fw.names.set('11:2', 'old')
+  const d = await connected(fw)
+  const file = JSON.parse(d.exportConfig())
+  file.params.shape = { mode: 'light', threshold: 90, minSize: 48, maxResults: 2 }
+  delete file.params.motion
+  file.learned[11] = [{ id: 1, name: '圓' }]
+  await d.importConfig(JSON.stringify(file))
+  expect(fw.shape).toEqual({ mode: 1, threshold: 90, minSize: 48, maxResults: 2 })
+  expect(fw.motion.threshold).toBe(40)
+  expect(fw.names.get('11:1')).toBe('圓')
+  expect(fw.names.has('11:2')).toBe(false) // the file's shape names replace the board's
+  expect(d.snapshot().learned[11]).toEqual([{ id: 1, name: '圓' }])
 })
 
 test('importConfig reports a learned line colour that cannot be restored', async () => {

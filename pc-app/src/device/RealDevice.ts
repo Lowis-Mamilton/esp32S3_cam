@@ -5,11 +5,15 @@ import {
   encodeForget,
   encodeFuncConfig,
   encodeGetFuncConfig,
+  encodeGetLearnedData,
+  encodeGetResultData,
   encodeLearn,
   encodeSetName,
   parseConfig as parseWireConfig,
   parseFuncConfig,
   parseLearned,
+  parseLearnedData,
+  parseResultData,
   FunctionId as WireFn,
   type DeviceConfig,
   type FuncConfig,
@@ -21,6 +25,7 @@ import type { Frame } from '../protocol/codec'
 import { MxcamConnection, MxcamError, type ConnectionStatus } from '../serial/connection'
 import type { BluetoothLike } from '../transport/webBluetooth'
 import { parseConfig } from './config'
+import { QrTextCache, decodeQrText, type QrRead } from './qrText'
 import {
   DeviceOpError,
   Emitter,
@@ -29,13 +34,17 @@ import {
   NotConnectedError,
   NotSupportedError,
   clampLineParams,
+  clampMotionParams,
+  clampShapeParams,
   clampTrackParams,
   defaultParams,
   defaultSystem,
   emptyLearned,
+  isDeviceFunctionId,
   nameBytes,
   toFunctionIds,
   type Device,
+  type DeviceFunctionId,
   type DeviceInfo,
   type DeviceSnapshot,
   type FrameSource,
@@ -63,16 +72,22 @@ const FORGET_ALL = 0xffff
 const NAME_TABLE_SIZE = 32
 const REFRESH_RETRY_MS = 500
 const REFRESH_RETRIES = 3
-/** Face detection has nothing learned or named, so it is never asked (GET_LEARNED is for colour and tag). */
-const hasLearned = (fn: FunctionId) => fn !== 3
-const KIND: Record<FunctionId, Result['kind']> = { 1: 'color', 2: 'tag', 3: 'face', 4: 'line', 5: 'track', 8: 'gesture' }
-const GESTURE: FunctionId = 8
-const LINE: FunctionId = 4
-const TRACK: FunctionId = 5
-/** Functions whose params live in GET/SET_FUNC_CONFIG (docs/protocol.md section 9). */
-const FUNC_CONFIG_FNS: FunctionId[] = [LINE, TRACK, GESTURE]
+/** Face detection and motion have nothing learned or named, so they are never asked (GET_LEARNED answers BAD_PARAM). */
+const hasLearned = (fn: DeviceFunctionId) => fn !== 3 && fn !== 12
+const KIND: Record<DeviceFunctionId, Result['kind']> = {
+  1: 'color', 2: 'tag', 3: 'face', 4: 'line', 5: 'track', 6: 'qr', 8: 'gesture', 11: 'shape', 12: 'motion',
+}
+const GESTURE = 8
+const LINE = 4
+const TRACK = 5
+const QR = 6
+const SHAPE = 11
+const MOTION = 12
+/** Functions whose params live in GET/SET_FUNC_CONFIG (docs/protocol.md sections 9-11), and where they are kept. */
+const FUNC_CONFIG_KEY = { [LINE]: 'line', [TRACK]: 'track', [GESTURE]: 'gesture', [SHAPE]: 'shape', [MOTION]: 'motion' } as const
+const FUNC_CONFIG_FNS: DeviceFunctionId[] = [LINE, TRACK, GESTURE, SHAPE, MOTION]
 /** Functions with a learned list that has colours: colour (1), line colour (4), tracked object (5, average colour). */
-const hasColors = (fn: FunctionId) => fn === 1 || fn === 4 || fn === 5
+const hasColors = (fn: DeviceFunctionId) => fn === 1 || fn === 4 || fn === 5
 const ERROR_NAME: Record<number, string> = {
   [ErrorCode.UnknownCmd]: 'UNKNOWN_CMD',
   [ErrorCode.BadLength]: 'BAD_LENGTH',
@@ -83,7 +98,7 @@ const ERROR_NAME: Record<number, string> = {
   [ErrorCode.Full]: 'FULL',
 }
 
-const isFn = (n: number): n is FunctionId => n === 1 || n === 2 || n === 3 || n === 4 || n === 5 || n === 8
+const isFn = isDeviceFunctionId
 const isUnsupported = (e: unknown) =>
   e instanceof MxcamError && (e.code === ErrorCode.UnknownCmd || e.code === ErrorCode.NotSupported)
 const clampInt = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, Math.round(v)))
@@ -104,16 +119,23 @@ interface FuncCfgs {
   gesture: FunctionParams['gesture'] | null
   line: FunctionParams['line'] | null
   track: FunctionParams['track'] | null
+  shape: FunctionParams['shape'] | null
+  motion: FunctionParams['motion'] | null
 }
-const noFuncCfgs = (): FuncCfgs => ({ gesture: null, line: null, track: null })
+const noFuncCfgs = (): FuncCfgs => ({ gesture: null, line: null, track: null, shape: null, motion: null })
 
 function toParams(c: DeviceConfig | null, fc: FuncCfgs = noFuncCfgs()): FunctionParams {
-  if (!c) return { ...defaultParams(), gesture: fc.gesture ?? defaultParams().gesture, line: fc.line ?? defaultParams().line, track: fc.track ?? defaultParams().track }
   const d = defaultParams()
-  return {
+  const funcs = {
     gesture: fc.gesture ?? d.gesture,
     line: fc.line ?? d.line,
     track: fc.track ?? d.track,
+    shape: fc.shape ?? d.shape,
+    motion: fc.motion ?? d.motion,
+  }
+  if (!c) return { ...d, ...funcs }
+  return {
+    ...funcs,
     color: { tolerance: c.tolerance, minArea: c.minArea, maxResults: c.colorMaxResults, showNames: c.colorShowNames },
     tag: { showNames: c.tagShowNames },
     face: { threshold: c.faceThreshold, maxResults: c.faceMaxResults },
@@ -143,6 +165,8 @@ const lineToWire = (l: FunctionParams['line']): LineConfig => ({
 const lineFromWire = (w: LineConfig): FunctionParams['line'] =>
   clampLineParams({ mode: LINE_MODES[w.mode] ?? 'dark', threshold: w.threshold, roiPercent: w.roiPct, bands: w.bands, minWidth: w.minWidth, maxWidth: w.maxWidth, colorTolerance: w.colorTolerance })
 const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b)
+const shapeFromWire = (s: { mode: number; threshold: number; minSize: number; maxResults: number }): FunctionParams['shape'] =>
+  clampShapeParams({ mode: s.mode === 1 ? 'light' : 'dark', threshold: s.threshold, minSize: s.minSize, maxResults: s.maxResults })
 
 /** Full Config v1 from Studio's view; values are clamped so they cannot wrap in the u8/u16 fields. */
 function toWire(base: DeviceConfig, p: Pick<FunctionParams, 'color' | 'tag' | 'face'>, s: SystemConfig): DeviceConfig {
@@ -183,7 +207,11 @@ export class RealDevice implements Device {
   private readonly frames = new Emitter<[FrameSource]>()
   private readonly results = new Emitter<[Result[], ResultsMeta | undefined]>()
   private readonly stats = new Emitter<[{ fps: number; kbps: number }]>()
-  private readonly fnChanges = new Emitter<[FunctionId | 0]>()
+  private readonly fnChanges = new Emitter<[DeviceFunctionId | 0]>()
+  /** QR contents for function 6 RESULTS (GET_RESULT_DATA). */
+  private readonly qr: QrTextCache
+  /** The firmware lists QR but answered GET_RESULT_DATA with UNKNOWN_CMD / NOT_SUPPORTED: stop asking. */
+  private qrDataUnsupported = false
   private readonly now: () => number
   private status: ConnectionStatus
   private info: DeviceInfo | undefined
@@ -195,13 +223,13 @@ export class RealDevice implements Device {
   private config: DeviceConfig | null = null
   /** false once the firmware answered GET_CONFIG with UNKNOWN_CMD / NOT_SUPPORTED. */
   private configSupported = true
-  /** Func configs (functions 4, 5, 8; GET_FUNC_CONFIG); null until read. */
+  /** Func configs (functions 4, 5, 8, 11, 12; GET_FUNC_CONFIG); null until read. */
   private fc: FuncCfgs = noFuncCfgs()
   /** Functions the firmware lists but cannot configure (func config unknown): treated as not supported. */
-  private readonly dropped = new Set<FunctionId>()
+  private readonly dropped = new Set<DeviceFunctionId>()
   private previewPaused = false
   private learned = emptyLearned()
-  private active: FunctionId | 0 = 0
+  private active: DeviceFunctionId | 0 = 0
   /** Function changes by others are only detected once Studio has set the function itself in this session. */
   private ownFnSet = false
   private fnInFlight = 0
@@ -213,12 +241,13 @@ export class RealDevice implements Device {
   /** Our own SET_FUNCTION switched function while a LEARN was pending: the firmware cancels it (BAD_PARAM). */
   private learnCancelled = false
   private refreshTimer: ReturnType<typeof setTimeout> | undefined
-  private readonly retryFns = new Set<FunctionId>()
+  private readonly retryFns = new Set<DeviceFunctionId>()
   private readonly auto: ReturnType<typeof setTimeout>
   private disposed = false
 
   constructor(serial: Serial | undefined, now: () => number = () => performance.now(), bluetooth?: BluetoothLike) {
     this.now = now
+    this.qr = new QrTextCache((index) => this.readResultData(index))
     this.status = serial || bluetooth ? 'disconnected' : 'unsupported'
     this.conn = new MxcamConnection(
       serial,
@@ -271,6 +300,8 @@ export class RealDevice implements Device {
     clearTimeout(this.refreshTimer)
     this.refreshTimer = undefined
     this.retryFns.clear()
+    this.qr.reset()
+    this.qrDataUnsupported = false
   }
 
   private changed() {
@@ -284,7 +315,8 @@ export class RealDevice implements Device {
       mode: 'real',
       status: this.status,
       info: this.info,
-      supported: this.supportedFns(),
+      // Includes 6, 11 and 12 on M7 firmware; see DeviceSnapshot.supported for the type.
+      supported: this.supportedFns() as FunctionId[],
       activeFunction: this.active,
       learned: this.learned,
       params: toParams(c, this.fc),
@@ -308,7 +340,8 @@ export class RealDevice implements Device {
     return this.results.on(cb)
   }
   onFunctionChange(cb: (fn: FunctionId | 0) => void) {
-    return this.fnChanges.on(cb)
+    // Reports 6, 11 and 12 too; see Device.onFunctionChange for the type.
+    return this.fnChanges.on(cb as (fn: DeviceFunctionId | 0) => void)
   }
   onStats(cb: (s: { fps: number; kbps: number }) => void) {
     return this.stats.on(cb)
@@ -324,13 +357,13 @@ export class RealDevice implements Device {
 
   // ---- protocol helpers ----
 
-  private supportedFns(): FunctionId[] {
+  private supportedFns(): DeviceFunctionId[] {
     return toFunctionIds(this.info?.functionIds ?? []).filter((f) => !this.dropped.has(f))
   }
   private ensureConnected() {
     if (this.status !== 'connected') throw new NotConnectedError()
   }
-  private requireFn(fn: FunctionId) {
+  private requireFn(fn: DeviceFunctionId) {
     if (!this.supportedFns().includes(fn)) throw new NotSupportedError()
   }
   private requireConfig(): DeviceConfig {
@@ -370,11 +403,12 @@ export class RealDevice implements Device {
     else if (c.functionId === WireFn.Track) {
       const t = c.track
       this.fc = { ...this.fc, track: clampTrackParams({ threshold: t.threshold, adapt: t.adapt, reacquire: t.reacquire, multiScale: t.scale }) }
-    }
+    } else if (c.functionId === WireFn.Shape) this.fc = { ...this.fc, shape: shapeFromWire(c.shape) }
+    else if (c.functionId === WireFn.Motion) this.fc = { ...this.fc, motion: clampMotionParams(c.motion) }
   }
 
-  /** GET_FUNC_CONFIG for function 4, 5 or 8; a firmware that cannot answer drops the function from `supported` instead of failing the connect. */
-  private async loadFuncConfig(fn: FunctionId, retry = false) {
+  /** GET_FUNC_CONFIG for function 4, 5, 8, 11 or 12; a firmware that cannot answer drops the function from `supported` instead of failing the connect. */
+  private async loadFuncConfig(fn: keyof typeof FUNC_CONFIG_KEY, retry = false) {
     try {
       const get = () => this.call(Cmd.GetFuncConfig, encodeGetFuncConfig(fn))
       const c = parseFuncConfig((await (retry ? retryOnTimeout(get) : get())).payload)
@@ -385,14 +419,30 @@ export class RealDevice implements Device {
       if (!(e instanceof NotSupportedError) && !(e instanceof Error && /layout_version/.test(e.message))) throw e
       console.warn(`MXCam: firmware lists function ${fn} but its GET_FUNC_CONFIG is missing or unsupported; it is disabled`)
       this.dropped.add(fn)
-      this.fc = { ...this.fc, ...(fn === GESTURE ? { gesture: null } : fn === LINE ? { line: null } : { track: null }) }
+      this.fc = { ...this.fc, [FUNC_CONFIG_KEY[fn]]: null }
     }
   }
   private async loadFuncConfigs(retry = false) {
-    for (const fn of FUNC_CONFIG_FNS) if (this.supportedFns().includes(fn)) await this.loadFuncConfig(fn, retry)
+    for (const fn of FUNC_CONFIG_FNS) if (this.supportedFns().includes(fn)) await this.loadFuncConfig(fn as keyof typeof FUNC_CONFIG_KEY, retry)
   }
 
-  private async loadLearned(fn: FunctionId, retry = false) {
+  /** GET_LEARNED_DATA: the content learned QR ID `id` stands for; undefined when the board cannot say. */
+  private async learnedText(id: number, retry: boolean): Promise<string | undefined> {
+    try {
+      const get = () =>
+        this.call(Cmd.GetLearnedData, encodeGetLearnedData(QR, id), undefined, (code) =>
+          code === ErrorCode.BadParam ? new NotSupportedError() : undefined,
+        )
+      const d = parseLearnedData((await (retry ? retryOnTimeout(get) : get())).payload)
+      if (d.functionId !== QR || d.id !== id) throw new DeviceOpError('failed', 'GET_LEARNED_DATA answered another ID')
+      return decodeQrText(d.data)
+    } catch (e) {
+      if (!(e instanceof NotSupportedError)) throw e
+      return undefined // forgotten in between (BAD_PARAM) or firmware without 0x35
+    }
+  }
+
+  private async loadLearned(fn: DeviceFunctionId, retry = false) {
     let list: LearnedId[] = []
     try {
       // older firmware, or a function without learned data (BAD_PARAM): nothing learned
@@ -404,6 +454,13 @@ export class RealDevice implements Device {
       list = parseLearned(f.payload).map((i) => (hasColors(fn) ? { id: i.id, name: i.name, color: i.rgb } : { id: i.id, name: i.name }))
     } catch (e) {
       if (!(e instanceof NotSupportedError)) throw e
+    }
+    // QR: what each ID stands for, one GET_LEARNED_DATA per ID (at most 8).
+    if (fn === QR) {
+      for (const e of list) {
+        const text = await this.learnedText(e.id, retry)
+        if (text !== undefined) e.text = text
+      }
     }
     this.learned = { ...this.learned, [fn]: list }
   }
@@ -417,7 +474,7 @@ export class RealDevice implements Device {
   }
 
   /** After a change: re-read the learned lists and the config (for dirty). */
-  private async refresh(fns: FunctionId[]) {
+  private async refresh(fns: DeviceFunctionId[]) {
     for (const fn of fns) if (this.supportedFns().includes(fn) && hasLearned(fn)) await this.loadLearned(fn)
     if (this.configSupported) await this.loadConfig()
     await this.loadFuncConfigs()
@@ -428,7 +485,7 @@ export class RealDevice implements Device {
    * Refresh after an operation the device already accepted: the operation succeeded, so a failed re-read is not
    * reported as a failure; it is retried in the background instead.
    */
-  private async refreshAfter(fns: FunctionId[], attempt = 0): Promise<void> {
+  private async refreshAfter(fns: DeviceFunctionId[], attempt = 0): Promise<void> {
     try {
       await this.refresh(fns)
     } catch {
@@ -458,16 +515,31 @@ export class RealDevice implements Device {
       this.changed()
       this.fnChanges.emit(fn)
     }
-    const results = isFn(fn) ? r.results.map((rec) => toResult(rec, KIND[fn])) : []
+    let results = isFn(fn) ? r.results.map((rec) => toResult(rec, KIND[fn])) : []
+    if (fn === QR && !this.qrDataUnsupported && this.status === 'connected') results = this.qr.annotate(results, r.frameId, this.now())
+    else if (fn !== QR) this.qr.reset() // another function runs: the codes seen before are not the ones seen next
     this.results.emit(results, { frameId: r.frameId, functionId: fn })
+  }
+
+  /** GET_RESULT_DATA for the QR text cache: record `index` of the device's latest batch, decoded. */
+  private async readResultData(index: number): Promise<QrRead> {
+    try {
+      const d = parseResultData((await this.call(Cmd.GetResultData, encodeGetResultData(index))).payload)
+      if (d.index !== index) throw new DeviceOpError('failed', 'GET_RESULT_DATA answered another index')
+      return { frameId: d.frameId, text: decodeQrText(d.data), truncated: d.truncated }
+    } catch (e) {
+      if (e instanceof NotSupportedError) this.qrDataUnsupported = true // lists QR but has no 0x21: boxes without text
+      throw e
+    }
   }
 
   // ---- operations ----
 
-  async setFunction(id: FunctionId): Promise<void> {
+  async setFunction(id: DeviceFunctionId): Promise<void> {
     this.ensureConnected()
     this.requireFn(id)
     if (this.learnInFlight > 0 && id !== this.active) this.learnCancelled = true
+    if (id !== this.active) this.qr.reset()
     this.fnInFlight++
     this.quietUntil = this.now() + OWN_SWITCH_QUIET_MS
     try {
@@ -502,8 +574,10 @@ export class RealDevice implements Device {
       f = await this.call(Cmd.Learn, encodeLearn(fn, rect), LEARN_TIMEOUT_MS, (code) => {
         if (code === ErrorCode.Full) return new LearnError('full')
         if (code === ErrorCode.Busy) return new LearnError('busy')
-        // BAD_PARAM: no colour (1, 4) or no usable object (5) in the region, or the LEARN was cancelled by our function switch
-        if (code === ErrorCode.BadParam) return new LearnError(this.learnCancelled ? 'cancelled' : fn === TRACK ? 'no-target' : 'no-color')
+        // BAD_PARAM: no colour (1, 4), no usable object (5) or no decoded QR code (6) in the region,
+        // or the LEARN was cancelled by our function switch
+        if (code === ErrorCode.BadParam)
+          return new LearnError(this.learnCancelled ? 'cancelled' : fn === TRACK ? 'no-target' : fn === QR ? 'no-code' : 'no-color')
         return undefined
       })
     } finally {
@@ -517,24 +591,24 @@ export class RealDevice implements Device {
     return f.payload[0]
   }
 
-  async forget(fn: FunctionId, id: number): Promise<void> {
+  async forget(fn: DeviceFunctionId, id: number): Promise<void> {
     this.ensureConnected()
     this.requireFn(fn)
     await this.call(Cmd.Forget, encodeForget(fn, id))
     await this.refreshAfter([fn])
   }
 
-  forgetAll(fn: FunctionId): Promise<void> {
+  forgetAll(fn: DeviceFunctionId): Promise<void> {
     return this.forget(fn, FORGET_ALL)
   }
 
-  private sendName(fn: FunctionId, id: number, name: string) {
+  private sendName(fn: DeviceFunctionId, id: number, name: string) {
     return this.call(Cmd.SetName, encodeSetName(fn, id, name), undefined, (code) =>
       code === ErrorCode.Full ? new DeviceOpError('names-full', 'name table full') : undefined,
     )
   }
 
-  async setName(fn: FunctionId, id: number, name: string): Promise<void> {
+  async setName(fn: DeviceFunctionId, id: number, name: string): Promise<void> {
     this.ensureConnected()
     this.requireFn(fn)
     const n = nameBytes(name)
@@ -590,6 +664,27 @@ export class RealDevice implements Device {
     this.markDirtyIf(!same(old, this.fc.track ?? old))
     this.changed()
   }
+  private async applyShape(want: FunctionParams['shape']) {
+    const next = clampShapeParams(want)
+    const old = this.fc.shape ?? defaultParams().shape
+    if (this.fc.shape && same(old, next)) return
+    this.storeFuncConfig(
+      await this.sendFuncConfig({
+        functionId: WireFn.Shape,
+        shape: { mode: next.mode === 'light' ? 1 : 0, threshold: next.threshold, minSize: next.minSize, maxResults: next.maxResults },
+      }),
+    )
+    this.markDirtyIf(!same(old, this.fc.shape ?? old))
+    this.changed()
+  }
+  private async applyMotion(want: FunctionParams['motion']) {
+    const next = clampMotionParams(want)
+    const old = this.fc.motion ?? defaultParams().motion
+    if (this.fc.motion && same(old, next)) return
+    this.storeFuncConfig(await this.sendFuncConfig({ functionId: WireFn.Motion, motion: next }))
+    this.markDirtyIf(!same(old, this.fc.motion ?? old))
+    this.changed()
+  }
 
   private queued<T>(op: () => Promise<T>): Promise<T> {
     const run = this.configQueue.then(op, op)
@@ -604,12 +699,16 @@ export class RealDevice implements Device {
       if (p.gesture) this.requireFn(GESTURE)
       if (p.line) this.requireFn(LINE)
       if (p.track) this.requireFn(TRACK)
+      if (p.shape) this.requireFn(SHAPE)
+      if (p.motion) this.requireFn(MOTION)
       const old = toParams(cur, this.fc)
       const params = { color: { ...old.color, ...p.color }, tag: { ...old.tag, ...p.tag }, face: { ...old.face, ...p.face } }
       await this.applyConfig(toWire(cur, params, toSystem(cur)))
       if (p.gesture) await this.applyGesture({ ...old.gesture, ...p.gesture })
       if (p.line) await this.applyLine({ ...old.line, ...p.line })
       if (p.track) await this.applyTrack({ ...old.track, ...p.track })
+      if (p.shape) await this.applyShape({ ...old.shape, ...p.shape })
+      if (p.motion) await this.applyMotion({ ...old.motion, ...p.motion })
     })
   }
 
@@ -640,9 +739,16 @@ export class RealDevice implements Device {
   exportConfig(): string {
     this.ensureConnected()
     const c = this.requireConfig()
-    const { gesture, line, track, ...params } = toParams(c, this.fc)
+    const { gesture, line, track, shape, motion, ...params } = toParams(c, this.fc)
     // No func config read from the board (old firmware): omit it rather than export made-up defaults.
-    const out = { ...params, ...(this.fc.gesture ? { gesture } : {}), ...(this.fc.line ? { line } : {}), ...(this.fc.track ? { track } : {}) }
+    const out = {
+      ...params,
+      ...(this.fc.gesture ? { gesture } : {}),
+      ...(this.fc.line ? { line } : {}),
+      ...(this.fc.track ? { track } : {}),
+      ...(this.fc.shape ? { shape } : {}),
+      ...(this.fc.motion ? { motion } : {}),
+    }
     return JSON.stringify({ version: 1, learned: this.learned, params: out, system: toSystem(c) })
   }
 
@@ -665,6 +771,8 @@ export class RealDevice implements Device {
     if (fns.includes(GESTURE) && file.params.gesture) await this.applyGesture(file.params.gesture)
     if (fns.includes(LINE) && file.params.line) await this.applyLine(file.params.line)
     if (fns.includes(TRACK) && file.params.track) await this.applyTrack(file.params.track)
+    if (fns.includes(SHAPE) && file.params.shape) await this.applyShape(file.params.shape)
+    if (fns.includes(MOTION) && file.params.motion) await this.applyMotion(file.params.motion)
     let colorsNeedRelearn = false
     if (fns.includes(1)) {
       for (const e of file.learned[1]) {
@@ -691,21 +799,36 @@ export class RealDevice implements Device {
       if (e && !board) colorsNeedRelearn = true
       else if (e && board && board.name !== e.name) await this.sendName(TRACK, 1, e.name)
     }
+    // QR codes are learned from the camera like colours: a name is applied only where the board's ID holds the same content.
+    if (fns.includes(QR)) {
+      for (const e of file.learned[6]) {
+        const board = this.learned[6].find((l) => l.id === e.id)
+        if (!board || board.text === undefined || board.text !== e.text) {
+          colorsNeedRelearn = true
+          continue
+        }
+        if (board.name !== e.name) await this.sendName(QR, e.id, e.name)
+      }
+    }
     if (fns.includes(2)) {
       await this.call(Cmd.Forget, encodeForget(2, FORGET_ALL))
       for (const e of file.learned[2]) if (e.name) await this.sendName(2, e.id, e.name)
     }
-    // Old files have no gesture names, so an empty list leaves the board's names alone.
+    // Old files have no gesture (or shape) names, so an empty list leaves the board's names alone.
     if (fns.includes(GESTURE) && file.learned[8].length > 0) {
       await this.call(Cmd.Forget, encodeForget(GESTURE, FORGET_ALL))
       for (const e of file.learned[8]) if (e.name) await this.sendName(GESTURE, e.id, e.name)
+    }
+    if (fns.includes(SHAPE) && file.learned[11].length > 0) {
+      await this.call(Cmd.Forget, encodeForget(SHAPE, FORGET_ALL))
+      for (const e of file.learned[11]) if (e.name) await this.sendName(SHAPE, e.id, e.name)
     }
     await this.refreshAfter(fns)
     return { colorsNeedRelearn }
   }
 
-  /** Names on the board after applying `file`: colour names stay per board ID, tag names come from the file. */
-  private namesAfterImport(file: ReturnType<typeof parseConfig>, fns: FunctionId[]): number {
+  /** Names on the board after applying `file`: colour and QR names stay per board ID, tag names come from the file. */
+  private namesAfterImport(file: ReturnType<typeof parseConfig>, fns: DeviceFunctionId[]): number {
     const colours = this.learned[1].filter((b) => {
       const e = file.learned[1].find((x) => x.id === b.id)
       const want = e?.color
@@ -717,7 +840,12 @@ export class RealDevice implements Device {
     const e5 = file.learned[5][0]
     const b5 = this.learned[5][0]
     const track = fns.includes(TRACK) && b5 ? ((e5 ? e5.name : b5.name) !== '' ? 1 : 0) : 0
-    return colours + tags + gestures + track
+    const qrs = this.learned[6].filter((b) => {
+      const e = fns.includes(QR) ? file.learned[6].find((x) => x.id === b.id) : undefined
+      return (e && b.text !== undefined && e.text === b.text ? e.name : b.name) !== ''
+    }).length
+    const shapes = (fns.includes(SHAPE) ? (file.learned[11].length > 0 ? file.learned[11] : this.learned[11]) : []).filter((e) => e.name !== '').length
+    return colours + tags + gestures + track + qrs + shapes
   }
 
   dispose() {
