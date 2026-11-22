@@ -79,7 +79,8 @@ export default function TopBar({ status, lost, info, demo, onToggleDemo, transpo
           </button>
         </div>
         {!unsupported && !demo && (
-          <>
+          // One group, so the narrow layout can give the connect buttons a row of their own (theme.css).
+          <div className="tb-connect">
             {transports.map((k, i) => (
               <button
                 key={k}
@@ -97,7 +98,7 @@ export default function TopBar({ status, lost, info, demo, onToggleDemo, transpo
               <Unplug size={16} aria-hidden="true" />
               {t('disconnect')}
             </button>
-          </>
+          </div>
         )}
       </div>
     </header>

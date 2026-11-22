@@ -2,7 +2,8 @@ import type { zhTW } from './zh-TW'
 
 export const en: Record<keyof typeof zhTW, string> = {
   appTitle: 'MXCam Studio',
-  unsupported: 'This browser is not supported. Use Chrome or Edge.',
+  unsupported: "This device's browser cannot connect to MXCam. Demo mode still works. To connect, use Chrome or Edge on a computer or an Android device.",
+  demoTurnOn: 'Turn on demo mode',
   connect: 'Connect',
   connectUsb: 'Connect USB',
   connectBluetooth: 'Connect Bluetooth',

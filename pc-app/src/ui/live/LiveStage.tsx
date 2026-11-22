@@ -1,5 +1,5 @@
 import { Crosshair } from 'lucide-react'
-import { useCallback, useEffect, useImperativeHandle, useLayoutEffect, useRef, useState, useSyncExternalStore, type CSSProperties, type MouseEvent as ReactMouseEvent, type Ref } from 'react'
+import { useCallback, useEffect, useImperativeHandle, useLayoutEffect, useRef, useState, useSyncExternalStore, type CSSProperties, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type Ref } from 'react'
 import type { ResultsStore } from '../../device/resultsStore'
 import { LearnError, NotConnectedError, NotSupportedError, type FrameSource, type LearnedId } from '../../device/types'
 import { useT } from '../../i18n'
@@ -198,39 +198,67 @@ export default function LiveStage({ ref, connected, fps, kbps, fn, canLearn, onL
     return { x: clamp(f.x, 0, FRAME_W), y: clamp(f.y, 0, FRAME_H) }
   }
 
+  // Mouse, finger and pen all draw the box through Pointer Events. The mouse keeps its old default handling
+  // (no focus change, no text selection); a finger is kept from scrolling by `touch-action: none` on `.stage.learnable`.
   const onMouseDown = (e: ReactMouseEvent) => {
-    if (!canLearn || e.button !== 0) return
-    e.preventDefault()
+    if (canLearn && e.button === 0) e.preventDefault()
+  }
+
+  const onPointerDown = (e: ReactPointerEvent<HTMLDivElement>) => {
+    // One box at a time: a second finger (or a second button) while a box is being drawn is ignored.
+    if (!canLearn || e.button !== 0 || dragCleanup.current) return
+    const id = e.pointerId
+    const stage = e.currentTarget
+    // Captured, the pointer keeps reporting to the stage after it leaves it (and a finger is not taken over by scrolling).
+    try {
+      stage.setPointerCapture?.(id)
+    } catch {
+      // the pointer is already gone, or the browser has no capture: the window listeners below still follow it
+    }
     const a = frameAt(e.clientX, e.clientY)
     let cur = { x0: a.x, y0: a.y, x1: a.x, y1: a.y }
     setDrag(cur)
-    const move = (ev: MouseEvent) => {
+    const move = (ev: PointerEvent) => {
+      if (ev.pointerId !== id) return
       const b = frameAt(ev.clientX, ev.clientY)
       cur = { ...cur, x1: b.x, y1: b.y }
       setDrag(cur)
     }
     const cleanup = () => {
-      window.removeEventListener('mousemove', move)
-      window.removeEventListener('mouseup', up)
+      window.removeEventListener('pointermove', move)
+      window.removeEventListener('pointerup', up)
+      window.removeEventListener('pointercancel', cancel)
       window.removeEventListener('keydown', key)
+      try {
+        stage.releasePointerCapture?.(id)
+      } catch {
+        // already released
+      }
       dragCleanup.current = null
       setDrag(null)
     }
     const key = (ev: KeyboardEvent) => {
       if (ev.key === 'Escape') cleanup()
     }
-    const up = (ev: MouseEvent) => {
+    // The browser took the pointer away (e.g. a system gesture): no box.
+    const cancel = (ev: PointerEvent) => {
+      if (ev.pointerId === id) cleanup()
+    }
+    const up = (ev: PointerEvent) => {
+      if (ev.pointerId !== id) return
       cleanup()
       const b = frameAt(ev.clientX, ev.clientY)
       const x = Math.round(Math.min(a.x, b.x))
       const y = Math.round(Math.min(a.y, b.y))
       const width = Math.round(Math.max(a.x, b.x)) - x
       const height = Math.round(Math.max(a.y, b.y)) - y
+      // A tap, or a drag too small to be a box, learns nothing.
       if (width < MIN_DRAG || height < MIN_DRAG) return
       void learn({ x, y, width, height })
     }
-    window.addEventListener('mousemove', move)
-    window.addEventListener('mouseup', up)
+    window.addEventListener('pointermove', move)
+    window.addEventListener('pointerup', up)
+    window.addEventListener('pointercancel', cancel)
     window.addEventListener('keydown', key)
     dragCleanup.current = cleanup
   }
@@ -255,79 +283,82 @@ export default function LiveStage({ ref, connected, fps, kbps, fn, canLearn, onL
         <CategoryDisc cat={FN_CATEGORY[fn]} Icon={FN_ICON[fn]} size={15} />
         <span>{t(STAGE_KEY[fn])}</span>
       </div>
-      <div ref={stageRef} className={`stage${canLearn ? ' learnable' : ''}`} onMouseDown={onMouseDown}>
-        <canvas ref={canvasRef} width={FRAME_W} height={FRAME_H} className={mirror ? 'mirrored' : undefined} />
-        {previewPaused && connected && <div className="stage-paused">{t('previewPausedNote')}</div>}
-        <div className="ls-overlay" aria-hidden="true">
-          <div className="ls-boxes">
-            {shown.filter((r) => r.kind !== 'line').map((r, i) => {
-              // Result x/y are the box centre, in true-image coordinates.
-              const style = { '--c': idColorVar(r), ...boxToScreen(vp, r, mirror) } as CSSProperties
-              return <div key={i} className={`ls-box${(r.kind === 'color' || r.kind === 'gesture') && r.id === 0 ? ' unlearned' : ''}`} style={style} />
-            })}
-          </div>
-          {fn === 4 && (
-            <svg className="ls-line" width={vp.width} height={vp.height} viewBox={`0 0 ${vp.width} ${vp.height}`}>
-              <line className="ls-roi" x1={0} x2={vp.width} y1={roiY} y2={roiY} />
-              {lineRows.map((r, i) => {
-                const a = toScreen(vp, r.line!.start[0], r.line!.start[1], mirror)
-                const b = toScreen(vp, r.line!.end[0], r.line!.end[1], mirror)
-                return (
-                  <g key={i}>
-                    <line className="ls-seg" x1={a.px} y1={a.py} x2={b.px} y2={b.py} />
-                    <circle className="ls-end" cx={a.px} cy={a.py} r={5} />
-                  </g>
-                )
+      {/* .ls-pin is the band that stays at the top of the screen in the narrow layout (theme.css). */}
+      <div className="ls-pin">
+        <div ref={stageRef} className={`stage${canLearn ? ' learnable' : ''}`} onMouseDown={onMouseDown} onPointerDown={onPointerDown}>
+          <canvas ref={canvasRef} width={FRAME_W} height={FRAME_H} className={mirror ? 'mirrored' : undefined} />
+          {previewPaused && connected && <div className="stage-paused">{t('previewPausedNote')}</div>}
+          <div className="ls-overlay" aria-hidden="true">
+            <div className="ls-boxes">
+              {shown.filter((r) => r.kind !== 'line').map((r, i) => {
+                // Result x/y are the box centre, in true-image coordinates.
+                const style = { '--c': idColorVar(r), ...boxToScreen(vp, r, mirror) } as CSSProperties
+                return <div key={i} className={`ls-box${(r.kind === 'color' || r.kind === 'gesture') && r.id === 0 ? ' unlearned' : ''}`} style={style} />
               })}
-            </svg>
-          )}
-          <div className="ls-labels">
-            {shown.map((r, i) => {
-              const box = boxToScreen(vp, r, mirror)
-              const bottom = box.top + box.height
-              // The line gets its flags as extra badges beside the main tab.
-              const tabs = [labelFor(r, learned, showNames, t)]
-              if (r.line?.cross) tabs.push(t('lineCross'))
-              if (r.line?.branch) tabs.push(t('lineBranch'))
-              let top = box.top - TAB_H - 1 // above the box
-              if (top < 0) top = bottom + 1 // below, if there is room
-              if (top + TAB_H > vp.height) top = box.top + 1 // otherwise inside the box top
-              top = clamp(top, 0, Math.max(0, vp.height - TAB_H))
-              let left = clamp(box.left - 2, 0, Math.max(0, vp.width - tabs.map(tabWidth).reduce((a, w) => a + w + 2, -2)))
-              return tabs.map((text, j) => {
-                const w = tabWidth(text)
-                const style = { '--c': idColorVar(r), left, top, width: w } as CSSProperties
-                left += w + 2
-                return (
-                  <span key={`${i}-${j}`} className={`ls-label${j > 0 ? ' ls-badge' : ''}`} style={style}>
-                    {text}
-                  </span>
-                )
-              })
-            })}
+            </div>
+            {fn === 4 && (
+              <svg className="ls-line" width={vp.width} height={vp.height} viewBox={`0 0 ${vp.width} ${vp.height}`}>
+                <line className="ls-roi" x1={0} x2={vp.width} y1={roiY} y2={roiY} />
+                {lineRows.map((r, i) => {
+                  const a = toScreen(vp, r.line!.start[0], r.line!.start[1], mirror)
+                  const b = toScreen(vp, r.line!.end[0], r.line!.end[1], mirror)
+                  return (
+                    <g key={i}>
+                      <line className="ls-seg" x1={a.px} y1={a.py} x2={b.px} y2={b.py} />
+                      <circle className="ls-end" cx={a.px} cy={a.py} r={5} />
+                    </g>
+                  )
+                })}
+              </svg>
+            )}
+            <div className="ls-labels">
+              {shown.map((r, i) => {
+                const box = boxToScreen(vp, r, mirror)
+                const bottom = box.top + box.height
+                // The line gets its flags as extra badges beside the main tab.
+                const tabs = [labelFor(r, learned, showNames, t)]
+                if (r.line?.cross) tabs.push(t('lineCross'))
+                if (r.line?.branch) tabs.push(t('lineBranch'))
+                let top = box.top - TAB_H - 1 // above the box
+                if (top < 0) top = bottom + 1 // below, if there is room
+                if (top + TAB_H > vp.height) top = box.top + 1 // otherwise inside the box top
+                top = clamp(top, 0, Math.max(0, vp.height - TAB_H))
+                let left = clamp(box.left - 2, 0, Math.max(0, vp.width - tabs.map(tabWidth).reduce((a, w) => a + w + 2, -2)))
+                return tabs.map((text, j) => {
+                  const w = tabWidth(text)
+                  const style = { '--c': idColorVar(r), left, top, width: w } as CSSProperties
+                  left += w + 2
+                  return (
+                    <span key={`${i}-${j}`} className={`ls-label${j > 0 ? ' ls-badge' : ''}`} style={style}>
+                      {text}
+                    </span>
+                  )
+                })
+              })}
+            </div>
+            {lost && <div className="ls-lost">{t('targetLost')}</div>}
+            {connected && !previewPaused && <div className="ls-crosshair" style={{ left: centre.px, top: centre.py }} />}
+            {dragBox && <div className="ls-drag" style={dragBox} />}
           </div>
-          {lost && <div className="ls-lost">{t('targetLost')}</div>}
-          {connected && !previewPaused && <div className="ls-crosshair" style={{ left: centre.px, top: centre.py }} />}
-          {dragBox && <div className="ls-drag" style={dragBox} />}
+          <div className="stage-stats">
+            {previewPaused ? (
+              <>
+                {t('resultsRate')} {resultsRate.toFixed(1)}/s
+              </>
+            ) : (
+              <>
+                {fps.toFixed(1)} {t('fps')}
+              </>
+            )}
+            {!previewPaused && kbps !== null && (
+              <>
+                {' / '}
+                {kbps.toFixed(1)} {t('kbps')}
+              </>
+            )}
+          </div>
+          {!connected && <div className="stage-idle">{t('liveIdle')}</div>}
         </div>
-        <div className="stage-stats">
-          {previewPaused ? (
-            <>
-              {t('resultsRate')} {resultsRate.toFixed(1)}/s
-            </>
-          ) : (
-            <>
-              {fps.toFixed(1)} {t('fps')}
-            </>
-          )}
-          {!previewPaused && kbps !== null && (
-            <>
-              {' / '}
-              {kbps.toFixed(1)} {t('kbps')}
-            </>
-          )}
-        </div>
-        {!connected && <div className="stage-idle">{t('liveIdle')}</div>}
       </div>
       <div className="stage-actions">
         {canLearn && (

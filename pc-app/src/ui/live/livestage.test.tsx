@@ -80,10 +80,10 @@ test('dragging on the stage learns the region in frame coordinates', async () =>
   const onLearn = vi.fn(async () => 3)
   const { container } = setup({ onLearn })
   const stage = container.querySelector('.stage')!
-  fireEvent.mouseDown(stage, { clientX: 20, clientY: 20 })
-  fireEvent.mouseMove(window, { clientX: 100, clientY: 80 })
+  fireEvent.pointerDown(stage, { clientX: 20, clientY: 20 })
+  fireEvent.pointerMove(window, { clientX: 100, clientY: 80 })
   await act(async () => {
-    fireEvent.mouseUp(window, { clientX: 100, clientY: 80 })
+    fireEvent.pointerUp(window, { clientX: 100, clientY: 80 })
   })
   expect(onLearn).toHaveBeenCalledWith({ x: 10, y: 10, width: 40, height: 30 })
   expect(await screen.findByText('已學習 ID3')).toBeTruthy()
@@ -94,15 +94,15 @@ test('drag is clamped to the frame and tiny drags are ignored', async () => {
   const onLearn = vi.fn(async () => 1)
   const { container } = setup({ onLearn })
   const stage = container.querySelector('.stage')!
-  fireEvent.mouseDown(stage, { clientX: 600, clientY: 400 })
+  fireEvent.pointerDown(stage, { clientX: 600, clientY: 400 })
   await act(async () => {
-    fireEvent.mouseUp(window, { clientX: 900, clientY: 700 })
+    fireEvent.pointerUp(window, { clientX: 900, clientY: 700 })
   })
   expect(onLearn).toHaveBeenCalledWith({ x: 300, y: 200, width: 20, height: 40 })
   onLearn.mockClear()
-  fireEvent.mouseDown(stage, { clientX: 100, clientY: 100 })
+  fireEvent.pointerDown(stage, { clientX: 100, clientY: 100 })
   await act(async () => {
-    fireEvent.mouseUp(window, { clientX: 102, clientY: 102 })
+    fireEvent.pointerUp(window, { clientX: 102, clientY: 102 })
   })
   expect(onLearn).not.toHaveBeenCalled()
 })
@@ -111,9 +111,9 @@ test('no dragging when learning is unavailable', async () => {
   stubRect(640, 480)
   const onLearn = vi.fn(async () => 1)
   const { container } = setup({ onLearn, canLearn: false })
-  fireEvent.mouseDown(container.querySelector('.stage')!, { clientX: 0, clientY: 0 })
+  fireEvent.pointerDown(container.querySelector('.stage')!, { clientX: 0, clientY: 0 })
   await act(async () => {
-    fireEvent.mouseUp(window, { clientX: 200, clientY: 200 })
+    fireEvent.pointerUp(window, { clientX: 200, clientY: 200 })
   })
   expect(onLearn).not.toHaveBeenCalled()
   expect(screen.queryByRole('button', { name: '學習中央' })).toBeNull()
@@ -238,10 +238,10 @@ test('Escape cancels a drag', async () => {
   stubRect(640, 480)
   const onLearn = vi.fn(async () => 1)
   const { container } = setup({ onLearn })
-  fireEvent.mouseDown(container.querySelector('.stage')!, { clientX: 20, clientY: 20 })
+  fireEvent.pointerDown(container.querySelector('.stage')!, { clientX: 20, clientY: 20 })
   fireEvent.keyDown(window, { key: 'Escape' })
   await act(async () => {
-    fireEvent.mouseUp(window, { clientX: 200, clientY: 200 })
+    fireEvent.pointerUp(window, { clientX: 200, clientY: 200 })
   })
   expect(onLearn).not.toHaveBeenCalled()
 })
@@ -297,9 +297,9 @@ test('mirror view: dragging learns the TRUE-image region (x = 320 - x - w)', asy
   const { container } = setup({ onLearn })
   const stage = container.querySelector('.stage')!
   // on screen: frame-space 10..50 x 10..40 of the mirrored picture
-  fireEvent.mouseDown(stage, { clientX: 20, clientY: 20 })
+  fireEvent.pointerDown(stage, { clientX: 20, clientY: 20 })
   await act(async () => {
-    fireEvent.mouseUp(window, { clientX: 100, clientY: 80 })
+    fireEvent.pointerUp(window, { clientX: 100, clientY: 80 })
   })
   expect(onLearn).toHaveBeenCalledWith({ x: 270, y: 10, width: 40, height: 30 })
 })
@@ -315,9 +315,9 @@ test('gesture function: boxes get labels and dragging does not learn', async () 
   const { container } = setup({ fn: 8, canLearn: false, onLearn, results: [{ id: 6, kind: 'gesture', confidence: 92, x: 100, y: 100, width: 40, height: 40 }] })
   expect(screen.getByText('讚 92%')).toBeInTheDocument()
   const stage = container.querySelector('.stage')!
-  fireEvent.mouseDown(stage, { clientX: 20, clientY: 20 })
+  fireEvent.pointerDown(stage, { clientX: 20, clientY: 20 })
   await act(async () => {
-    fireEvent.mouseUp(window, { clientX: 100, clientY: 80 })
+    fireEvent.pointerUp(window, { clientX: 100, clientY: 80 })
   })
   expect(onLearn).not.toHaveBeenCalled()
 })
@@ -449,9 +449,9 @@ test('line: a branch gets its own badge; learning is available when canLearn', a
   const onLearn = vi.fn(async () => 1)
   const { container } = setup({ fn: 4, canLearn: true, onLearn, results: [{ ...lineResult, line: { ...lineResult.line!, cross: false, branch: true } }] })
   expect(screen.getByText('岔路')).toBeInTheDocument()
-  fireEvent.mouseDown(container.querySelector('.stage')!, { clientX: 20, clientY: 20 })
+  fireEvent.pointerDown(container.querySelector('.stage')!, { clientX: 20, clientY: 20 })
   await act(async () => {
-    fireEvent.mouseUp(window, { clientX: 100, clientY: 80 })
+    fireEvent.pointerUp(window, { clientX: 100, clientY: 80 })
   })
   expect(onLearn).toHaveBeenCalledWith({ x: 20, y: 20, width: 80, height: 60 })
   expect(await screen.findByText('已學習線的顏色')).toBeInTheDocument()
@@ -484,9 +484,164 @@ test('no-target error has its own message', async () => {
   })
   const { container } = setup({ fn: 5, onLearn })
   stubRect(320, 240)
-  fireEvent.mouseDown(container.querySelector('.stage')!, { clientX: 20, clientY: 20 })
+  fireEvent.pointerDown(container.querySelector('.stage')!, { clientX: 20, clientY: 20 })
   await act(async () => {
-    fireEvent.mouseUp(window, { clientX: 100, clientY: 80 })
+    fireEvent.pointerUp(window, { clientX: 100, clientY: 80 })
   })
   expect(await screen.findByText(/找不到可追蹤的物體/)).toBeInTheDocument()
+})
+
+// ---- touch and pen (ADR-0023): the box is drawn with Pointer Events ----
+/** jsdom has no pointer capture; these stand in for it so the calls can be seen. */
+function stubCapture() {
+  const proto = HTMLElement.prototype as unknown as Record<string, unknown>
+  const set = vi.fn()
+  const release = vi.fn()
+  proto.setPointerCapture = set
+  proto.releasePointerCapture = release
+  return { set, release }
+}
+afterEach(() => {
+  const proto = HTMLElement.prototype as unknown as Record<string, unknown>
+  delete proto.setPointerCapture
+  delete proto.releasePointerCapture
+})
+
+test.each(['mouse', 'touch', 'pen'] as const)('%s: pointer down / move / up learns the same region, with the pointer captured', async (pointerType) => {
+  stubRect(640, 480) // scale 2
+  const cap = stubCapture()
+  const onLearn = vi.fn(async () => 3)
+  const { container } = setup({ onLearn })
+  const stage = container.querySelector('.stage')!
+  const p = { pointerId: 7, pointerType, button: 0 }
+  fireEvent.pointerDown(stage, { ...p, clientX: 20, clientY: 20 })
+  expect(cap.set).toHaveBeenCalledWith(7)
+  // Captured, the moves arrive at the stage (and bubble); the box follows them.
+  fireEvent.pointerMove(stage, { ...p, clientX: 60, clientY: 50 })
+  const box = container.querySelector<HTMLElement>('.ls-drag')!
+  expect([box.style.left, box.style.top, box.style.width, box.style.height]).toEqual(['20px', '20px', '40px', '30px'])
+  await act(async () => {
+    fireEvent.pointerUp(stage, { ...p, clientX: 100, clientY: 80 })
+  })
+  expect(onLearn).toHaveBeenCalledTimes(1)
+  expect(onLearn).toHaveBeenCalledWith({ x: 10, y: 10, width: 40, height: 30 }) // the region of the first drag test above
+  expect(cap.release).toHaveBeenCalledWith(7)
+  expect(container.querySelector('.ls-drag')).toBeNull()
+  expect(await screen.findByText('已學習 ID3')).toBeTruthy()
+})
+
+test('touch with mirror view on: the box learns the TRUE-image region, as the mouse does', async () => {
+  localStorage.removeItem('mxcam.mirror') // mirror on (the default)
+  stubRect(640, 480)
+  stubCapture()
+  const onLearn = vi.fn(async () => 3)
+  const { container } = setup({ onLearn })
+  const stage = container.querySelector('.stage')!
+  const p = { pointerId: 3, pointerType: 'touch', button: 0 }
+  fireEvent.pointerDown(stage, { ...p, clientX: 20, clientY: 20 })
+  fireEvent.pointerMove(stage, { ...p, clientX: 100, clientY: 80 })
+  // The box is under the finger, on the mirrored picture.
+  expect(container.querySelector<HTMLElement>('.ls-drag')!.style.left).toBe('20px')
+  await act(async () => {
+    fireEvent.pointerUp(stage, { ...p, clientX: 100, clientY: 80 })
+  })
+  expect(onLearn).toHaveBeenCalledWith({ x: 270, y: 10, width: 40, height: 30 })
+})
+
+test('a tap without movement does not learn', async () => {
+  stubRect(640, 480)
+  stubCapture()
+  const onLearn = vi.fn(async () => 1)
+  const { container } = setup({ onLearn })
+  const stage = container.querySelector('.stage')!
+  const p = { pointerId: 1, pointerType: 'touch', button: 0, clientX: 200, clientY: 150 }
+  fireEvent.pointerDown(stage, p)
+  await act(async () => {
+    fireEvent.pointerUp(stage, p)
+  })
+  expect(onLearn).not.toHaveBeenCalled()
+  expect(container.querySelector('.ls-drag')).toBeNull()
+  expect(screen.queryByRole('status')).toBeNull() // no message either: nothing new happens
+})
+
+test('the browser taking the touch away (pointercancel) drops the box without learning', async () => {
+  stubRect(640, 480)
+  const cap = stubCapture()
+  const onLearn = vi.fn(async () => 1)
+  const { container } = setup({ onLearn })
+  const stage = container.querySelector('.stage')!
+  const p = { pointerId: 1, pointerType: 'touch', button: 0 }
+  fireEvent.pointerDown(stage, { ...p, clientX: 20, clientY: 20 })
+  fireEvent.pointerMove(stage, { ...p, clientX: 200, clientY: 200 })
+  expect(container.querySelector('.ls-drag')).not.toBeNull()
+  fireEvent.pointerCancel(stage, p)
+  expect(container.querySelector('.ls-drag')).toBeNull()
+  expect(cap.release).toHaveBeenCalledWith(1)
+  await act(async () => {
+    fireEvent.pointerUp(stage, { ...p, clientX: 200, clientY: 200 })
+  })
+  expect(onLearn).not.toHaveBeenCalled()
+})
+
+test('a second finger while a box is being drawn neither moves nor finishes it', async () => {
+  stubRect(640, 480)
+  const cap = stubCapture()
+  const onLearn = vi.fn(async () => 1)
+  const { container } = setup({ onLearn })
+  const stage = container.querySelector('.stage')!
+  const first = { pointerId: 1, pointerType: 'touch', button: 0 }
+  const second = { pointerId: 2, pointerType: 'touch', button: 0 }
+  fireEvent.pointerDown(stage, { ...first, clientX: 20, clientY: 20 })
+  fireEvent.pointerDown(stage, { ...second, clientX: 400, clientY: 400 })
+  expect(cap.set).toHaveBeenCalledTimes(1)
+  fireEvent.pointerMove(stage, { ...second, clientX: 500, clientY: 450 })
+  await act(async () => {
+    fireEvent.pointerUp(stage, { ...second, clientX: 500, clientY: 450 })
+  })
+  expect(onLearn).not.toHaveBeenCalled()
+  await act(async () => {
+    fireEvent.pointerUp(stage, { ...first, clientX: 100, clientY: 80 })
+  })
+  expect(onLearn).toHaveBeenCalledWith({ x: 10, y: 10, width: 40, height: 30 })
+})
+
+test('no pointer capture in the browser: the box is still drawn from the window events', async () => {
+  stubRect(640, 480)
+  const onLearn = vi.fn(async () => 1)
+  const { container } = setup({ onLearn })
+  const p = { pointerId: 1, pointerType: 'touch', button: 0 }
+  fireEvent.pointerDown(container.querySelector('.stage')!, { ...p, clientX: 20, clientY: 20 })
+  await act(async () => {
+    fireEvent.pointerUp(window, { ...p, clientX: 100, clientY: 80 })
+  })
+  expect(onLearn).toHaveBeenCalledWith({ x: 10, y: 10, width: 40, height: 30 })
+})
+
+test('a mouse press keeps its old default handling: only the left button on a learnable stage is prevented', () => {
+  const { container, unmount } = setup()
+  const stage = container.querySelector('.stage')!
+  expect(fireEvent.mouseDown(stage, { button: 0 })).toBe(false) // preventDefault(): no focus change, no text selection
+  expect(fireEvent.mouseDown(stage, { button: 2 })).toBe(true)
+  unmount()
+  const off = setup({ canLearn: false })
+  expect(fireEvent.mouseDown(off.container.querySelector('.stage')!, { button: 0 })).toBe(true)
+})
+
+test('the right mouse button does not start a box', async () => {
+  stubRect(640, 480)
+  const onLearn = vi.fn(async () => 1)
+  const { container } = setup({ onLearn })
+  fireEvent.pointerDown(container.querySelector('.stage')!, { pointerId: 1, pointerType: 'mouse', button: 2, clientX: 20, clientY: 20 })
+  expect(container.querySelector('.ls-drag')).toBeNull()
+  await act(async () => {
+    fireEvent.pointerUp(window, { pointerId: 1, pointerType: 'mouse', button: 2, clientX: 100, clientY: 80 })
+  })
+  expect(onLearn).not.toHaveBeenCalled()
+})
+
+test('the stage only takes touches over (class `learnable`; touch-action: none in theme.css) while a box can be drawn', () => {
+  const { container, unmount } = setup({ canLearn: true })
+  expect(container.querySelector('.stage')).toHaveClass('learnable')
+  unmount()
+  expect(setup({ canLearn: false, fn: 8 }).container.querySelector('.stage')).not.toHaveClass('learnable')
 })

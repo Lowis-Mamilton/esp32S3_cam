@@ -1,6 +1,7 @@
 export const zhTW = {
   appTitle: 'MXCam Studio',
-  unsupported: '此瀏覽器不支援，請用 Chrome 或 Edge',
+  unsupported: '這台裝置的瀏覽器連不上 MXCam，可以先用展示模式。要連線請改用電腦或 Android 的 Chrome、Edge。',
+  demoTurnOn: '開啟展示模式',
   connect: '連線',
   connectUsb: 'USB 連線',
   connectBluetooth: '藍牙連線',

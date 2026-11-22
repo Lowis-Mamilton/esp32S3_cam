@@ -118,7 +118,6 @@ button {
   display: flex;
   flex-direction: column;
   height: 100%;
-  min-width: 1024px;
 }
 
 .muted {
@@ -180,28 +179,35 @@ button {
 }
 
 /* ---- navbar (tb-*) ---- */
+/*
+ * Start and end take equal shares, which keeps the status in the middle. A side that needs more than its share
+ * (two connect buttons, English labels) takes it and the status moves over; if even that is not enough the end
+ * group drops to a second row. Nothing ever overlaps.
+ */
 .topbar {
-  display: grid;
-  grid-template-columns: 1fr auto 1fr;
+  display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 12px;
-  height: var(--navbar-h);
-  padding: 0 12px 0 16px;
+  gap: 6px 12px;
+  min-height: var(--navbar-h);
+  padding: 4px 12px 4px 16px;
   background: var(--surface);
   border-bottom: 1px solid var(--line);
 }
 .tb-start,
 .tb-end {
   display: flex;
+  flex: 1 1 0;
   align-items: center;
   gap: 8px;
-  min-width: 0;
+  min-width: max-content;
 }
 .tb-end {
   justify-content: flex-end;
 }
 .tb-centre {
   display: flex;
+  flex: none;
   justify-content: center;
 }
 .brand {
@@ -375,6 +381,11 @@ button {
   color: var(--text-faint);
 }
 
+/* Connect / disconnect: one group in the markup; side by side with the rest when wide, a row of its own when narrow. */
+.tb-connect {
+  display: contents;
+}
+
 /* ---- banners under the navbar (app-*) ---- */
 .app-alert {
   display: flex;
@@ -518,6 +529,9 @@ button {
   background: var(--surface);
   box-shadow: var(--shadow);
 }
+.app-notice p {
+  margin: 0 0 12px;
+}
 
 /* ---- block look shared by the hat, "learn centre" and the parameters ---- */
 /* An icon section on the left, divided from the label by a darker seam. */
@@ -587,6 +601,10 @@ button {
   border-radius: 0 var(--radius-lg) var(--radius-lg) var(--radius-lg);
   box-shadow: var(--shadow);
 }
+/* The band the picture sits in. Wide: no box of its own. Narrow: full width, pinned to the top (see the end of this file). */
+.ls-pin {
+  display: contents;
+}
 .stage canvas {
   image-rendering: auto;
   display: block;
@@ -600,6 +618,10 @@ button {
 .stage.learnable {
   cursor: crosshair;
   user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+  /* A finger or pen draws the learning box instead of scrolling the page; only while a box can be drawn. */
+  touch-action: none;
 }
 .stage-stats {
   position: absolute;
@@ -1572,5 +1594,379 @@ button {
   }
   .tb-switch-track::after {
     transition: transform 0.15s ease;
+  }
+}
+
+/*
+ * ==== narrow layout: phones and tablets (docs/adr/0023, docs/studio-ui.md section 2) ====
+ * Below 960 px the three columns become one: top bar, function strip, picture, its controls,
+ * tabs + tab content, and the save bar stuck to the bottom of the screen. CSS only: the markup is
+ * the same as in the wide layout, so anything added to the panel or the function list follows along.
+ */
+@media (max-width: 959.98px) {
+  /* The page itself scrolls (the wide layout scrolls inside its columns). */
+  html,
+  body,
+  #root {
+    height: auto;
+    min-height: 100%;
+  }
+  .app {
+    height: auto;
+    min-height: 100vh;
+    min-height: 100dvh;
+  }
+
+  /* Top bar: wraps into rows instead of one fixed line. Name + status, then demo + language, then connect. */
+  .topbar {
+    gap: 6px 8px;
+    padding: 6px 12px;
+  }
+  .tb-start {
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+  .tb-centre {
+    flex: 0 1 auto;
+    min-width: 0;
+  }
+  .tb-end {
+    display: contents;
+  }
+  .tb-seg {
+    margin-left: auto;
+  }
+  .tb-connect {
+    display: flex;
+    flex: 1 1 auto;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    gap: 8px;
+  }
+  .demo-badge {
+    height: 24px;
+    padding: 0 8px;
+    font-size: 12px;
+  }
+  .conn-status {
+    gap: 6px;
+    max-width: 100%;
+    padding: 0 10px 0 8px;
+  }
+
+  /* Notices stay in sight while the page is scrolled (e.g. the reason a greyed-out function cannot be chosen). */
+  .app-alert,
+  .app-info {
+    position: sticky;
+    top: 0;
+    z-index: 8;
+    padding: 8px 12px;
+  }
+  .app-alert {
+    z-index: 9;
+  }
+
+  .app-columns {
+    display: flex;
+    flex-direction: column;
+    flex: 1 0 auto;
+    background-color: var(--workspace);
+    background-image: radial-gradient(circle, var(--dot) 1.1px, transparent 1.5px);
+    background-size: 24px 24px;
+  }
+
+  /* Function list: one strip that scrolls sideways; settings and firmware sit at its end. */
+  .sidebar {
+    flex: none;
+    flex-direction: row;
+    align-items: stretch;
+    padding: 6px 8px;
+    border-right: 0;
+    border-bottom: 1px solid var(--line);
+    overflow-x: auto;
+    overflow-y: hidden;
+    overscroll-behavior-x: contain;
+    scrollbar-width: thin;
+    /* Soft edge shadows that show only where more of the strip is hidden. */
+    background:
+      linear-gradient(to right, var(--surface) 40%, rgba(255, 255, 255, 0)) left / 28px 100% no-repeat local,
+      linear-gradient(to left, var(--surface) 40%, rgba(255, 255, 255, 0)) right / 28px 100% no-repeat local,
+      linear-gradient(to right, rgba(0, 0, 0, 0.14), rgba(0, 0, 0, 0)) left / 10px 100% no-repeat scroll,
+      linear-gradient(to left, rgba(0, 0, 0, 0.14), rgba(0, 0, 0, 0)) right / 10px 100% no-repeat scroll,
+      var(--surface);
+  }
+  .sidebar .nav-item {
+    flex: none;
+    gap: 3px;
+    min-width: 62px;
+    padding: 6px 8px 5px;
+    font-size: 11.5px;
+  }
+  .nav-label {
+    overflow-wrap: normal;
+    white-space: nowrap;
+  }
+  .nav-rule {
+    flex: none;
+    align-self: center;
+    width: 0;
+    height: 36px;
+    margin: 0 6px;
+    border-top: 0;
+    border-left: 1px solid var(--line);
+  }
+
+  /*
+   * The centre column and the right panel give up their own boxes, so their parts line up in the one column
+   * and the picture band / save bar can stick against the whole page (not just their old column).
+   */
+  .app-center,
+  .stage-wrap,
+  .rightpanel {
+    display: contents;
+  }
+  /* The strip right above already names the function. */
+  .ls-hat {
+    display: none;
+  }
+  .ls-pin {
+    flex: none;
+    display: flex;
+    justify-content: center;
+    z-index: 5;
+    background: var(--stage-frame);
+  }
+  .stage {
+    flex: none;
+    box-sizing: border-box;
+    /* Full width, but never taller than what the save bar leaves of the screen (a phone on its side). */
+    width: min(100%, calc((100vh - 80px) * 4 / 3));
+    width: min(100%, calc((100svh - 80px) * 4 / 3));
+    border: 0;
+    border-radius: 0;
+    box-shadow: none;
+  }
+  .stage-actions {
+    flex: none;
+    flex-wrap: wrap;
+    gap: 6px;
+    min-height: 0;
+    margin: 0;
+    padding: 10px;
+  }
+  /* Hint and result go under the buttons, on a line of their own when they do not fit. */
+  .stage-actions > .muted,
+  .ls-msg {
+    order: 1;
+    max-width: 100%;
+    border-radius: 18px;
+  }
+  /* Slightly tighter, so "learn centre", pause and mirror share one line on a 360 px phone. */
+  .btn.ls-block .ls-block-icon {
+    margin: 0 10px;
+  }
+  .btn.ls-block::before {
+    left: 38px;
+  }
+  .ls-block-label {
+    padding: 0 10px 0 8px;
+  }
+  .ls-mirror {
+    gap: 5px;
+    padding: 0 10px 0 8px;
+  }
+
+  /* Right panel: tabs and one full-width sheet; the save bar stays at the bottom of the screen. */
+  .rp-tabs {
+    flex: none;
+    padding: 8px 12px;
+    background: var(--bg);
+    border-top: 1px solid var(--line);
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+  .rp-tabs button {
+    flex: 1 0 auto;
+    white-space: nowrap;
+  }
+  .rp-tabpanel {
+    flex: 1 0 auto;
+    padding: 14px 12px 20px;
+    border-width: 1px 0 0;
+    border-radius: 0;
+    /* A wide table or code line scrolls inside the sheet, never the page. */
+    overflow-x: auto;
+  }
+  .rp-savebar {
+    position: sticky;
+    bottom: 0;
+    z-index: 6;
+    flex: none;
+    padding: 10px 12px;
+    border-width: 1px 0 0;
+    border-radius: 0;
+    box-shadow: 0 -6px 16px rgba(0, 0, 0, 0.06);
+  }
+
+  /* Settings and firmware pages: one column, controls as wide as the page. */
+  .pg,
+  .pg-wide {
+    align-self: stretch;
+    width: auto;
+    margin: 12px;
+    padding: 16px 14px 4px;
+  }
+  .app-notice {
+    align-self: center;
+    max-width: none;
+    margin: 16px 12px;
+  }
+  .pg-section {
+    padding: 4px 12px 12px;
+  }
+  .pg-info {
+    grid-template-columns: minmax(0, max-content) minmax(0, 1fr);
+    gap: 6px 14px;
+  }
+  .pg-info dd {
+    overflow-wrap: anywhere;
+  }
+  .pg-row {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 6px;
+    padding: 10px 0;
+  }
+  .pg-seg,
+  .pg-hex {
+    display: flex;
+  }
+  .pg-seg label {
+    flex: 1;
+    text-align: center;
+  }
+  .pg-hex input {
+    flex: 1;
+    width: auto;
+    min-width: 0;
+  }
+  .pg-tiles {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .pg-art-svg {
+    max-width: 100%;
+  }
+}
+
+/*
+ * Tall enough to show the picture and the panel together: the picture stays at the top while the rest scrolls,
+ * so a parameter can be changed with the result in sight. Shorter (a phone on its side): everything scrolls.
+ */
+@media (max-width: 959.98px) and (min-height: 600px) {
+  .ls-pin {
+    position: sticky;
+    top: 0;
+  }
+  .stage {
+    /* At most a bit over half the screen height, so the panel keeps its share. */
+    width: min(100%, calc(55vh * 4 / 3));
+  }
+}
+
+/*
+ * The narrowest wide windows (960-1023 px; before, the page never got narrower than 1024): the controls under the
+ * picture no longer fit on one line, so the hint drops under the buttons as it does in the narrow layout.
+ */
+@media (min-width: 960px) and (max-width: 1023.98px) {
+  .stage-actions {
+    flex-wrap: wrap;
+  }
+  .stage-actions > .muted,
+  .ls-msg {
+    order: 1;
+  }
+}
+
+/* ==== touch: every target at least 44 x 44 px (both layouts) ==== */
+@media (pointer: coarse) {
+  .btn,
+  .nav-item,
+  .tb-seg button,
+  .rp-tabs button {
+    min-width: 44px;
+    min-height: 44px;
+    /* An explicit minimum replaces the automatic one (the content's size), so say it: never squeeze below the label. */
+    flex-shrink: 0;
+  }
+  .tb-switch,
+  .ls-mirror {
+    min-height: 44px;
+  }
+  .rp-icon,
+  .app-alert-close {
+    width: 44px;
+    height: 44px;
+  }
+  .rp-input {
+    height: 44px;
+  }
+  .rp-check input,
+  .ls-mirror input {
+    width: 20px;
+    height: 20px;
+  }
+  .rp-params .rp-check {
+    min-height: 48px;
+  }
+  .pg-seg label {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 44px;
+    min-height: 44px;
+  }
+  .pg-hex input {
+    min-width: 44px;
+    height: 44px;
+  }
+
+  /*
+   * Sliders: the thumb is a 44 px square to touch, with the round knob drawn in its middle.
+   * The input reaches 10 px past the block's text on both sides so the knob still travels edge to edge.
+   */
+  .rp-slider input {
+    --knob-edge: var(--block-edge);
+    width: calc(100% + 20px);
+    height: 44px;
+    margin: 0 -10px;
+    touch-action: pan-y;
+  }
+  .rp-slider input:disabled {
+    --knob-edge: var(--block-off-edge);
+  }
+  .rp-slider input::-webkit-slider-runnable-track {
+    height: 44px;
+    border-radius: 0;
+    background: linear-gradient(rgba(255, 255, 255, 0.35), rgba(255, 255, 255, 0.35)) center / calc(100% - 44px) 6px no-repeat;
+  }
+  .rp-slider input::-webkit-slider-thumb {
+    width: 44px;
+    height: 44px;
+    margin-top: 0;
+    border: 0;
+    background: radial-gradient(circle, #fff 0 9px, var(--knob-edge) 9.5px 12px, rgba(0, 0, 0, 0) 12.5px);
+  }
+  .rp-slider input::-moz-range-track {
+    border-radius: 0;
+    background: linear-gradient(rgba(255, 255, 255, 0.35), rgba(255, 255, 255, 0.35)) center / calc(100% - 44px) 100% no-repeat;
+  }
+  .rp-slider input::-moz-range-thumb {
+    width: 44px;
+    height: 44px;
+    border: 0;
+    background: radial-gradient(circle, #fff 0 9px, var(--knob-edge) 9.5px 12px, rgba(0, 0, 0, 0) 12.5px);
+  }
+  .rp-slider-range {
+    margin-top: -10px;
   }
 }

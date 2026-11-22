@@ -1,4 +1,4 @@
-import { Fragment, useId } from 'react'
+import { Fragment, useEffect, useId, useRef } from 'react'
 import { Cpu, Settings } from 'lucide-react'
 import { useT, type MessageKey } from '../../i18n'
 import CategoryDisc from './CategoryDisc'
@@ -12,6 +12,8 @@ interface Props {
   /** Real mode without a connection: the hint is "connect first", not "update firmware". */
   needConnect?: boolean
   onSelect(v: View): void
+  /** A greyed-out function was clicked or tapped: the hint a mouse gets by hovering (touch has no hover). */
+  onUnavailable?(hint: MessageKey): void
 }
 
 const FUNCTIONS: { id: FunctionId; key: MessageKey }[] = [
@@ -23,12 +25,32 @@ const FUNCTIONS: { id: FunctionId; key: MessageKey }[] = [
   { id: 8, key: 'fnGesture' },
 ]
 
-export default function Sidebar({ view, supported, needConnect = false, onSelect }: Props) {
+/** Scrolls only the list itself (a rail when wide, a sideways strip when narrow), never the page. */
+function keepVisible(box: HTMLElement, item: HTMLElement) {
+  const b = box.getBoundingClientRect()
+  const r = item.getBoundingClientRect()
+  const pad = 8 // a little of the neighbour stays in sight, so it is clear the list goes on
+  if (r.left < b.left + pad) box.scrollLeft -= b.left + pad - r.left
+  else if (r.right > b.right - pad) box.scrollLeft += r.right - (b.right - pad)
+  if (r.top < b.top + pad) box.scrollTop -= b.top + pad - r.top
+  else if (r.bottom > b.bottom - pad) box.scrollTop += r.bottom - (b.bottom - pad)
+}
+
+export default function Sidebar({ view, supported, needConnect = false, onSelect, onUnavailable }: Props) {
   const { t } = useT()
   const base = useId()
-  const hint = t(needConnect ? 'needConnect' : 'needFirmware')
+  const hintKey: MessageKey = needConnect ? 'needConnect' : 'needFirmware'
+  const hint = t(hintKey)
+  const navRef = useRef<HTMLElement>(null)
+  // The current item stays in sight, also when another device (the R4) switched the function.
+  const currentKey = view.kind === 'function' ? view.id : view.kind
+  useEffect(() => {
+    const nav = navRef.current
+    const item = nav?.querySelector<HTMLElement>('[aria-current="page"]')
+    if (nav && item) keepVisible(nav, item)
+  }, [currentKey])
   return (
-    <nav className="sidebar" aria-label={t('navFunctions')}>
+    <nav ref={navRef} className="sidebar" aria-label={t('navFunctions')}>
       {FUNCTIONS.map(({ id, key }) => {
         const ok = !needConnect && supported.includes(id)
         const current = view.kind === 'function' && view.id === id
@@ -41,7 +63,7 @@ export default function Sidebar({ view, supported, needConnect = false, onSelect
               aria-disabled={ok ? undefined : true}
               title={ok ? undefined : hint}
               aria-describedby={ok ? undefined : `${base}-${id}`}
-              onClick={() => ok && onSelect({ kind: 'function', id })}
+              onClick={() => (ok ? onSelect({ kind: 'function', id }) : onUnavailable?.(hintKey))}
             >
               <CategoryDisc cat={FN_CATEGORY[id]} Icon={FN_ICON[id]} />
               <span className="nav-label">{t(key)}</span>

@@ -34,6 +34,8 @@ const SHOW_NAMES: Record<FunctionId, (p: DeviceSnapshot['params']) => boolean> =
 }
 const CAN_LEARN: Record<FunctionId, boolean> = { 1: true, 2: false, 3: false, 4: true, 5: true, 8: false }
 const NOTICE_MS = 4000
+/** What a tap on a greyed-out function says; the same text a mouse sees as the hover hint. */
+type TapHint = { key: MessageKey }
 const SET_FUNCTION_RETRY_MS = 500
 
 interface Props {
@@ -75,6 +77,8 @@ export default function App({ serial, bluetooth }: Props) {
   // fn 0 = another device switched the board to "none" (the page stays as it is).
   const [noticeOf, setNoticeOf] = useState<{ device: Device; fn: FunctionId | 0 } | null>(null)
   const notice = noticeOf && noticeOf.device === device ? noticeOf.fn : null
+  // A new object per tap, so tapping again restarts the timer.
+  const [tapHint, setTapHint] = useState<TapHint | null>(null)
   const liveRef = useRef<LiveStageHandle>(null)
   const userClosed = useRef(false)
 
@@ -101,6 +105,12 @@ export default function App({ serial, bluetooth }: Props) {
     const timer = setTimeout(() => setNoticeOf(null), NOTICE_MS)
     return () => clearTimeout(timer)
   }, [noticeOf])
+
+  useEffect(() => {
+    if (!tapHint) return
+    const timer = setTimeout(() => setTapHint(null), NOTICE_MS)
+    return () => clearTimeout(timer)
+  }, [tapHint])
 
   // The device must be told which function is active: it does not know what the user is looking at.
   // Sent on every view change and after each (re)connect; older firmware rejects it, which is fine.
@@ -197,11 +207,32 @@ export default function App({ serial, bluetooth }: Props) {
           {notice === 0 ? t('fnSwitchedNone') : t('fnSwitched', { fn: t(FN_KEY[notice]) })}
         </p>
       )}
+      {/* Touch has no hover: a tap on a greyed-out function says why here, where the other short notices go. */}
+      {tapHint && (
+        <p role="status" className="app-info" data-slot="fn-hint">
+          {t(tapHint.key)}
+        </p>
+      )}
       <div className="app-columns">
-        <Sidebar view={view} supported={supported} needConnect={needsConnection(snapshot)} onSelect={select} />
+        <Sidebar
+          view={view}
+          supported={supported}
+          needConnect={needsConnection(snapshot)}
+          onSelect={(v) => {
+            setTapHint(null)
+            select(v)
+          }}
+          onUnavailable={(key) => setTapHint({ key })}
+        />
         <main className="app-center">
           {status === 'unsupported' ? (
-            <p className="app-notice">{t('unsupported')}</p>
+            // Neither Web Serial nor Web Bluetooth (e.g. every iPhone/iPad browser): demo mode is all that works.
+            <div className="app-notice">
+              <p>{t('unsupported')}</p>
+              <button type="button" className="btn primary" onClick={() => setDemo(true)}>
+                {t('demoTurnOn')}
+              </button>
+            </div>
           ) : view.kind === 'function' ? (
             <LiveStage
               ref={liveRef}

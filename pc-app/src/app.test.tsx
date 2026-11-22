@@ -24,6 +24,9 @@ beforeEach(() => {
   }
 })
 
+/** Shown when the browser has neither Web Serial nor Web Bluetooth (docs/adr/0023). */
+const UNSUPPORTED = translate('zh-TW', 'unsupported')
+
 const idleSerial = {
   addEventListener: () => {},
   removeEventListener: () => {},
@@ -45,7 +48,7 @@ test('renders a single heading per test (cleanup between tests)', () => {
 
 test('without navigator.serial shows the unsupported message and no connect button', () => {
   renderApp()
-  expect(screen.getByText('此瀏覽器不支援，請用 Chrome 或 Edge')).toBeInTheDocument()
+  expect(screen.getByText(UNSUPPORTED)).toBeInTheDocument()
   expect(screen.queryByRole('button', { name: '連線' })).not.toBeInTheDocument()
 })
 
@@ -54,7 +57,7 @@ test('when disconnected shows the connect button and 未連線 status', () => {
   expect(screen.getByRole('button', { name: '連線' })).toBeEnabled()
   expect(screen.getByRole('button', { name: '中斷' })).toBeDisabled()
   expect(screen.getByText('未連線')).toBeInTheDocument()
-  expect(screen.queryByText('此瀏覽器不支援，請用 Chrome 或 Edge')).not.toBeInTheDocument()
+  expect(screen.queryByText(UNSUPPORTED)).not.toBeInTheDocument()
 })
 
 test('shows 已斷線 after the read loop ends unexpectedly', async () => {
@@ -478,7 +481,7 @@ test('with USB only there is no Bluetooth button', () => {
 test('with Bluetooth only the browser is supported and the single button connects over Bluetooth', async () => {
   const fw = new FakeFirmware()
   renderApp({ bluetooth: fw.bluetooth() })
-  expect(screen.queryByText('此瀏覽器不支援，請用 Chrome 或 Edge')).not.toBeInTheDocument()
+  expect(screen.queryByText(UNSUPPORTED)).not.toBeInTheDocument()
   expect(screen.queryByRole('button', { name: /USB/ })).not.toBeInTheDocument()
   fireEvent.click(screen.getByRole('button', { name: '連線' }))
   expect(await screen.findByText('已連線')).toBeInTheDocument()
