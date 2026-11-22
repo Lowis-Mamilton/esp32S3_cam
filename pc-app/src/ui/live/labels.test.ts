@@ -78,3 +78,34 @@ test('line and track have their own colours', () => {
   expect(idColorVar({ id: 1, kind: 'line', ...box })).toBe('var(--cat-line)')
   expect(idColorVar({ id: 1, kind: 'track', ...box })).toBe('var(--cat-track)')
 })
+
+// ---- M7: QR code (6), shapes (11), motion (12) ----
+test('QR label: QR when not learned, ID n when learned, the name when it has one', () => {
+  const q = (id: number): Result => ({ id, kind: 'qr', ...box, text: 'LEFT' })
+  expect(labelFor(q(0), [], true, tz)).toBe('QR')
+  expect(labelFor(q(2), [{ id: 2, name: '', text: 'LEFT' }], true, tz)).toBe('ID 2')
+  expect(labelFor(q(2), [{ id: 2, name: '左轉', text: 'LEFT' }], true, tz)).toBe('左轉')
+  expect(labelFor(q(2), [], true, te)).toBe('ID 2')
+})
+
+test('shape label: shape name or the given name, plus confidence', () => {
+  const s = (id: number, confidence: number): Result => ({ id, kind: 'shape', confidence, ...box })
+  expect(labelFor(s(2, 88), [], true, tz)).toBe('三角形 88%')
+  expect(labelFor(s(1, 92.4), [], true, te)).toBe('Circle 92%')
+  expect(labelFor(s(4, 85), [], true, tz)).toBe('長方形 85%')
+  expect(labelFor(s(2, 88), [{ id: 2, name: '屋頂' }], true, tz)).toBe('屋頂 88%')
+})
+
+test('motion label: 動態 plus confidence', () => {
+  const r: Result = { id: 0, kind: 'motion', confidence: 63, ...box }
+  expect(labelFor(r, [], true, tz)).toBe('動態 63%')
+  expect(labelFor(r, [], true, te)).toBe('Motion 63%')
+})
+
+test('QR, shape and motion colours', () => {
+  expect(idColorVar({ id: 0, kind: 'qr', ...box })).toBe('var(--unlearned)')
+  expect(idColorVar({ id: 3, kind: 'qr', ...box })).toBe('var(--id-3)')
+  expect(idColorVar({ id: 1, kind: 'shape', ...box })).toBe('var(--id-1)')
+  expect(idColorVar({ id: 4, kind: 'shape', ...box })).toBe('var(--id-4)')
+  expect(idColorVar({ id: 0, kind: 'motion', ...box })).toBe('var(--cat-motion)')
+})

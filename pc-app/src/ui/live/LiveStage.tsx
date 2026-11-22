@@ -8,7 +8,7 @@ import { FN_CATEGORY, FN_ICON } from '../layout/categories'
 import type { FunctionId } from '../layout/types'
 import { useMirror } from './mirror'
 import { FRAME_H, FRAME_W, boxToScreen, mirrorRegion, toFrame, toScreen, type Viewport } from './geometry'
-import { DRAG_HINT_KEY, FN_KIND, LEARNED_KEY, LEARN_ERROR_KEY, STAGE_KEY, idColorVar, labelFor } from './labels'
+import { DRAG_HINT_KEY, FN_KIND, LEARNED_KEY, STAGE_KEY, idColorVar, labelFor, learnErrorKey, qrStageText } from './labels'
 
 export interface LiveStageHandle {
   draw(f: FrameSource): void
@@ -23,7 +23,7 @@ interface Props {
   /** null hides the KB/s figure (demo mode has no real link). */
   kbps: number | null
   fn: FunctionId
-  /** A learning function (colour, line colour, object) and a device that can learn. */
+  /** A learning function (colour, line colour, object, QR code) and a device that can learn. */
   canLearn: boolean
   onLearn: (region: Region) => Promise<number>
   /** Only this component and the results tab subscribe, so pushes do not re-render the whole app. */
@@ -40,8 +40,11 @@ interface Props {
 
 const MIN_DRAG = 4 // frame px
 const TAB_H = 18
-/** Rough tab width: CJK glyphs are about twice as wide as Latin ones at 12px. */
-const tabWidth = (text: string) => Math.ceil([...text].reduce((w, c) => w + (c.charCodeAt(0) > 255 ? 13 : 7), 14))
+/**
+ * Rough tab width: CJK glyphs are about twice as wide as Latin ones at 12px. QR contents are often capitals and URLs,
+ * wider than the average Latin letter, so they are measured with `latin` 8.
+ */
+const tabWidth = (text: string, latin = 7) => Math.ceil([...text].reduce((w, c) => w + (c.charCodeAt(0) > 255 ? 13 : latin), 14))
 const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v))
 const CENTRE: Region = { x: 152, y: 112, width: 16, height: 16 }
 
@@ -185,7 +188,7 @@ export default function LiveStage({ ref, connected, fps, kbps, fn, canLearn, onL
       } catch (e) {
         if (e instanceof NotSupportedError) say(t('learnNeedFirmware'), true)
         else if (e instanceof NotConnectedError) say(t('needConnect'), true)
-        else if (e instanceof LearnError) say(t(LEARN_ERROR_KEY[e.code]), true)
+        else if (e instanceof LearnError) say(t(learnErrorKey(fn, e.code)), true)
         else say(t('learnFailed'), true)
       }
     },
@@ -265,6 +268,9 @@ export default function LiveStage({ ref, connected, fps, kbps, fn, canLearn, onL
 
   const shown = results.filter((r) => r.kind === FN_KIND[fn])
   const lineRows = shown.filter((r) => r.line)
+  // QR codes are outlined by their own four corners (turned with the code); everything else but the line gets a box.
+  const isQuad = (r: (typeof shown)[number]) => r.kind === 'qr' && r.corners?.length === 4
+  const quads = shown.filter(isQuad)
   const roiY = toScreen(vp, 0, FRAME_H - (FRAME_H * lineRoi) / 100, mirror).py
   const lost = fn === 5 && connected && learned.length > 0 && shown.length === 0
   const centre = toScreen(vp, FRAME_W / 2, FRAME_H / 2, mirror)
@@ -290,12 +296,22 @@ export default function LiveStage({ ref, connected, fps, kbps, fn, canLearn, onL
           {previewPaused && connected && <div className="stage-paused">{t('previewPausedNote')}</div>}
           <div className="ls-overlay" aria-hidden="true">
             <div className="ls-boxes">
-              {shown.filter((r) => r.kind !== 'line').map((r, i) => {
+              {shown.filter((r) => r.kind !== 'line' && !isQuad(r)).map((r, i) => {
                 // Result x/y are the box centre, in true-image coordinates.
                 const style = { '--c': idColorVar(r), ...boxToScreen(vp, r, mirror) } as CSSProperties
-                return <div key={i} className={`ls-box${(r.kind === 'color' || r.kind === 'gesture') && r.id === 0 ? ' unlearned' : ''}`} style={style} />
+                const thin = (r.kind === 'color' || r.kind === 'gesture') && r.id === 0
+                return <div key={i} className={`ls-box${thin ? ' unlearned' : ''}${r.kind === 'motion' ? ' dashed' : ''}`} style={style} />
               })}
             </div>
+            {quads.length > 0 && (
+              <svg className="ls-quads" width={vp.width} height={vp.height} viewBox={`0 0 ${vp.width} ${vp.height}`}>
+                {quads.map((r, i) => {
+                  // Each corner is mirrored on its own (x -> 320 - x), so the outline stays on the code.
+                  const pts = r.corners!.map(([x, y]) => toScreen(vp, x, y, mirror)).map((p) => `${p.px},${p.py}`).join(' ')
+                  return <polygon key={i} className="ls-quad" points={pts} style={{ '--c': idColorVar(r) } as CSSProperties} />
+                })}
+              </svg>
+            )}
             {fn === 4 && (
               <svg className="ls-line" width={vp.width} height={vp.height} viewBox={`0 0 ${vp.width} ${vp.height}`}>
                 <line className="ls-roi" x1={0} x2={vp.width} y1={roiY} y2={roiY} />
@@ -319,13 +335,16 @@ export default function LiveStage({ ref, connected, fps, kbps, fn, canLearn, onL
                 const tabs = [labelFor(r, learned, showNames, t)]
                 if (r.line?.cross) tabs.push(t('lineCross'))
                 if (r.line?.branch) tabs.push(t('lineBranch'))
+                const qrText = r.kind === 'qr' ? qrStageText(r) : null
+                if (qrText) tabs.push(qrText)
+                const widthOf = (text: string, j: number) => tabWidth(text, qrText && j === tabs.length - 1 ? 8 : 7)
                 let top = box.top - TAB_H - 1 // above the box
                 if (top < 0) top = bottom + 1 // below, if there is room
                 if (top + TAB_H > vp.height) top = box.top + 1 // otherwise inside the box top
                 top = clamp(top, 0, Math.max(0, vp.height - TAB_H))
-                let left = clamp(box.left - 2, 0, Math.max(0, vp.width - tabs.map(tabWidth).reduce((a, w) => a + w + 2, -2)))
+                let left = clamp(box.left - 2, 0, Math.max(0, vp.width - tabs.map(widthOf).reduce((a, w) => a + w + 2, -2)))
                 return tabs.map((text, j) => {
-                  const w = tabWidth(text)
+                  const w = widthOf(text, j)
                   const style = { '--c': idColorVar(r), left, top, width: w } as CSSProperties
                   left += w + 2
                   return (

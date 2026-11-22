@@ -5,6 +5,7 @@ import { DemoLearnError } from '../../device/demo/recognize'
 import { ResultsStore } from '../../device/resultsStore'
 import { LearnError, NotConnectedError, NotSupportedError, type LearnedId, type Result } from '../../device/types'
 import { I18nProvider } from '../../i18n'
+import type { FunctionId } from '../layout/types'
 import LiveStage, { type LiveStageHandle } from './LiveStage'
 
 afterEach(() => vi.restoreAllMocks())
@@ -19,7 +20,7 @@ function stubRect(w: number, h: number) {
 
 interface Over {
   connected?: boolean
-  fn?: 1 | 2 | 3 | 4 | 5 | 8
+  fn?: FunctionId
   lineRoi?: number
   canLearn?: boolean
   onLearn?: (r: { x: number; y: number; width: number; height: number }) => Promise<number>
@@ -644,4 +645,105 @@ test('the stage only takes touches over (class `learnable`; touch-action: none i
   expect(container.querySelector('.stage')).toHaveClass('learnable')
   unmount()
   expect(setup({ canLearn: false, fn: 8 }).container.querySelector('.stage')).not.toHaveClass('learnable')
+})
+
+// ---- M7: QR code (6), shapes (11), motion (12) ----
+const qrResult: Result = {
+  id: 0, kind: 'qr', x: 100, y: 80, width: 41, height: 41, rotationDeg: 0,
+  corners: [[80, 60], [120, 60], [120, 100], [80, 100]],
+  text: 'MXCam Studio hello world',
+}
+const points = (el: Element) => el.getAttribute('points')!.trim().split(/\s+/).map((p) => p.split(',').map(Number))
+
+test('QR: a four-corner polygon in the code colour, the label and the first 16 characters of the content', () => {
+  stubRect(320, 240) // scale 1
+  const { container } = setup({ fn: 6, results: [qrResult] })
+  const polys = container.querySelectorAll('polygon.ls-quad')
+  expect(polys).toHaveLength(1)
+  expect(points(polys[0])).toEqual([[80, 60], [120, 60], [120, 100], [80, 100]])
+  expect((polys[0] as SVGElement).style.getPropertyValue('--c')).toBe('var(--unlearned)')
+  expect(container.querySelector('.ls-box')).toBeNull() // no square box on top of the quadrilateral
+  expect(screen.getByText('QR')).toBeInTheDocument()
+  expect(screen.getByText('MXCam Studio hel…')).toBeInTheDocument()
+})
+
+test('QR: mirrored view turns each corner x into 320 - x', () => {
+  localStorage.setItem('mxcam.mirror', '1')
+  stubRect(320, 240)
+  const { container } = setup({ fn: 6, results: [{ ...qrResult, id: 2 }], learned: [{ id: 2, name: '', text: 'x' }] })
+  const poly = container.querySelector('polygon.ls-quad')!
+  expect(points(poly)).toEqual([[240, 60], [200, 60], [200, 100], [240, 100]])
+  expect((poly as SVGElement).style.getPropertyValue('--c')).toBe('var(--id-2)')
+  expect(screen.getByText('ID 2')).toBeInTheDocument()
+})
+
+test('QR: short content is shown whole; truncated content gets an ellipsis; no text yet shows no badge', () => {
+  stubRect(320, 240)
+  const { unmount } = setup({ fn: 6, results: [{ ...qrResult, text: 'LEFT' }] })
+  expect(screen.getByText('LEFT')).toBeInTheDocument()
+  unmount()
+  const second = setup({ fn: 6, results: [{ ...qrResult, text: 'LEFT', truncated: true }] })
+  expect(screen.getByText('LEFT…')).toBeInTheDocument()
+  second.unmount()
+  const { container } = setup({ fn: 6, results: [{ ...qrResult, text: undefined }] })
+  expect(container.querySelectorAll('.ls-label')).toHaveLength(1)
+})
+
+test('QR: dragging a box learns it and says which ID; no code in the box has its own message', async () => {
+  stubRect(640, 480)
+  const onLearn = vi.fn(async () => 2)
+  const { container, unmount } = setup({ fn: 6, onLearn })
+  expect(screen.getByText(/框住一張 QR Code/)).toBeInTheDocument()
+  fireEvent.pointerDown(container.querySelector('.stage')!, { clientX: 20, clientY: 20 })
+  await act(async () => {
+    fireEvent.pointerUp(window, { clientX: 100, clientY: 80 })
+  })
+  expect(onLearn).toHaveBeenCalledWith({ x: 10, y: 10, width: 40, height: 30 })
+  expect(await screen.findByText('已學習 QR Code：ID 2')).toBeInTheDocument()
+  unmount()
+  const failing = setup({ fn: 6, onLearn: () => Promise.reject(new LearnError('no-code')) })
+  fireEvent.pointerDown(failing.container.querySelector('.stage')!, { clientX: 20, clientY: 20 })
+  await act(async () => {
+    fireEvent.pointerUp(window, { clientX: 100, clientY: 80 })
+  })
+  expect(await screen.findByText('框選範圍內沒有讀得到的 QR Code')).toBeInTheDocument()
+})
+
+test('QR: a full table says 8 QR codes, not 7 colours', async () => {
+  setup({ fn: 6, onLearn: () => Promise.reject(new LearnError('full')) })
+  await act(async () => {
+    fireEvent.click(screen.getByRole('button', { name: '學習中央' }))
+  })
+  expect(await screen.findByText('最多只能學 8 個 QR Code')).toBeInTheDocument()
+})
+
+test('shape: a box in the shape colour labelled with the shape name and confidence', () => {
+  stubRect(320, 240)
+  const { container } = setup({ fn: 11, canLearn: false, results: [{ id: 2, kind: 'shape', x: 100, y: 100, width: 40, height: 30, confidence: 88 }] })
+  const boxEl = container.querySelector<HTMLElement>('.ls-box')!
+  expect(boxEl.style.getPropertyValue('--c')).toBe('var(--id-2)')
+  expect(boxEl).not.toHaveClass('dashed')
+  expect(screen.getByText('三角形 88%')).toBeInTheDocument()
+  expect(screen.getByText('幾何形狀辨識')).toBeInTheDocument() // hat block
+})
+
+test('motion: a dashed box labelled 動態 63%', () => {
+  stubRect(320, 240)
+  const { container } = setup({ fn: 12, canLearn: false, results: [{ id: 0, kind: 'motion', x: 100, y: 100, width: 40, height: 30, confidence: 63 }] })
+  const boxEl = container.querySelector<HTMLElement>('.ls-box')!
+  expect(boxEl).toHaveClass('dashed')
+  expect(boxEl.style.getPropertyValue('--c')).toBe('var(--cat-motion)')
+  expect(screen.getByText('動態 63%')).toBeInTheDocument()
+})
+
+test.each([11, 12] as const)('function %i: dragging on the picture learns nothing', async (fn) => {
+  stubRect(640, 480)
+  const onLearn = vi.fn(async () => 1)
+  const { container } = setup({ fn, canLearn: false, onLearn })
+  expect(container.querySelector('.stage')).not.toHaveClass('learnable')
+  fireEvent.pointerDown(container.querySelector('.stage')!, { clientX: 20, clientY: 20 })
+  await act(async () => {
+    fireEvent.pointerUp(window, { clientX: 100, clientY: 80 })
+  })
+  expect(onLearn).not.toHaveBeenCalled()
 })

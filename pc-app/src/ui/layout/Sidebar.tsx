@@ -19,10 +19,13 @@ interface Props {
 const FUNCTIONS: { id: FunctionId; key: MessageKey }[] = [
   { id: 1, key: 'fnColor' },
   { id: 2, key: 'fnTag' },
+  { id: 6, key: 'fnQr' },
   { id: 3, key: 'fnFace' },
   { id: 4, key: 'fnLine' },
   { id: 5, key: 'fnTrack' },
   { id: 8, key: 'fnGesture' },
+  { id: 11, key: 'fnShape' },
+  { id: 12, key: 'fnMotion' },
 ]
 
 /** Scrolls only the list itself (a rail when wide, a sideways strip when narrow), never the page. */

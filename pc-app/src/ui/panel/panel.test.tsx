@@ -6,7 +6,7 @@ import { afterEach, beforeEach, expect, test, vi } from 'vitest'
 import { DemoDevice } from '../../device/DemoDevice'
 import { RealDevice } from '../../device/RealDevice'
 import { ResultsStore } from '../../device/resultsStore'
-import { DeviceOpError, type Device, type FunctionId, type Result } from '../../device/types'
+import { DeviceOpError, emptyLearned, type Device, type FunctionId, type LearnedId, type Result } from '../../device/types'
 import { I18nProvider } from '../../i18n'
 import RightPanel from '../layout/RightPanel'
 import { snippetFor } from './codeSnippets'
@@ -622,4 +622,176 @@ test('track params: threshold, template update, reacquire and multi-scale', asyn
   await waitFor(() => expect(device.snapshot().params.track.multiScale).toBe(false))
   expect(screen.getByRole('slider', { name: '範本更新' })).toBeInTheDocument()
   expect(screen.getByRole('checkbox', { name: '跟丟時自動找回' })).toBeChecked()
+})
+
+// ---- M7: QR code (6), shapes (11), motion (12) ----
+const ALL_FNS: FunctionId[] = [1, 2, 3, 4, 5, 6, 8, 11, 12]
+
+test('snippets for every function: the library calls, one algorithm, no combined flags', () => {
+  for (const fn of ALL_FNS)
+    for (const lang of ['zh-TW', 'en'] as const) {
+      const s = snippetFor(fn, lang)
+      for (const call of ['#include <MXCam.h>', 'cam.begin(Serial1);', 'cam.request()', 'cam.read()']) expect(s, `${fn} ${lang}`).toContain(call)
+      expect(s).not.toContain('|')
+      expect(s.match(/setAlgorithm/g)).toHaveLength(1)
+      if (lang === 'en') expect(s).not.toMatch(/[一-鿿]/)
+    }
+})
+
+test('code tab: QR, shapes and motion use their MXCAM_ALGO_* and the matching calls', () => {
+  setup(6)
+  tab('程式')
+  expect(document.body.textContent).toContain('MXCAM_ALGO_QR')
+  const qr = snippetFor(6, 'en')
+  expect(qr).toContain('cam.readText(i, text, sizeof(text))')
+  expect(qr).toContain('r.id')
+  const shape = snippetFor(11, 'zh-TW')
+  expect(shape).toContain('MXCAM_ALGO_SHAPE')
+  expect(shape).toContain('if (r.id == MXCAM_SHAPE_TRIANGLE)')
+  const motion = snippetFor(12, 'zh-TW')
+  expect(motion).toContain('MXCAM_ALGO_MOTION')
+  expect(motion).toContain('if (cam.available())')
+  expect(motion).toContain('r.x')
+})
+
+test('QR params: nothing to set', () => {
+  setup(6)
+  tab('參數')
+  expect(screen.getByText('QR Code 沒有參數可以調')).toBeInTheDocument()
+  expect(screen.queryAllByRole('slider')).toHaveLength(0)
+})
+
+test('shape params: min size sends the whole shape config; mode and automatic threshold', async () => {
+  const { device } = setup(11)
+  const spy = vi.spyOn(device, 'setParams')
+  tab('參數')
+  expect(screen.getByRole('slider', { name: '最小尺寸' })).toHaveAttribute('min', '16')
+  expect(screen.getByRole('slider', { name: '最小尺寸' })).toHaveAttribute('max', '240')
+  expect(screen.getByRole('slider', { name: '最多結果數' })).toHaveAttribute('max', '8')
+  fireEvent.change(screen.getByRole('slider', { name: '最小尺寸' }), { target: { value: '48' } })
+  await waitFor(() => expect(spy).toHaveBeenCalled())
+  expect(spy.mock.calls[0][0]).toEqual({ shape: { ...device.snapshot().params.shape, minSize: 48 } })
+  expect(device.snapshot().params.shape.minSize).toBe(48)
+  // Dark shapes on light paper is the default; the threshold is automatic until unticked.
+  expect(screen.getByRole('button', { name: '深色形狀' })).toHaveAttribute('aria-pressed', 'true')
+  fireEvent.click(screen.getByRole('button', { name: '淺色形狀' }))
+  await waitFor(() => expect(device.snapshot().params.shape.mode).toBe('light'))
+  expect(screen.getByRole('slider', { name: '灰階門檻' })).toBeDisabled()
+  fireEvent.click(screen.getByRole('checkbox', { name: '自動' }))
+  await waitFor(() => expect(device.snapshot().params.shape.threshold).toBe(128))
+  expect(screen.getByRole('slider', { name: '灰階門檻' })).toBeEnabled()
+})
+
+test('motion params: the threshold sends the whole motion config and says lower is more sensitive', async () => {
+  const { device } = setup(12)
+  const spy = vi.spyOn(device, 'setParams')
+  tab('參數')
+  const th = screen.getByRole('slider', { name: '靈敏度門檻' })
+  expect(th).toHaveAttribute('min', '5')
+  expect(th).toHaveAttribute('max', '100')
+  expect(th).toHaveAccessibleDescription('數字越小越靈敏')
+  expect(screen.getByRole('slider', { name: '最小尺寸' })).toHaveAttribute('min', '8')
+  fireEvent.change(th, { target: { value: '40' } })
+  await waitFor(() => expect(spy).toHaveBeenCalled())
+  expect(spy.mock.calls[0][0]).toEqual({ motion: { ...device.snapshot().params.motion, threshold: 40 } })
+  expect(device.snapshot().params.motion.threshold).toBe(40)
+})
+
+function withLearned(device: Device, fn: FunctionId, list: LearnedId[]) {
+  const snap = { ...device.snapshot(), learned: { ...emptyLearned(), [fn]: list } }
+  vi.spyOn(device, 'snapshot').mockReturnValue(snap)
+  return device
+}
+
+test('QR learn tab: how to learn, then the learned IDs with their content; naming and forgetting send fn 6', async () => {
+  const empty = setup(6)
+  tab('學習')
+  expect(screen.getByText('在畫面上框住一張 QR Code 就會學起來（最多 8 個 ID）')).toBeInTheDocument()
+  expect(screen.getByText('還沒有學習任何 QR Code')).toBeInTheDocument()
+  empty.unmount()
+  const device = withLearned(new DemoDevice(() => 0), 6, [
+    { id: 1, name: '', text: 'MXCam' },
+    { id: 2, name: '左轉', text: 'LEFT' },
+  ])
+  const setName = vi.spyOn(device, 'setName').mockResolvedValue()
+  const forget = vi.spyOn(device, 'forget').mockResolvedValue()
+  setup(6, [], device)
+  tab('學習')
+  expect(screen.getByText('MXCam')).toBeInTheDocument()
+  expect(screen.getByText('LEFT')).toBeInTheDocument()
+  expect(screen.getByRole('textbox', { name: 'ID 2 名稱' })).toHaveValue('左轉')
+  const input = screen.getByRole('textbox', { name: 'ID 1 名稱' })
+  fireEvent.change(input, { target: { value: '起點' } })
+  fireEvent.blur(input)
+  await waitFor(() => expect(setName).toHaveBeenCalledWith(6, 1, '起點'))
+  fireEvent.click(screen.getByRole('button', { name: '刪除 ID 2' }))
+  await waitFor(() => expect(forget).toHaveBeenCalledWith(6, 2))
+  expect(screen.getByRole('button', { name: '全部忘記' })).toBeEnabled()
+})
+
+test('QR learn tab: forget all, after the confirmation, forgets every QR code', async () => {
+  const device = withLearned(new DemoDevice(() => 0), 6, [{ id: 1, name: '', text: 'MXCam' }])
+  const forgetAll = vi.spyOn(device, 'forgetAll').mockResolvedValue()
+  setup(6, [], device)
+  tab('學習')
+  fireEvent.click(screen.getByRole('button', { name: '全部忘記' }))
+  fireEvent.click(screen.getByRole('button', { name: '確定忘記' }))
+  await waitFor(() => expect(forgetAll).toHaveBeenCalledWith(6))
+})
+
+test('shape learn tab: no learning, four rows to name; naming sends setName(11, id, name)', async () => {
+  const { device } = setup(11)
+  const spy = vi.spyOn(device, 'setName')
+  tab('學習')
+  expect(screen.getByText(/幾何形狀不需要學習/)).toBeInTheDocument()
+  expect(screen.getAllByRole('textbox')).toHaveLength(4)
+  const input = screen.getByRole('textbox', { name: '三角形 名稱' })
+  fireEvent.change(input, { target: { value: '屋頂' } })
+  fireEvent.blur(input)
+  await waitFor(() => expect(spy).toHaveBeenCalledWith(11, 2, '屋頂'))
+  fireEvent.click(await screen.findByRole('button', { name: '刪除 三角形' }))
+  await waitFor(() => expect(device.snapshot().learned[11]).toHaveLength(0))
+})
+
+test('motion learn tab says no learning is needed and has no controls', () => {
+  setup(12)
+  tab('學習')
+  expect(screen.getByText('動態偵測不需要學習')).toBeInTheDocument()
+  expect(screen.queryAllByRole('textbox')).toHaveLength(0)
+  expect(screen.queryByRole('button', { name: '全部忘記' })).toBeNull()
+})
+
+test('QR results tab: ID, name, the whole content (with a note when cut short) and the box', () => {
+  const long = 'x'.repeat(128)
+  const device = withLearned(new DemoDevice(() => 0), 6, [{ id: 2, name: '左轉', text: 'LEFT' }])
+  setup(
+    6,
+    [
+      { id: 2, kind: 'qr', x: 100, y: 80, width: 41, height: 41, text: 'LEFT', corners: [[80, 60], [120, 60], [120, 100], [80, 100]] },
+      { id: 0, kind: 'qr', x: 200, y: 80, width: 41, height: 41, text: long, truncated: true },
+      { id: 0, kind: 'qr', x: 260, y: 80, width: 41, height: 41 },
+    ],
+    device,
+  )
+  expect(screen.getByRole('columnheader', { name: '內容' })).toBeInTheDocument()
+  const rows = screen.getAllByRole('row').slice(1)
+  expect(within(rows[0]).getAllByRole('cell').map((c) => c.textContent)).toEqual(['ID 2', '左轉', 'LEFT', '100', '80', '41', '41'])
+  expect(within(rows[1]).getAllByRole('cell')[0]).toHaveTextContent('QR')
+  expect(within(rows[1]).getAllByRole('cell')[2]).toHaveTextContent(long)
+  expect(within(rows[1]).getAllByRole('cell')[2]).toHaveTextContent('內容太長，只顯示前 128 bytes')
+  expect(within(rows[2]).getAllByRole('cell')[2]).toHaveTextContent('—')
+})
+
+test('shape results tab: shape name, confidence and the box', () => {
+  setup(11, [{ id: 3, kind: 'shape', x: 80, y: 170, width: 54, height: 54, confidence: 90 }])
+  expect(screen.getByRole('columnheader', { name: '形狀' })).toBeInTheDocument()
+  const row = screen.getAllByRole('row')[1]
+  expect(within(row).getAllByRole('cell').map((c) => c.textContent)).toEqual(['3', '正方形', '', '80', '170', '54', '54', '90%'])
+})
+
+test('motion results tab: the box and confidence, no name column', () => {
+  setup(12, [{ id: 0, kind: 'motion', x: 160, y: 120, width: 60, height: 40, confidence: 63 }])
+  expect(screen.queryByRole('columnheader', { name: '名稱' })).toBeNull()
+  const row = screen.getAllByRole('row')[1]
+  expect(within(row).getAllByRole('cell').map((c) => c.textContent)).toEqual(['動態', '160', '120', '60', '40', '63%'])
 })

@@ -55,6 +55,9 @@
   --cat-gesture: #29b6f6;
   --cat-line: #12b8a6;
   --cat-track: #5c6bf2;
+  --cat-qr: #e8743b;
+  --cat-shape: #b5c934;
+  --cat-motion: #e05297;
   --cat-settings: #3ace3a;
   --cat-firmware: #dc8f47;
 
@@ -712,6 +715,24 @@ button {
   stroke-dasharray: 6 4;
   opacity: 0.8;
 }
+/* QR code (function 6): the code's own four corners, so a turned code gets a turned outline. */
+.ls-quads {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  overflow: visible;
+}
+.ls-quad {
+  fill: none;
+  stroke: var(--c);
+  stroke-width: 2;
+  stroke-linejoin: round;
+  filter: drop-shadow(0 0 1px rgba(0, 0, 0, 0.6));
+}
+/* Motion (function 12): a moving area, not an object. */
+.ls-box.dashed {
+  border-style: dashed;
+}
 .ls-badge {
   background: #0d0c0b;
   color: var(--c);
@@ -978,6 +999,27 @@ button {
 .rp-namehint {
   flex-basis: 100%;
   margin: 0;
+}
+/* A learned QR code's content: its own line under the ID and name, wrapping anywhere (contents can be long URLs). */
+.rp-qrtext {
+  flex-basis: 100%;
+  min-width: 0;
+  margin: 0;
+  padding-left: 34px;
+  color: var(--text-dim);
+  font: 12px/1.4 var(--font-mono);
+  overflow-wrap: anywhere;
+}
+/* QR content in the results table: left aligned, wrapping instead of widening the table. */
+.rp-table th.rp-content,
+.rp-table td.rp-content {
+  min-width: 7em;
+  text-align: left;
+  overflow-wrap: anywhere;
+}
+.rp-content small {
+  display: block;
+  color: var(--text-dim);
 }
 .rp-input {
   flex: 1;

@@ -22,7 +22,9 @@ import FirmwarePage from './ui/pages/FirmwarePage'
 import SettingsPage from './ui/pages/SettingsPage'
 import LiveStage, { type LiveStageHandle } from './ui/live/LiveStage'
 
-const FN_KEY: Record<FunctionId, MessageKey> = { 1: 'fnColor', 2: 'fnTag', 3: 'fnFace', 4: 'fnLine', 5: 'fnTrack', 8: 'fnGesture' }
+const FN_KEY: Record<FunctionId, MessageKey> = {
+  1: 'fnColor', 2: 'fnTag', 3: 'fnFace', 4: 'fnLine', 5: 'fnTrack', 6: 'fnQr', 8: 'fnGesture', 11: 'fnShape', 12: 'fnMotion',
+}
 /** Whether names are shown on the stage; a Record so a new function must decide (no silent fall-through). */
 const SHOW_NAMES: Record<FunctionId, (p: DeviceSnapshot['params']) => boolean> = {
   1: (p) => p.color.showNames,
@@ -30,9 +32,12 @@ const SHOW_NAMES: Record<FunctionId, (p: DeviceSnapshot['params']) => boolean> =
   3: () => false,
   4: () => false,
   5: () => true,
+  6: () => true,
   8: () => true,
+  11: () => true,
+  12: () => false,
 }
-const CAN_LEARN: Record<FunctionId, boolean> = { 1: true, 2: false, 3: false, 4: true, 5: true, 8: false }
+const CAN_LEARN: Record<FunctionId, boolean> = { 1: true, 2: false, 3: false, 4: true, 5: true, 6: true, 8: false, 11: false, 12: false }
 const NOTICE_MS = 4000
 /** What a tap on a greyed-out function says; the same text a mouse sees as the hover hint. */
 type TapHint = { key: MessageKey }
@@ -152,7 +157,7 @@ export default function App({ serial, bluetooth }: Props) {
       if (!userClosed.current) setErrorOf({ device, error: describeError(e, kind) })
     })
   }
-  const learnFn: LearnableFn = lastFn === 4 || lastFn === 5 ? lastFn : 1
+  const learnFn: LearnableFn = lastFn === 4 || lastFn === 5 || lastFn === 6 ? lastFn : 1
   const onLearn = useCallback((region: Parameters<Device['learn']>[1]) => device!.learn(learnFn, region), [device, learnFn])
   const onPausePreview = useCallback(
     (paused: boolean) => {

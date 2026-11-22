@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from 'react'
 import { NAME_MAX_BYTES, nameBytes, truncateBytes, type Device, type LearnedId } from '../../device/types'
 import { useT, type MessageKey } from '../../i18n'
 import type { FunctionId } from '../layout/types'
+import { SHAPE_IDS, shapeName } from '../live/labels'
 import type { Guard } from './guard'
 
 /** Names are limited in UTF-8 bytes (48); no 48-byte name has more than 48 characters. */
@@ -49,13 +50,40 @@ function NameInput({ value, label, disabled, onCommit }: { value: string; label:
   )
 }
 
-function ColorLearn({ device, learned, disabled, guard }: Omit<Props, 'fn'>) {
+/** "Forget all" with its in-page confirmation (colours, QR codes). */
+function ForgetAll({ fn, device, count, disabled, guard }: { fn: FunctionId; device: Device | null; count: number; disabled: boolean; guard: Guard }) {
   const { t } = useT()
   const [confirming, setConfirming] = useState(false)
   const cancelRef = useRef<HTMLButtonElement>(null)
   useEffect(() => {
     if (confirming) cancelRef.current?.focus()
   }, [confirming])
+  return confirming && count > 0 ? (
+    <div className="rp-confirm" role="group" aria-label={t('forgetAll')}>
+      <p>{t('forgetConfirmText')}</p>
+      <button ref={cancelRef} type="button" className="btn" onClick={() => setConfirming(false)}>
+        {t('cancel')}
+      </button>
+      <button
+        type="button"
+        className="btn rp-danger"
+        onClick={() => {
+          setConfirming(false)
+          if (device) void guard.run(() => device.forgetAll(fn))
+        }}
+      >
+        {t('forgetConfirm')}
+      </button>
+    </div>
+  ) : (
+    <button type="button" className="btn rp-forget" disabled={disabled || count === 0} onClick={() => setConfirming(true)}>
+      {t('forgetAll')}
+    </button>
+  )
+}
+
+function ColorLearn({ device, learned, disabled, guard }: Omit<Props, 'fn'>) {
+  const { t } = useT()
   return (
     <>
       {learned.length === 0 ? (
@@ -85,30 +113,41 @@ function ColorLearn({ device, learned, disabled, guard }: Omit<Props, 'fn'>) {
           ))}
         </ul>
       )}
-      {
-        confirming && learned.length > 0 ? (
-          <div className="rp-confirm" role="group" aria-label={t('forgetAll')}>
-            <p>{t('forgetConfirmText')}</p>
-            <button ref={cancelRef} type="button" className="btn" onClick={() => setConfirming(false)}>
-              {t('cancel')}
-            </button>
-            <button
-              type="button"
-              className="btn rp-danger"
-              onClick={() => {
-                setConfirming(false)
-                if (device) void guard.run(() => device.forgetAll(1))
-              }}
-            >
-              {t('forgetConfirm')}
-            </button>
-          </div>
-        ) : (
-          <button type="button" className="btn rp-forget" disabled={disabled || learned.length === 0} onClick={() => setConfirming(true)}>
-            {t('forgetAll')}
-          </button>
-        )
-      }
+      <ForgetAll fn={1} device={device} count={learned.length} disabled={disabled} guard={guard} />
+    </>
+  )
+}
+
+/**
+ * QR codes: drag a box around a code on the picture to learn its content as an ID (1-8). Each row shows the ID in its
+ * box colour, a name and the content the ID stands for.
+ */
+function QrLearn({ device, learned, disabled, guard }: Omit<Props, 'fn'>) {
+  const { t } = useT()
+  return (
+    <>
+      <p className="muted">{t('qrLearnNote')}</p>
+      {learned.length === 0 ? (
+        <p className="muted">{t('qrLearnEmpty')}</p>
+      ) : (
+        <ul className="rp-list">
+          {learned.map((l) => {
+            const label = `ID ${l.id}`
+            return (
+              <li key={l.id}>
+                <span className="rp-swatch" style={{ background: `var(--id-${((l.id - 1) % 8) + 1})` }} aria-hidden="true" />
+                <span className="rp-id">{label}</span>
+                <NameInput value={l.name} label={t('nameOf', { label })} disabled={disabled} onCommit={(v) => device && void guard.run(() => device.setName(6, l.id, v))} />
+                <button type="button" className="rp-icon" aria-label={t('deleteOf', { label })} disabled={disabled} onClick={() => device && void guard.run(() => device.forget(6, l.id))}>
+                  <Trash2 size={15} aria-hidden="true" />
+                </button>
+                <p className="rp-qrtext">{l.text ?? '—'}</p>
+              </li>
+            )
+          })}
+        </ul>
+      )}
+      <ForgetAll fn={6} device={device} count={learned.length} disabled={disabled} guard={guard} />
     </>
   )
 }
@@ -242,27 +281,30 @@ function TrackLearn({ device, learned, disabled, guard }: Omit<Props, 'fn'>) {
 
 const GESTURE_IDS = [1, 2, 3, 4, 5, 6, 7, 8, 9] as const
 
-/** Gestures are fixed classes: nothing to learn, but each can be given a name (like AprilTag IDs). */
-function GestureNames({ device, learned, disabled, guard }: Omit<Props, 'fn'>) {
+/**
+ * Fixed classes (gestures, shapes): nothing to learn, but each can be given a name (like AprilTag IDs).
+ * One row per class: its name in the UI language, a name input and a button that clears the name.
+ */
+function FixedNames({ fn, ids, labelOf, noteKey, headingKey, device, learned, disabled, guard }: Omit<Props, 'fn'> & { fn: 8 | 11; ids: readonly number[]; labelOf(id: number): string; noteKey: MessageKey; headingKey: MessageKey }) {
   const { t } = useT()
   return (
     <>
-      <p className="muted">{t('gestureNoLearn')}</p>
-      <h3 className="rp-h">{t('gestureNamesHeading')}</h3>
+      <p className="muted">{t(noteKey)}</p>
+      <h3 className="rp-h">{t(headingKey)}</h3>
       <ul className="rp-list">
-        {GESTURE_IDS.map((id) => {
+        {ids.map((id) => {
           const name = learned.find((l) => l.id === id)?.name ?? ''
-          const label = t(`gesture${id}` as MessageKey)
+          const label = labelOf(id)
           return (
             <li key={id}>
               <span className="rp-id">{label}</span>
-              <NameInput value={name} label={t('nameOf', { label })} disabled={disabled} onCommit={(v) => device && void guard.run(() => device.setName(8, id, v))} />
+              <NameInput value={name} label={t('nameOf', { label })} disabled={disabled} onCommit={(v) => device && void guard.run(() => device.setName(fn, id, v))} />
               <button
                 type="button"
                 className="rp-icon"
                 aria-label={t('deleteOf', { label })}
                 disabled={disabled || name === ''}
-                onClick={() => device && void guard.run(() => device.forget(8, id))}
+                onClick={() => device && void guard.run(() => device.forget(fn, id))}
               >
                 <Trash2 size={15} aria-hidden="true" />
               </button>
@@ -279,6 +321,9 @@ export default function LearnTab({ fn, ...rest }: Props) {
   if (fn === 3) return <p className="muted">{t('faceNoLearn')}</p>
   if (fn === 4) return <LineLearn {...rest} />
   if (fn === 5) return <TrackLearn {...rest} />
-  if (fn === 8) return <GestureNames {...rest} />
+  if (fn === 6) return <QrLearn {...rest} />
+  if (fn === 8) return <FixedNames {...rest} fn={8} ids={GESTURE_IDS} labelOf={(id) => t(`gesture${id}` as MessageKey)} noteKey="gestureNoLearn" headingKey="gestureNamesHeading" />
+  if (fn === 11) return <FixedNames {...rest} fn={11} ids={SHAPE_IDS} labelOf={(id) => shapeName(id, t)} noteKey="shapeNoLearn" headingKey="shapeNamesHeading" />
+  if (fn === 12) return <p className="muted">{t('motionNoLearn')}</p>
   return fn === 1 ? <ColorLearn {...rest} /> : <TagLearn {...rest} />
 }

@@ -344,7 +344,7 @@ test('English demo mode leaks no CJK text or attributes on any tab of any view',
   const { container } = renderApp({ serial: idleSerial })
   await screen.findByText('DEMO')
   const leaks: string[] = []
-  for (const fn of ['Color', 'AprilTag', 'Face']) {
+  for (const fn of ['Color', 'AprilTag', 'Face', 'QR Code', 'Shapes', 'Motion detection']) {
     fireEvent.click(screen.getByRole('button', { name: fn }))
     for (const tabName of ['Results', 'Learn', 'Params', 'Code']) {
       fireEvent.click(screen.getByRole('tab', { name: tabName }))
@@ -548,4 +548,28 @@ test('a board whose firmware has no Bluetooth service says so, not a serial-port
   fireEvent.click(screen.getByRole('button', { name: '藍牙連線' }))
   expect(await screen.findByRole('alert')).toHaveTextContent('這台 MXCam 的韌體沒有藍牙功能，請改用 USB')
   expect(screen.getByText('未連線')).toBeInTheDocument()
+})
+
+// ---- M7: QR code (6), shapes (11), motion (12) ----
+test('demo: QR code can be learned by drawing a box on the picture; shapes and motion cannot', async () => {
+  localStorage.setItem('mxcam.demo', '1')
+  const { container } = renderApp({ serial: idleSerial })
+  await screen.findByText('DEMO')
+  fireEvent.click(screen.getByRole('button', { name: 'QR Code' }))
+  expect(container.querySelector('.stage')).toHaveClass('learnable')
+  expect(screen.getByRole('button', { name: '學習中央' })).toBeInTheDocument()
+  expect(screen.getByText('QR Code 辨識')).toBeInTheDocument()
+  for (const name of ['幾何形狀', '動態偵測']) {
+    fireEvent.click(screen.getByRole('button', { name }))
+    expect(container.querySelector('.stage')).not.toHaveClass('learnable')
+    expect(screen.queryByRole('button', { name: '學習中央' })).toBeNull()
+  }
+})
+
+test('demo: choosing 幾何形狀 makes the four shapes appear', async () => {
+  localStorage.setItem('mxcam.demo', '1')
+  renderApp({ serial: idleSerial })
+  await screen.findByText('DEMO')
+  fireEvent.click(screen.getByRole('button', { name: '幾何形狀' }))
+  for (const shape of ['圓形', '三角形', '正方形', '長方形']) expect((await screen.findAllByText(new RegExp(`^${shape} \\d+%$`))).length).toBeGreaterThan(0)
 })

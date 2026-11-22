@@ -40,11 +40,10 @@ import {
   defaultParams,
   defaultSystem,
   emptyLearned,
-  isDeviceFunctionId,
+  isFunctionId,
   nameBytes,
   toFunctionIds,
   type Device,
-  type DeviceFunctionId,
   type DeviceInfo,
   type DeviceSnapshot,
   type FrameSource,
@@ -73,8 +72,8 @@ const NAME_TABLE_SIZE = 32
 const REFRESH_RETRY_MS = 500
 const REFRESH_RETRIES = 3
 /** Face detection and motion have nothing learned or named, so they are never asked (GET_LEARNED answers BAD_PARAM). */
-const hasLearned = (fn: DeviceFunctionId) => fn !== 3 && fn !== 12
-const KIND: Record<DeviceFunctionId, Result['kind']> = {
+const hasLearned = (fn: FunctionId) => fn !== 3 && fn !== 12
+const KIND: Record<FunctionId, Result['kind']> = {
   1: 'color', 2: 'tag', 3: 'face', 4: 'line', 5: 'track', 6: 'qr', 8: 'gesture', 11: 'shape', 12: 'motion',
 }
 const GESTURE = 8
@@ -85,9 +84,9 @@ const SHAPE = 11
 const MOTION = 12
 /** Functions whose params live in GET/SET_FUNC_CONFIG (docs/protocol.md sections 9-11), and where they are kept. */
 const FUNC_CONFIG_KEY = { [LINE]: 'line', [TRACK]: 'track', [GESTURE]: 'gesture', [SHAPE]: 'shape', [MOTION]: 'motion' } as const
-const FUNC_CONFIG_FNS: DeviceFunctionId[] = [LINE, TRACK, GESTURE, SHAPE, MOTION]
+const FUNC_CONFIG_FNS: FunctionId[] = [LINE, TRACK, GESTURE, SHAPE, MOTION]
 /** Functions with a learned list that has colours: colour (1), line colour (4), tracked object (5, average colour). */
-const hasColors = (fn: DeviceFunctionId) => fn === 1 || fn === 4 || fn === 5
+const hasColors = (fn: FunctionId) => fn === 1 || fn === 4 || fn === 5
 const ERROR_NAME: Record<number, string> = {
   [ErrorCode.UnknownCmd]: 'UNKNOWN_CMD',
   [ErrorCode.BadLength]: 'BAD_LENGTH',
@@ -98,7 +97,7 @@ const ERROR_NAME: Record<number, string> = {
   [ErrorCode.Full]: 'FULL',
 }
 
-const isFn = isDeviceFunctionId
+const isFn = isFunctionId
 const isUnsupported = (e: unknown) =>
   e instanceof MxcamError && (e.code === ErrorCode.UnknownCmd || e.code === ErrorCode.NotSupported)
 const clampInt = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, Math.round(v)))
@@ -207,7 +206,7 @@ export class RealDevice implements Device {
   private readonly frames = new Emitter<[FrameSource]>()
   private readonly results = new Emitter<[Result[], ResultsMeta | undefined]>()
   private readonly stats = new Emitter<[{ fps: number; kbps: number }]>()
-  private readonly fnChanges = new Emitter<[DeviceFunctionId | 0]>()
+  private readonly fnChanges = new Emitter<[FunctionId | 0]>()
   /** QR contents for function 6 RESULTS (GET_RESULT_DATA). */
   private readonly qr: QrTextCache
   /** The firmware lists QR but answered GET_RESULT_DATA with UNKNOWN_CMD / NOT_SUPPORTED: stop asking. */
@@ -226,10 +225,10 @@ export class RealDevice implements Device {
   /** Func configs (functions 4, 5, 8, 11, 12; GET_FUNC_CONFIG); null until read. */
   private fc: FuncCfgs = noFuncCfgs()
   /** Functions the firmware lists but cannot configure (func config unknown): treated as not supported. */
-  private readonly dropped = new Set<DeviceFunctionId>()
+  private readonly dropped = new Set<FunctionId>()
   private previewPaused = false
   private learned = emptyLearned()
-  private active: DeviceFunctionId | 0 = 0
+  private active: FunctionId | 0 = 0
   /** Function changes by others are only detected once Studio has set the function itself in this session. */
   private ownFnSet = false
   private fnInFlight = 0
@@ -241,7 +240,7 @@ export class RealDevice implements Device {
   /** Our own SET_FUNCTION switched function while a LEARN was pending: the firmware cancels it (BAD_PARAM). */
   private learnCancelled = false
   private refreshTimer: ReturnType<typeof setTimeout> | undefined
-  private readonly retryFns = new Set<DeviceFunctionId>()
+  private readonly retryFns = new Set<FunctionId>()
   private readonly auto: ReturnType<typeof setTimeout>
   private disposed = false
 
@@ -315,8 +314,7 @@ export class RealDevice implements Device {
       mode: 'real',
       status: this.status,
       info: this.info,
-      // Includes 6, 11 and 12 on M7 firmware; see DeviceSnapshot.supported for the type.
-      supported: this.supportedFns() as FunctionId[],
+      supported: this.supportedFns(),
       activeFunction: this.active,
       learned: this.learned,
       params: toParams(c, this.fc),
@@ -340,8 +338,7 @@ export class RealDevice implements Device {
     return this.results.on(cb)
   }
   onFunctionChange(cb: (fn: FunctionId | 0) => void) {
-    // Reports 6, 11 and 12 too; see Device.onFunctionChange for the type.
-    return this.fnChanges.on(cb as (fn: DeviceFunctionId | 0) => void)
+    return this.fnChanges.on(cb)
   }
   onStats(cb: (s: { fps: number; kbps: number }) => void) {
     return this.stats.on(cb)
@@ -357,13 +354,13 @@ export class RealDevice implements Device {
 
   // ---- protocol helpers ----
 
-  private supportedFns(): DeviceFunctionId[] {
+  private supportedFns(): FunctionId[] {
     return toFunctionIds(this.info?.functionIds ?? []).filter((f) => !this.dropped.has(f))
   }
   private ensureConnected() {
     if (this.status !== 'connected') throw new NotConnectedError()
   }
-  private requireFn(fn: DeviceFunctionId) {
+  private requireFn(fn: FunctionId) {
     if (!this.supportedFns().includes(fn)) throw new NotSupportedError()
   }
   private requireConfig(): DeviceConfig {
@@ -442,7 +439,7 @@ export class RealDevice implements Device {
     }
   }
 
-  private async loadLearned(fn: DeviceFunctionId, retry = false) {
+  private async loadLearned(fn: FunctionId, retry = false) {
     let list: LearnedId[] = []
     try {
       // older firmware, or a function without learned data (BAD_PARAM): nothing learned
@@ -474,7 +471,7 @@ export class RealDevice implements Device {
   }
 
   /** After a change: re-read the learned lists and the config (for dirty). */
-  private async refresh(fns: DeviceFunctionId[]) {
+  private async refresh(fns: FunctionId[]) {
     for (const fn of fns) if (this.supportedFns().includes(fn) && hasLearned(fn)) await this.loadLearned(fn)
     if (this.configSupported) await this.loadConfig()
     await this.loadFuncConfigs()
@@ -485,7 +482,7 @@ export class RealDevice implements Device {
    * Refresh after an operation the device already accepted: the operation succeeded, so a failed re-read is not
    * reported as a failure; it is retried in the background instead.
    */
-  private async refreshAfter(fns: DeviceFunctionId[], attempt = 0): Promise<void> {
+  private async refreshAfter(fns: FunctionId[], attempt = 0): Promise<void> {
     try {
       await this.refresh(fns)
     } catch {
@@ -535,7 +532,7 @@ export class RealDevice implements Device {
 
   // ---- operations ----
 
-  async setFunction(id: DeviceFunctionId): Promise<void> {
+  async setFunction(id: FunctionId): Promise<void> {
     this.ensureConnected()
     this.requireFn(id)
     if (this.learnInFlight > 0 && id !== this.active) this.learnCancelled = true
@@ -591,24 +588,24 @@ export class RealDevice implements Device {
     return f.payload[0]
   }
 
-  async forget(fn: DeviceFunctionId, id: number): Promise<void> {
+  async forget(fn: FunctionId, id: number): Promise<void> {
     this.ensureConnected()
     this.requireFn(fn)
     await this.call(Cmd.Forget, encodeForget(fn, id))
     await this.refreshAfter([fn])
   }
 
-  forgetAll(fn: DeviceFunctionId): Promise<void> {
+  forgetAll(fn: FunctionId): Promise<void> {
     return this.forget(fn, FORGET_ALL)
   }
 
-  private sendName(fn: DeviceFunctionId, id: number, name: string) {
+  private sendName(fn: FunctionId, id: number, name: string) {
     return this.call(Cmd.SetName, encodeSetName(fn, id, name), undefined, (code) =>
       code === ErrorCode.Full ? new DeviceOpError('names-full', 'name table full') : undefined,
     )
   }
 
-  async setName(fn: DeviceFunctionId, id: number, name: string): Promise<void> {
+  async setName(fn: FunctionId, id: number, name: string): Promise<void> {
     this.ensureConnected()
     this.requireFn(fn)
     const n = nameBytes(name)
@@ -828,7 +825,7 @@ export class RealDevice implements Device {
   }
 
   /** Names on the board after applying `file`: colour and QR names stay per board ID, tag names come from the file. */
-  private namesAfterImport(file: ReturnType<typeof parseConfig>, fns: DeviceFunctionId[]): number {
+  private namesAfterImport(file: ReturnType<typeof parseConfig>, fns: FunctionId[]): number {
     const colours = this.learned[1].filter((b) => {
       const e = file.learned[1].find((x) => x.id === b.id)
       const want = e?.color

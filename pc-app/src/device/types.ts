@@ -1,9 +1,9 @@
 import type { DeviceInfo } from '../protocol/messages'
 import type { ConnectionStatus } from '../serial/connection'
 import type { TransportKind } from '../transport/types'
-import type { DeviceFunctionId, FunctionId } from '../ui/layout/types'
+import type { FunctionId } from '../ui/layout/types'
 
-export type { ConnectionStatus, DeviceFunctionId, DeviceInfo, FunctionId, TransportKind }
+export type { ConnectionStatus, DeviceInfo, FunctionId, TransportKind }
 
 export interface Result {
   id: number // 0 = not learned
@@ -83,13 +83,10 @@ export interface DeviceSnapshot {
   mode: 'real' | 'demo'
   status: ConnectionStatus
   info?: DeviceInfo
-  /**
-   * Functions the board (or the demo) can run, M7's 6, 11 and 12 included. Typed with the UI's FunctionId until the
-   * UI has screens for them (then FunctionId includes 6, 11 and 12 and this type is exact).
-   */
+  /** Functions the board (or the demo) can run. */
   supported: FunctionId[]
-  activeFunction: DeviceFunctionId | 0
-  learned: Record<DeviceFunctionId, LearnedId[]>
+  activeFunction: FunctionId | 0
+  learned: Record<FunctionId, LearnedId[]>
   params: FunctionParams
   system: SystemConfig
   dirty: boolean
@@ -121,10 +118,7 @@ export interface Device {
   subscribe(cb: () => void): () => void // notified on any state change
   onFrame(cb: (frame: FrameSource) => void): () => void
   onResults(cb: (results: Result[], meta?: ResultsMeta) => void): () => void
-  /**
-   * The device switched function on another host's request (e.g. the R4). Can report 6, 11 or 12 on M7 firmware;
-   * typed with the UI's FunctionId until the UI has screens for them (see `supported`).
-   */
+  /** The device switched function on another host's request (e.g. the R4). */
   onFunctionChange(cb: (fn: FunctionId | 0) => void): () => void
   /** Extension: stream statistics for the live view. */
   onStats(cb: (s: { fps: number; kbps: number }) => void): () => void
@@ -134,15 +128,15 @@ export interface Device {
    */
   connect(kind?: TransportKind): Promise<void>
   disconnect(): Promise<void>
-  setFunction(id: DeviceFunctionId): Promise<void>
+  setFunction(id: FunctionId): Promise<void>
   /**
    * Learn from a picture region: colour (1), line colour (4), the object to track (5) or the content of the QR code
    * whose centre is in the region (6; the largest one wins). Resolves to the learned ID.
    */
   learn(fn: LearnableFn, region: { x: number; y: number; width: number; height: number }): Promise<number>
-  forget(fn: DeviceFunctionId, id: number): Promise<void>
-  forgetAll(fn: DeviceFunctionId): Promise<void>
-  setName(fn: DeviceFunctionId, id: number, name: string): Promise<void>
+  forget(fn: FunctionId, id: number): Promise<void>
+  forgetAll(fn: FunctionId): Promise<void>
+  setName(fn: FunctionId, id: number, name: string): Promise<void>
   setParams(p: Partial<FunctionParams>): Promise<void>
   setSystem(c: Partial<SystemConfig>): Promise<void>
   /** Pause the live picture only; results keep flowing. Rejects when not connected (real mode). */
@@ -176,20 +170,17 @@ export class NotConnectedError extends Error {
   }
 }
 
-/** learn rejection, shared by both backends; `code` selects the message ('no-target': nothing to track in the region). */
-export type LearnErrorCode = 'no-color' | 'no-target' | 'full' | 'busy' | 'cancelled'
 /**
- * Every code a LearnError can carry: LearnErrorCode plus 'no-code' (no decoded QR code in the region, function 6).
- * Staging alias like DeviceFunctionId: 'no-code' moves into LearnErrorCode once the UI has a message for it.
+ * learn rejection, shared by both backends; `code` selects the message ('no-target': nothing to track in the region;
+ * 'no-code': no decoded QR code in the region, function 6).
  */
-export type DeviceLearnErrorCode = LearnErrorCode | 'no-code'
+export type LearnErrorCode = 'no-color' | 'no-target' | 'no-code' | 'full' | 'busy' | 'cancelled'
 export class LearnError extends Error {
-  /** Can be 'no-code' (learn(6)); typed LearnErrorCode until the UI's message table has it (see DeviceLearnErrorCode). */
   readonly code: LearnErrorCode
-  constructor(code: DeviceLearnErrorCode) {
+  constructor(code: LearnErrorCode) {
     super(code)
     this.name = 'LearnError'
-    this.code = code as LearnErrorCode
+    this.code = code
   }
 }
 
@@ -264,13 +255,13 @@ export const defaultParams = (): FunctionParams => ({
   motion: { threshold: 25, minSize: 24, maxResults: 4 },
 })
 export const defaultSystem = (): SystemConfig => ({ uartBaud: 115200, i2cAddress: 0x5a, ledBrightness: 50 })
-export const emptyLearned = (): Record<DeviceFunctionId, LearnedId[]> => ({ 1: [], 2: [], 3: [], 4: [], 5: [], 6: [], 8: [], 11: [], 12: [] })
+export const emptyLearned = (): Record<FunctionId, LearnedId[]> => ({ 1: [], 2: [], 3: [], 4: [], 5: [], 6: [], 8: [], 11: [], 12: [] })
 
 const KNOWN_FNS: readonly number[] = [1, 2, 3, 4, 5, 6, 8, 11, 12]
-export const isDeviceFunctionId = (n: number): n is DeviceFunctionId => KNOWN_FNS.includes(n)
+export const isFunctionId = (n: number): n is FunctionId => KNOWN_FNS.includes(n)
 /** Function ids Studio knows, in the order given; unknown ids (newer firmware) are dropped. */
-export function toFunctionIds(ids: number[]): DeviceFunctionId[] {
-  return ids.filter(isDeviceFunctionId)
+export function toFunctionIds(ids: number[]): FunctionId[] {
+  return ids.filter(isFunctionId)
 }
 
 /** Tiny listener set shared by both backends. */

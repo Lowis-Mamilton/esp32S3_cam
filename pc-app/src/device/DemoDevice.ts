@@ -20,7 +20,6 @@ import {
   emptyLearned,
   nameBytes,
   type Device,
-  type DeviceFunctionId,
   type DeviceInfo,
   type DeviceSnapshot,
   type FrameSource,
@@ -32,7 +31,7 @@ import {
   type SystemConfig,
 } from './types'
 
-const DEMO_FNS: DeviceFunctionId[] = [1, 2, 3, 4, 5, 6, 8, 11, 12]
+const DEMO_FNS: FunctionId[] = [1, 2, 3, 4, 5, 6, 8, 11, 12]
 export const DEMO_INFO: DeviceInfo = {
   protocolVersion: 1,
   firmwareVersion: 'DEMO',
@@ -65,7 +64,7 @@ export class DemoDevice implements Device {
   private learned = emptyLearned()
   private params = defaultParams()
   private system = defaultSystem()
-  private active: DeviceFunctionId | 0 = 1
+  private active: FunctionId | 0 = 1
   private dirty = false
   /** Scene object (index in sceneAt) the tracker follows after learn(5); null = nothing learned. */
   private trackIdx: number | null = null
@@ -135,8 +134,7 @@ export class DemoDevice implements Device {
       mode: 'demo',
       status: 'connected',
       info: DEMO_INFO,
-      // Includes 6, 11 and 12; see DeviceSnapshot.supported for the type.
-      supported: DEMO_FNS as FunctionId[],
+      supported: DEMO_FNS,
       activeFunction: this.active,
       learned: this.learned,
       params: this.params,
@@ -170,7 +168,7 @@ export class DemoDevice implements Device {
   async connect() {}
   async disconnect() {}
 
-  async setFunction(id: DeviceFunctionId) {
+  async setFunction(id: FunctionId) {
     this.active = id
     this.changed()
   }
@@ -233,17 +231,17 @@ export class DemoDevice implements Device {
     this.touch()
     return id
   }
-  async forget(fn: DeviceFunctionId, id: number) {
+  async forget(fn: FunctionId, id: number) {
     this.learned = { ...this.learned, [fn]: this.learned[fn].filter((e) => e.id !== id) }
     if (fn === 5 && this.learned[5].length === 0) this.trackIdx = null
     this.touch()
   }
-  async forgetAll(fn: DeviceFunctionId) {
+  async forgetAll(fn: FunctionId) {
     this.learned = { ...this.learned, [fn]: [] }
     if (fn === 5) this.trackIdx = null
     this.touch()
   }
-  async setName(fn: DeviceFunctionId, id: number, name: string) {
+  async setName(fn: FunctionId, id: number, name: string) {
     if (nameBytes(name) > NAME_MAX_BYTES) throw new Error(`name longer than ${NAME_MAX_BYTES} bytes`)
     if (fn === 2 && !(Number.isInteger(id) && id >= 0 && id <= 586)) throw new Error('invalid tag id')
     if (fn === 8 && !(Number.isInteger(id) && id >= 1 && id <= 9)) throw new Error('invalid gesture id')

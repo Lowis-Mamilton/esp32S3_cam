@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from '@testing-library/react'
+import { fireEvent, render, screen, within } from '@testing-library/react'
 import { beforeEach, expect, test, vi } from 'vitest'
 import { I18nProvider } from '../../i18n'
 import RightPanel from './RightPanel'
@@ -136,7 +136,7 @@ test('sidebar has a gesture item with the Hand icon and its own category colour'
   expect(b).not.toHaveAttribute('aria-disabled')
   expect(b.querySelector('svg')!.getAttribute('class')).toContain('lucide-hand')
   expect((b.querySelector('.nav-disc') as HTMLElement).style.background).toBe('var(--cat-gesture)')
-  expect(container.querySelectorAll('.nav-item')).toHaveLength(8)
+  expect(container.querySelectorAll('.nav-item')).toHaveLength(11) // 9 functions + settings + firmware
 })
 
 test('gesture item is disabled with the firmware hint when the board does not list it', () => {
@@ -176,4 +176,56 @@ test('sidebar: with line and track supported they select', () => {
   fireEvent.click(screen.getByRole('button', { name: '物體追蹤' }))
   expect(onSelect).toHaveBeenNthCalledWith(1, { kind: 'function', id: 4 })
   expect(onSelect).toHaveBeenNthCalledWith(2, { kind: 'function', id: 5 })
+})
+
+// ---- M7: QR code (6), shapes (11), motion (12) ----
+test('function list has 9 items: QR after AprilTag, shapes and motion last, each with its icon and category colour', () => {
+  const { container } = render(
+    <I18nProvider>
+      <Sidebar view={{ kind: 'function', id: 1 }} supported={[1, 2, 3, 4, 5, 6, 8, 11, 12]} onSelect={() => {}} />
+    </I18nProvider>,
+  )
+  const nav = screen.getByRole('navigation')
+  const fnItems = [...container.querySelectorAll('.nav-item')].slice(0, 9).map((b) => b.textContent)
+  expect(fnItems).toEqual(['顏色', 'AprilTag', 'QR Code', '人臉', '線條追蹤', '物體追蹤', '手勢', '幾何形狀', '動態偵測'])
+  const cases = [
+    ['QR Code', 'lucide-scan-qr-code', 'var(--cat-qr)'],
+    ['幾何形狀', 'lucide-shapes', 'var(--cat-shape)'],
+    ['動態偵測', 'lucide-activity', 'var(--cat-motion)'],
+  ] as const
+  for (const [name, icon, color] of cases) {
+    const b = within(nav).getByRole('button', { name })
+    expect(b).not.toHaveAttribute('aria-disabled')
+    expect(b.querySelector('svg')!.getAttribute('class')).toContain(icon)
+    expect((b.querySelector('.nav-disc') as HTMLElement).style.background).toBe(color)
+  }
+})
+
+test('M7 functions select, and older firmware (1,2,3,4,5,8) greys them out with the firmware hint', () => {
+  const onSelect = vi.fn()
+  const { unmount } = render(
+    <I18nProvider>
+      <Sidebar view={{ kind: 'function', id: 1 }} supported={[1, 2, 3, 4, 5, 6, 8, 11, 12]} onSelect={onSelect} />
+    </I18nProvider>,
+  )
+  for (const name of ['QR Code', '幾何形狀', '動態偵測']) fireEvent.click(screen.getByRole('button', { name }))
+  expect(onSelect.mock.calls.map((c) => c[0])).toEqual([
+    { kind: 'function', id: 6 },
+    { kind: 'function', id: 11 },
+    { kind: 'function', id: 12 },
+  ])
+  unmount()
+  onSelect.mockClear()
+  render(
+    <I18nProvider>
+      <Sidebar view={{ kind: 'function', id: 1 }} supported={[1, 2, 3, 4, 5, 8]} onSelect={onSelect} />
+    </I18nProvider>,
+  )
+  for (const name of ['QR Code', '幾何形狀', '動態偵測']) {
+    const b = screen.getByRole('button', { name })
+    expect(b).toHaveAttribute('aria-disabled', 'true')
+    expect(b).toHaveAccessibleDescription('需要更新韌體')
+    fireEvent.click(b)
+  }
+  expect(onSelect).not.toHaveBeenCalled()
 })

@@ -1,7 +1,17 @@
 import type { Lang } from '../../i18n'
 import type { FunctionId } from '../layout/types'
 
-const ALGO: Record<FunctionId, string> = { 1: 'MXCAM_ALGO_COLOR', 2: 'MXCAM_ALGO_TAG', 3: 'MXCAM_ALGO_FACE', 4: 'MXCAM_ALGO_LINE', 5: 'MXCAM_ALGO_TRACK', 8: 'MXCAM_ALGO_GESTURE' }
+const ALGO: Record<FunctionId, string> = {
+  1: 'MXCAM_ALGO_COLOR',
+  2: 'MXCAM_ALGO_TAG',
+  3: 'MXCAM_ALGO_FACE',
+  4: 'MXCAM_ALGO_LINE',
+  5: 'MXCAM_ALGO_TRACK',
+  6: 'MXCAM_ALGO_QR',
+  8: 'MXCAM_ALGO_GESTURE',
+  11: 'MXCAM_ALGO_SHAPE',
+  12: 'MXCAM_ALGO_MOTION',
+}
 
 const TEXT = {
   'zh-TW': {
@@ -19,6 +29,12 @@ const TEXT = {
     lineCross: '// 遇到路口',
     trackVals: '// r.x、r.width 是物體的位置與大小，r.confidence 是 0–100',
     trackLost: '// 沒有結果 = 物體跟丟了',
+    qrId: '// r.id 是學到的 ID（沒學過是 0），位置與大小：r.x, r.y, r.width, r.height',
+    qrText: '// 讀第 i 個 QR Code 的內容；讀不到（畫面已經換了）就等下一次',
+    shapeId: '// r.id 是形狀：1 圓形、2 三角形、3 正方形、4 長方形；r.confidence 是 0–100',
+    shapeTriangle: '// 看到三角形的時候',
+    motionAny: '// 有結果 = 畫面裡有東西在動',
+    motionPos: '// r.x、r.y 是動的位置（最大的那一塊），r.width、r.height 是大小',
   },
   en: {
     serial: '// Serial Monitor',
@@ -35,6 +51,12 @@ const TEXT = {
     lineCross: '// At a crossing',
     trackVals: '// r.x, r.width: where the object is and how big; r.confidence is 0-100',
     trackLost: '// No result = the object is lost',
+    qrId: '// r.id is the learned ID (0 = not learned); position and size: r.x, r.y, r.width, r.height',
+    qrText: '// Read the content of code i; false means the picture has changed, so try again next time',
+    shapeId: '// r.id is the shape: 1 circle, 2 triangle, 3 square, 4 rectangle; r.confidence is 0-100',
+    shapeTriangle: '// When a triangle is seen',
+    motionAny: '// A result = something is moving',
+    motionPos: '// r.x, r.y: where it moves (the largest area); r.width, r.height: how big',
   },
 } as const
 
@@ -58,10 +80,26 @@ export function snippetFor(fn: FunctionId, lang: Lang): string {
       Serial.print(r.width);
       Serial.print(" ");
       Serial.println(r.confidence);`,
+    6: `      ${c.qrId}
+      Serial.print(r.id);
+      Serial.print(" ");
+      char text[129];
+      if (cam.readText(i, text, sizeof(text))) {  ${c.qrText}
+        Serial.println(text);
+      }`,
     8: `${boxBody(c.gestureId, c.box, 'r.id')}
       if (r.id == MXCAM_GESTURE_LIKE) {  ${c.gestureLike}
         Serial.println("like!");
       }`,
+    11: `${boxBody(c.shapeId, c.box, 'r.id')}
+      if (r.id == MXCAM_SHAPE_TRIANGLE) {  ${c.shapeTriangle}
+        Serial.println("triangle!");
+      }`,
+    12: `      ${c.motionPos}
+      Serial.print("move ");
+      Serial.print(r.x);
+      Serial.print(" ");
+      Serial.println(r.y);`,
   }
   return `#include <MXCam.h>
 
@@ -76,19 +114,36 @@ void setup() {
 
 void loop() {
   if (cam.request()) {    ${c.ask}
-${fn === 5 ? `    if (cam.available()) {     ${c.each}
-      MXCamResult r = cam.read();
-${body[fn]}
-    } else {  ${c.trackLost}
-      Serial.println("lost");
-    }` : `    while (cam.available()) {  ${c.each}
-      MXCamResult r = cam.read();
-${body[fn]}
-    }`}
+${readLoop(fn, body[fn], c)}
   }
   delay(50);
 }
 `
+}
+
+/** How the results are read: one tracked object or moving area, numbered QR codes (their content is read by index), or all of them. */
+function readLoop(fn: FunctionId, body: string, c: (typeof TEXT)[Lang]): string {
+  if (fn === 5)
+    return `    if (cam.available()) {     ${c.each}
+      MXCamResult r = cam.read();
+${body}
+    } else {  ${c.trackLost}
+      Serial.println("lost");
+    }`
+  if (fn === 12)
+    return `    if (cam.available()) {     ${c.motionAny}
+      MXCamResult r = cam.read();
+${body}
+    }`
+  if (fn === 6)
+    return `    for (uint8_t i = 0; cam.available(); i++) {  ${c.each}
+      MXCamResult r = cam.read();
+${body}
+    }`
+  return `    while (cam.available()) {  ${c.each}
+      MXCamResult r = cam.read();
+${body}
+    }`
 }
 
 /** The common body: a note on r.id, the box, and the box printed. */

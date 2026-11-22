@@ -3,7 +3,7 @@ import type { ResultsStore } from "../../device/resultsStore";
 import type { LearnedId, Result } from "../../device/types";
 import { useT, type MessageKey } from "../../i18n";
 import type { FunctionId } from "../layout/types";
-import { FN_KIND, idColorVar, signed } from "../live/labels";
+import { FN_KIND, idColorVar, shapeName, signed } from "../live/labels";
 import { useMirror } from "../live/mirror";
 
 interface Props {
@@ -62,16 +62,28 @@ export default function ResultsTab({ fn, results: store, learned }: Props) {
   const face = fn === 3;
   const gesture = fn === 8;
   const track = fn === 5;
+  const qr = fn === 6;
+  const shape = fn === 11;
+  const motion = fn === 12;
+  // Motion has nothing to name; every other function has a name column (empty when unnamed).
+  const named = !motion;
+  const scored = face || gesture || track || shape || motion;
   const idText = (r: Result) =>
     r.kind === "face"
       ? t("catFace")
-      : r.kind === "gesture"
-        ? String(r.id)
-        : r.kind === "tag"
-        ? `Tag ${r.id}`
-        : r.id
-          ? `ID${r.id}`
-          : "—";
+      : r.kind === "motion"
+        ? t("motionLabel")
+        : r.kind === "gesture" || r.kind === "shape"
+          ? String(r.id)
+          : r.kind === "tag"
+            ? `Tag ${r.id}`
+            : r.kind === "qr"
+              ? r.id
+                ? `ID ${r.id}`
+                : t("qrUnlearned")
+              : r.id
+                ? `ID${r.id}`
+                : "—";
   return (
     <>
       <table className="rp-table">
@@ -79,13 +91,14 @@ export default function ResultsTab({ fn, results: store, learned }: Props) {
           <tr>
             <th scope="col">{t("colId")}</th>
             {gesture && <th scope="col">{t("colGesture")}</th>}
-            <th scope="col">{t("colName")}</th>
+            {shape && <th scope="col">{t("colShape")}</th>}
+            {named && <th scope="col">{t("colName")}</th>}
+            {qr && <th scope="col" className="rp-content">{t("colContent")}</th>}
             <th scope="col">x</th>
             <th scope="col">y</th>
             <th scope="col">{t("colWidth")}</th>
             <th scope="col">{t("colHeight")}</th>
-            {(face || track) && <th scope="col">{t("colConfidence")}</th>}
-            {gesture && <th scope="col">{t("colConfidence")}</th>}
+            {scored && <th scope="col">{t("colConfidence")}</th>}
           </tr>
         </thead>
         <tbody>
@@ -100,14 +113,23 @@ export default function ResultsTab({ fn, results: store, learned }: Props) {
                 {idText(r)}
               </td>
               {gesture && <td>{t(`gesture${r.id}` as MessageKey)}</td>}
-              <td className="rp-name">
-                {learned.find((l) => l.id === r.id)?.name ?? ""}
-              </td>
+              {shape && <td className="rp-name">{shapeName(r.id, t)}</td>}
+              {named && (
+                <td className="rp-name">
+                  {learned.find((l) => l.id === r.id)?.name ?? ""}
+                </td>
+              )}
+              {qr && (
+                <td className="rp-content">
+                  {r.text ?? "—"}
+                  {r.truncated && <small>{t("qrTruncated")}</small>}
+                </td>
+              )}
               <td>{Math.round(r.x)}</td>
               <td>{Math.round(r.y)}</td>
               <td>{Math.round(r.width)}</td>
               <td>{Math.round(r.height)}</td>
-              {(face || gesture || track) && <td>{Math.round(r.confidence ?? 0)}%</td>}
+              {scored && <td>{Math.round(r.confidence ?? 0)}%</td>}
             </tr>
           ))}
         </tbody>

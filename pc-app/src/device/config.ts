@@ -1,8 +1,8 @@
-import { NAME_MAX_BYTES, emptyLearned, nameBytes, type DeviceFunctionId, type FunctionParams, type LearnedId, type SystemConfig } from './types'
+import { NAME_MAX_BYTES, emptyLearned, nameBytes, type FunctionId, type FunctionParams, type LearnedId, type SystemConfig } from './types'
 
 /** Versioned device configuration, as exported/imported by Studio. */
 export interface Config {
-  learned: Record<DeviceFunctionId, LearnedId[]>
+  learned: Record<FunctionId, LearnedId[]>
   /**
    * gesture, line, track, shape and motion are optional: files from before M8a / M6 / M7 have none, and absent
    * leaves the board alone.
@@ -17,9 +17,9 @@ export interface Config {
   system: SystemConfig
 }
 
-const FNS: DeviceFunctionId[] = [1, 2, 3]
+const FNS: FunctionId[] = [1, 2, 3]
 /** Optional lists: files from before M8a (8), M6 (4, 5) or M7 (6, 11, 12) have none. */
-const OPTIONAL_FNS: DeviceFunctionId[] = [8, 4, 5, 6, 11, 12]
+const OPTIONAL_FNS: FunctionId[] = [8, 4, 5, 6, 11, 12]
 const MAX_GESTURE_ID = 9
 const MAX_TAG_ID = 586 // tag36h11 has 587 codes
 const MAX_QR_ID = 8
@@ -28,7 +28,7 @@ const MAX_SHAPE_ID = 4
 const MAX_QR_TEXT = 128
 
 /** Valid learned IDs per function. */
-function validId(fn: DeviceFunctionId, id: unknown): boolean {
+function validId(fn: FunctionId, id: unknown): boolean {
   switch (fn) {
     case 2:
       return isInt(id, 0, MAX_TAG_ID)
@@ -70,7 +70,7 @@ function bad(what: string): never {
   throw new ConfigFileError(what)
 }
 
-function parseLearned(fn: DeviceFunctionId, list: unknown): LearnedId[] {
+function parseLearned(fn: FunctionId, list: unknown): LearnedId[] {
   if (!Array.isArray(list)) return bad(`learned.${fn}`)
   const seen = new Set<number>()
   return list.map((e: unknown): LearnedId => {

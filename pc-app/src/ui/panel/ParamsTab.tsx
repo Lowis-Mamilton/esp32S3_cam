@@ -278,8 +278,46 @@ function FnParams({ device, fn, params, learned = [], disabled, guard }: Props) 
       </div>
     )
   }
+  if (fn === 6) return <p className="muted">{t('qrNoParams')}</p>
+  if (fn === 11) {
+    const sh = params.shape
+    const shape = (patch: Partial<FunctionParams['shape']>) => set((p) => ({ shape: { ...p.shape, ...patch } }))
+    const modes = [
+      ['dark', 'paramShapeDark'],
+      ['light', 'paramShapeLight'],
+    ] as const
+    return (
+      <div className="rp-params">
+        <div className="rp-field" role="group" aria-label={t('paramShapeMode')}>
+          <span>{t('paramShapeMode')}</span>
+          <div className="rp-actions">
+            {modes.map(([mode, key]) => (
+              <button key={mode} type="button" className="btn" aria-pressed={sh.mode === mode} disabled={disabled} onClick={() => void shape({ mode })}>
+                {t(key)}
+              </button>
+            ))}
+          </div>
+        </div>
+        {checkbox(sh.threshold === 0, (v) => void shape({ threshold: v ? 0 : 128 }), 'paramAuto')}
+        <Slider key="11-threshold" label={t('paramLineThreshold')} value={sh.threshold || 128} min={1} max={255} disabled={disabled || sh.threshold === 0} onCommit={(v) => shape({ threshold: v })} />
+        <Slider key="11-minSize" label={t('paramMinSize')} value={sh.minSize} min={16} max={240} disabled={disabled} onCommit={(v) => shape({ minSize: v })} />
+        <Slider key="11-maxResults" label={t('paramMaxResults')} value={sh.maxResults} min={1} max={8} disabled={disabled} onCommit={(v) => shape({ maxResults: v })} />
+      </div>
+    )
+  }
+  if (fn === 12) {
+    const m = params.motion
+    const motion = (patch: Partial<FunctionParams['motion']>) => set((p) => ({ motion: { ...p.motion, ...patch } }))
+    return (
+      <div className="rp-params">
+        <Slider key="12-threshold" label={t('paramMotionThreshold')} value={m.threshold} min={5} max={100} disabled={disabled} hint={t('motionThresholdHint')} onCommit={(v) => motion({ threshold: v })} />
+        <Slider key="12-minSize" label={t('paramMinSize')} value={m.minSize} min={8} max={240} disabled={disabled} onCommit={(v) => motion({ minSize: v })} />
+        <Slider key="12-maxResults" label={t('paramMaxResults')} value={m.maxResults} min={1} max={8} disabled={disabled} onCommit={(v) => motion({ maxResults: v })} />
+      </div>
+    )
+  }
   const f = params.face
-  const face = (patch: Partial<FunctionParams['face']>) => set((p) => ({ face: { ...p.face, ...patch } }))
+  const face =(patch: Partial<FunctionParams['face']>) => set((p) => ({ face: { ...p.face, ...patch } }))
   return (
     <div className="rp-params">
       <Slider key="3-threshold" label={t('paramThreshold')} value={f.threshold} min={0} max={100} disabled={disabled} hint={t('faceThresholdHint')} onCommit={(v) => face({ threshold: v })} />
