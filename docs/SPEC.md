@@ -261,7 +261,7 @@ docs/          規格、協定、ADR
 - [x] 協定封包、指令代碼、錯誤碼定稿（`docs/protocol.md`）
 - [ ] M4：I2C 傳輸方式定稿
 - [ ] M10 藍牙（ADR-0022）待辦：
-  - 使用者用 Studio 實機驗收（韌體端已用 `tools/ble/smoke.py` 驗證）
+  - [x] 使用者用 Studio 實機驗收（2026-11-22 通過；韌體端另用 `tools/ble/smoke.py` 驗證）
   - TFT 顯示藍牙名稱 `MXCam-XXXX`（教室裡多台時才分得出來）；`mxcam_ble_name()` 已備好
   - 預設韌體要不要含藍牙：等 M8 的模型分割區騰出 flash、再找出 10 KB 以上的內部 RAM 之後決定
   - 沒有配對也沒有開關：附近的人能連上並改設定。之後加「關閉無線」設定

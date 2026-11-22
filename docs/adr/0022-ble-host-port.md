@@ -35,4 +35,4 @@ MXCam 裝在車上時，接著 USB 線很難一邊跑一邊看畫面、調參數
 
 - 韌體：`python tools/ble/smoke.py --fn 3 --ttl COM7`（藍牙版韌體）。2026-11-22 實測：1 秒內連上，GET_INFO／SET_FUNCTION／GET_CONFIG／STREAM_START 都有回應（約 31 ms），5.0 fps、25 KB/s、JPEG 有效、PING 全部有回應、沒有亂碼；人臉 10.3 fps／47.6 ms，手勢 5.0 fps／159 ms；內部 RAM 最低 63,096 B。同一版韌體用 USB 串流的速度與預設韌體相同。
 - 預設韌體（不含藍牙）：映像 3,548,240 B，沒有任何藍牙程式碼。
-- Studio：`pc-app` 的測試用假的 Web Bluetooth 涵蓋連線、分段寫入、跨通知的封包、5 fps、斷線。實機用瀏覽器驗收還沒做。
+- Studio：`pc-app` 的測試用假的 Web Bluetooth 涵蓋連線、分段寫入、跨通知的封包、5 fps、斷線。使用者 2026-11-22 用 Chrome 以藍牙連實板測試，回報沒有問題。
