@@ -3,9 +3,10 @@
 
 #include "mxcam_store.h"
 
-static int fails;
+static int fails, checks;
 #define CHECK(c)                                          \
   do {                                                    \
+    checks++;                                             \
     if (!(c)) {                                           \
       printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #c); \
       fails++;                                            \
@@ -13,6 +14,9 @@ static int fails;
   } while (0)
 
 static uint8_t blob[MXST_BLOB_MAX + 16];
+
+/* Func config records serialize writes: line, track, gesture, shape, motion (M7). */
+#define N_FCFG 5
 
 static void test_defaults(void) {
   mxs_data_t d;
@@ -77,9 +81,9 @@ static void test_roundtrip(void) {
     CHECK(mxst_set_name(&a, i == 0 ? MXST_FN_COLOR : MXST_FN_TAG, i == 0 ? 1 : i, nm, MXP_NAME_MAX));
   }
   size_t nmax = mxst_serialize(&a, blob, sizeof(blob));
-  /* the v1 maximum (1719) + n_fcfg + the three records written (line, track,
-   * gesture) + n_lrn (nothing learned) */
-  CHECK(nmax == 1719 + 1 + 3 * MXP_FUNC_CONFIG_SIZE + 1 && nmax <= (size_t)MXST_BLOB_MAX);
+  /* the v1 maximum (1719) + n_fcfg + the five records written (line, track,
+   * gesture, shape, motion) + n_lrn (nothing learned) */
+  CHECK(nmax == 1719 + 1 + N_FCFG * MXP_FUNC_CONFIG_SIZE + 1 && nmax <= (size_t)MXST_BLOB_MAX);
   /* too-small cap */
   CHECK(mxst_serialize(&a, blob, n - 1) == 0);
   /* empty data round trips too */
@@ -135,8 +139,8 @@ static void test_corruption(void) {
   MUT("v1 with a record list", t[4] = 1, 1);
   MUT("v2 with a learned list", t[4] = 2, 1);
   MUT("n_fcfg > 16", t[o_fc] = 17, 1);
-  MUT("n_fcfg too many for data", t[o_fc] = 4, 1);
-  MUT("n_fcfg too few", t[o_fc] = 2, 1);
+  MUT("n_fcfg too many for data", t[o_fc] = N_FCFG + 1, 1);
+  MUT("n_fcfg too few", t[o_fc] = N_FCFG - 1, 1);
   MUT("n_lrn too many for data", t[n - 3] = 1, 1);
   MUT("bad crc", t[n - 1] ^= 0x55, 0);
   MUT("bit flip", t[10] ^= 1, 0);
@@ -277,9 +281,9 @@ static void test_deserialize_rejects_bad_utf8(void) {
   CHECK(mxst_set_name(&a, MXST_FN_TAG, 5, "ab", 2));
   size_t n = mxst_serialize(&a, blob, sizeof(blob));
   CHECK(n > 0);
-  /* the name bytes are just before the func config list (n_fcfg + 3 records),
+  /* the name bytes are just before the func config list (n_fcfg + 5 records),
    * the empty learned list (n_lrn) and the CRC */
-  const size_t tail = 1 + 3 * MXP_FUNC_CONFIG_SIZE + 1 + 2;
+  const size_t tail = 1 + N_FCFG * MXP_FUNC_CONFIG_SIZE + 1 + 2;
   CHECK(blob[n - tail - 2] == 'a' && blob[n - tail - 1] == 'b');
   blob[n - tail - 2] = 0xC3;
   blob[n - tail - 1] = 0x28; /* C3 28: bad continuation */
@@ -390,18 +394,22 @@ static void test_roundtrip_gesture(void) {
   a.gesture_cfg.max_hands = 2;
   CHECK(mxst_set_name(&a, MXST_FN_GESTURE, 7, "\xE5\x89\x8D\xE9\x80\xB2", 6)); /* 前進 */
   size_t n = mxst_serialize(&a, blob, sizeof(blob));
-  CHECK(n > 2 + 1 + 3 * MXP_FUNC_CONFIG_SIZE + 1 && blob[4] == 3);
-  /* tail: n_fcfg 3, the SET_FUNC_CONFIG packets of line, track and gesture,
-   * then n_lrn 0 (nothing learned) and the CRC */
+  CHECK(n > 2 + 1 + N_FCFG * MXP_FUNC_CONFIG_SIZE + 1 && blob[4] == 3);
+  /* tail: n_fcfg 5, the SET_FUNC_CONFIG packets of line, track, gesture,
+   * shape and motion, then n_lrn 0 (nothing learned) and the CRC */
   uint8_t rec[MXP_FUNC_CONFIG_SIZE];
-  const size_t o_fc = n - 2 - 1 - 3 * MXP_FUNC_CONFIG_SIZE - 1;
-  CHECK(blob[o_fc] == 3 && blob[n - 3] == 0);
+  const size_t o_fc = n - 2 - 1 - N_FCFG * MXP_FUNC_CONFIG_SIZE - 1;
+  CHECK(blob[o_fc] == N_FCFG && blob[n - 3] == 0);
   mxp_pack_line_config(&a.line_cfg, rec);
   CHECK(memcmp(blob + o_fc + 1, rec, sizeof(rec)) == 0);
   mxp_pack_track_config(&a.track_cfg, rec);
   CHECK(memcmp(blob + o_fc + 1 + MXP_FUNC_CONFIG_SIZE, rec, sizeof(rec)) == 0);
   mxp_pack_gesture_config(&a.gesture_cfg, rec);
   CHECK(memcmp(blob + o_fc + 1 + 2 * MXP_FUNC_CONFIG_SIZE, rec, sizeof(rec)) == 0);
+  mxp_pack_shape_config(&a.shape_cfg, rec);
+  CHECK(memcmp(blob + o_fc + 1 + 3 * MXP_FUNC_CONFIG_SIZE, rec, sizeof(rec)) == 0);
+  mxp_pack_motion_config(&a.motion_cfg, rec);
+  CHECK(memcmp(blob + o_fc + 1 + 4 * MXP_FUNC_CONFIG_SIZE, rec, sizeof(rec)) == 0);
   mxst_defaults(&b);
   CHECK(mxst_deserialize(blob, n, &b));
   CHECK(gesture_is(&b.gesture_cfg, 50, 70, 2));
@@ -518,11 +526,18 @@ static void make_model(mxk_model_t *m, uint8_t tw, uint8_t th, int16_t cx, int16
   for (int i = 0; i < tw * th; i++) m->tmpl[i] = (uint8_t)(i * 37 + 11);
 }
 
+/* QR content of n bytes: seed, seed + 1, ... */
+static void qr_bytes(uint8_t *p, size_t n, uint8_t seed) {
+  for (size_t i = 0; i < n; i++) p[i] = (uint8_t)(seed + i);
+}
+
 static void test_serialize_max_fits(void) {
-  /* v2 maximum (1880) + n_lrn + line record (4 + 3) + object record (4 + 77 + 32 x 32) */
-  CHECK(MXST_BLOB_MAX == 1880 + 1 + 4 + 3 + 4 + 77 + MXK_TMPL_MAX * MXK_TMPL_MAX);
-  CHECK(MXST_BLOB_MAX == 2993);
-  mxs_data_t a, b;
+  /* v2 maximum (1880) + n_lrn + line record (4 + 3) + object record (4 + 77 + 32 x 32)
+   * + QR record (4 + 1 + 8 x (4 + 128)) */
+  CHECK(MXST_QR_REC_MAX == 1057);
+  CHECK(MXST_BLOB_MAX == 1880 + 1 + 4 + 3 + 4 + 77 + MXK_TMPL_MAX * MXK_TMPL_MAX + 4 + MXST_QR_REC_MAX);
+  CHECK(MXST_BLOB_MAX == 4054);
+  static mxs_data_t a, b;
   mxst_defaults(&a);
   a.n_colors = 7;
   for (int i = 0; i < 7; i++) a.colors[i].id = (uint8_t)(i + 1);
@@ -538,11 +553,20 @@ static void test_serialize_max_fits(void) {
   memset(nm, 'q', sizeof(nm));
   CHECK(mxst_set_name(&a, MXST_FN_TRACK, 1, nm, MXP_NAME_MAX));
   for (uint16_t i = 1; i < MXST_MAX_NAMES; i++) CHECK(mxst_set_name(&a, MXST_FN_TAG, i, nm, MXP_NAME_MAX));
+  /* 8 QR codes of 128 stored bytes (content longer than 128) */
+  uint8_t q[MXP_RESULT_DATA_MAX];
+  for (int i = 0; i < MXST_MAX_QR; i++) {
+    qr_bytes(q, sizeof(q), (uint8_t)(i * 7));
+    CHECK(mxst_learn_qr(&a, q, MXP_RESULT_DATA_MAX, (uint16_t)(300 + i)) == i + 1);
+  }
+  a.shape_cfg.max_results = 8;
+  a.motion_cfg.threshold = 100;
   size_t n = mxst_serialize(&a, blob, sizeof(blob));
-  /* everything this firmware writes: v1 max + 3 func configs + both learned records */
-  CHECK(n == 1719 + 1 + 3 * MXP_FUNC_CONFIG_SIZE + 1 + 4 + 3 + 4 + 77 + 1024);
+  /* everything this firmware writes: v1 max + 5 func configs + the three learned records */
+  CHECK(n == 1719 + 1 + N_FCFG * MXP_FUNC_CONFIG_SIZE + 1 + 4 + 3 + 4 + 77 + 1024 + 4 + 1057);
   CHECK(n > 0 && n <= (size_t)MXST_BLOB_MAX);
   CHECK(mxst_deserialize(blob, n, &b) && memcmp(&a, &b, sizeof(a)) == 0);
+  CHECK(b.n_qr == MXST_MAX_QR && b.qr[7].total_len == 307 && b.qr[7].len == 128 && b.qr[7].bytes[1] == 50);
 }
 
 /* ---- blob v3 (M6): line / track func configs, learned line colour and object ---- */
@@ -976,6 +1000,458 @@ static void test_name_keys_gesture(void) {
   expect_reject("gesture name id 10", blob, n);
 }
 
+/* ---- M7: shape / motion func configs, QR table (learned record fn 6) ---- */
+
+/* A v3 blob written by the M6 / M8a mxst_serialize (commit c727fb3) before M7:
+ * colour 1 (230,20,20), object 16x16 (box 32x32 at 120,90, rgb 200,40,30)
+ * named "小車" (5, 1), line colour (200,30,30) with line mode 2, gesture
+ * config 50 / 70 / 2. Never change it: M7+ firmware must keep reading it. */
+static const uint8_t k_v3_m6_fixture[417] = {
+    0x4d, 0x58, 0x53, 0x54, 0x03, 0x01, 0x1e, 0x64, 0x00, 0x04, 0x01, 0x01,
+    0x3c, 0x04, 0x00, 0xc2, 0x01, 0x00, 0x5a, 0x32, 0x00, 0x00, 0x00, 0x01,
+    0x01, 0xe6, 0x14, 0x14, 0x01, 0x05, 0x01, 0x00, 0x06, 0xe5, 0xb0, 0x8f,
+    0xe8, 0xbb, 0x8a, 0x03, 0x04, 0x01, 0x02, 0x00, 0x3c, 0x08, 0x04, 0x50,
+    0x1e, 0x00, 0x05, 0x01, 0x32, 0x0a, 0x01, 0x01, 0x00, 0x00, 0x00, 0x00,
+    0x08, 0x01, 0x32, 0x46, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0x04,
+    0x01, 0x03, 0x00, 0xc8, 0x1e, 0x1e, 0x05, 0x01, 0x4d, 0x01, 0x10, 0x10,
+    0x20, 0x00, 0x20, 0x00, 0x78, 0x00, 0x5a, 0x00, 0xc8, 0x28, 0x1e, 0x07,
+    0x00, 0xef, 0x03, 0xd7, 0x07, 0xbf, 0x0b, 0xa7, 0x0f, 0x8f, 0x13, 0x77,
+    0x17, 0x5f, 0x1b, 0x47, 0x1f, 0x2f, 0x23, 0x17, 0x27, 0xff, 0x2a, 0xe7,
+    0x2e, 0xcf, 0x32, 0xb7, 0x36, 0x9f, 0x3a, 0x87, 0x3e, 0x6f, 0x42, 0x57,
+    0x46, 0x3f, 0x4a, 0x27, 0x4e, 0x0f, 0x52, 0xf7, 0x55, 0xdf, 0x59, 0xc7,
+    0x5d, 0xaf, 0x61, 0x97, 0x65, 0x7f, 0x69, 0x67, 0x6d, 0x4f, 0x71, 0x37,
+    0x75, 0x1f, 0x79, 0x0b, 0x30, 0x55, 0x7a, 0x9f, 0xc4, 0xe9, 0x0e, 0x33,
+    0x58, 0x7d, 0xa2, 0xc7, 0xec, 0x11, 0x36, 0x5b, 0x80, 0xa5, 0xca, 0xef,
+    0x14, 0x39, 0x5e, 0x83, 0xa8, 0xcd, 0xf2, 0x17, 0x3c, 0x61, 0x86, 0xab,
+    0xd0, 0xf5, 0x1a, 0x3f, 0x64, 0x89, 0xae, 0xd3, 0xf8, 0x1d, 0x42, 0x67,
+    0x8c, 0xb1, 0xd6, 0xfb, 0x20, 0x45, 0x6a, 0x8f, 0xb4, 0xd9, 0xfe, 0x23,
+    0x48, 0x6d, 0x92, 0xb7, 0xdc, 0x01, 0x26, 0x4b, 0x70, 0x95, 0xba, 0xdf,
+    0x04, 0x29, 0x4e, 0x73, 0x98, 0xbd, 0xe2, 0x07, 0x2c, 0x51, 0x76, 0x9b,
+    0xc0, 0xe5, 0x0a, 0x2f, 0x54, 0x79, 0x9e, 0xc3, 0xe8, 0x0d, 0x32, 0x57,
+    0x7c, 0xa1, 0xc6, 0xeb, 0x10, 0x35, 0x5a, 0x7f, 0xa4, 0xc9, 0xee, 0x13,
+    0x38, 0x5d, 0x82, 0xa7, 0xcc, 0xf1, 0x16, 0x3b, 0x60, 0x85, 0xaa, 0xcf,
+    0xf4, 0x19, 0x3e, 0x63, 0x88, 0xad, 0xd2, 0xf7, 0x1c, 0x41, 0x66, 0x8b,
+    0xb0, 0xd5, 0xfa, 0x1f, 0x44, 0x69, 0x8e, 0xb3, 0xd8, 0xfd, 0x22, 0x47,
+    0x6c, 0x91, 0xb6, 0xdb, 0x00, 0x25, 0x4a, 0x6f, 0x94, 0xb9, 0xde, 0x03,
+    0x28, 0x4d, 0x72, 0x97, 0xbc, 0xe1, 0x06, 0x2b, 0x50, 0x75, 0x9a, 0xbf,
+    0xe4, 0x09, 0x2e, 0x53, 0x78, 0x9d, 0xc2, 0xe7, 0x0c, 0x31, 0x56, 0x7b,
+    0xa0, 0xc5, 0xea, 0x0f, 0x34, 0x59, 0x7e, 0xa3, 0xc8, 0xed, 0x12, 0x37,
+    0x5c, 0x81, 0xa6, 0xcb, 0xf0, 0x15, 0x3a, 0x5f, 0x84, 0xa9, 0xce, 0xf3,
+    0x18, 0x3d, 0x62, 0x87, 0xac, 0xd1, 0xf6, 0x1b, 0x40, 0x65, 0x8a, 0xaf,
+    0xd4, 0xf9, 0x1e, 0x43, 0x68, 0x8d, 0xb2, 0xd7, 0xfc, 0x21, 0x46, 0x6b,
+    0x90, 0xb5, 0xda, 0xff, 0x24, 0x49, 0x6e, 0x93, 0xb8, 0xdd, 0x02, 0x27,
+    0x4c, 0x71, 0x96, 0xbb, 0xe0, 0x05, 0x2a, 0x4f, 0x74, 0x99, 0xbe, 0xe3,
+    0x08, 0x2d, 0x52, 0x77, 0x9c, 0xc1, 0xe6, 0x15, 0xde,
+};
+
+static bool shape_cfg_is_default(const mxp_shape_config_t *c) {
+  mxp_shape_config_t def;
+  mxp_shape_config_defaults(&def);
+  return c->mode == def.mode && c->threshold == def.threshold && c->min_size == def.min_size &&
+         c->max_results == def.max_results;
+}
+
+static bool motion_cfg_is_default(const mxp_motion_config_t *c) {
+  mxp_motion_config_t def;
+  mxp_motion_config_defaults(&def);
+  return c->threshold == def.threshold && c->min_size == def.min_size && c->max_results == def.max_results;
+}
+
+static void test_defaults_m7(void) {
+  mxs_data_t d;
+  memset(&d, 0xAB, sizeof(d));
+  mxst_defaults(&d);
+  CHECK(shape_cfg_is_default(&d.shape_cfg) && motion_cfg_is_default(&d.motion_cfg) && d.n_qr == 0);
+  CHECK(d.shape_cfg.min_size == 32 && d.motion_cfg.threshold == 25);
+  CHECK(MXST_FN_QR == MXP_FUNC_QR && MXST_FN_SHAPE == MXP_FUNC_SHAPE && MXST_FN_MOTION == MXP_FUNC_MOTION);
+}
+
+static void test_deserialize_m6_v3_fixture(void) {
+  static mxs_data_t d, e;
+  memset(&d, 0xAB, sizeof(d));
+  CHECK(mxst_deserialize(k_v3_m6_fixture, sizeof(k_v3_m6_fixture), &d));
+  CHECK(d.cfg.tolerance == 30 && d.cfg.dirty == 0);
+  CHECK(d.n_colors == 1 && d.colors[0].id == 1 && d.colors[0].rgb[0] == 230 && d.colors[0].rgb[1] == 20);
+  uint8_t l = 0;
+  const char *s = mxst_get_name(&d, MXST_FN_TRACK, 1, &l);
+  CHECK(d.n_names == 1 && s && l == 6 && memcmp(s, "\xE5\xB0\x8F\xE8\xBB\x8A", 6) == 0);
+  CHECK(d.line_has_color == 1 && d.line_rgb[0] == 200 && d.line_rgb[1] == 30 && d.line_rgb[2] == 30);
+  CHECK(d.line_cfg.mode == MXP_LINE_MODE_LEARNED);
+  CHECK(d.has_object == 1 && d.object.tw == 16 && d.object.th == 16 && d.object.box_w == 32 && d.object.cx == 120 &&
+        d.object.cy == 90 && d.object.tmpl[0] == 11);
+  CHECK(gesture_is(&d.gesture_cfg, 50, 70, 2));
+  /* new in M7: defaults, no QR codes (review item 5) */
+  CHECK(shape_cfg_is_default(&d.shape_cfg) && motion_cfg_is_default(&d.motion_cfg));
+  CHECK(d.n_qr == 0);
+  /* and it saves again, now with the M7 records */
+  size_t n = mxst_serialize(&d, blob, sizeof(blob));
+  CHECK(n == sizeof(k_v3_m6_fixture) + 2 * MXP_FUNC_CONFIG_SIZE);
+  CHECK(mxst_deserialize(blob, n, &e) && memcmp(&d, &e, sizeof(d)) == 0);
+}
+
+static void test_roundtrip_m7(void) {
+  static mxs_data_t a, b;
+  mxst_defaults(&a);
+  a.shape_cfg.mode = 1;
+  a.shape_cfg.threshold = 99;
+  a.shape_cfg.min_size = 200;
+  a.shape_cfg.max_results = 2;
+  a.motion_cfg.threshold = 7;
+  a.motion_cfg.min_size = 100;
+  a.motion_cfg.max_results = 8;
+  uint8_t q[MXP_RESULT_DATA_MAX];
+  CHECK(mxst_learn_qr(&a, (const uint8_t *)"LEFT", 4, 4) == 1);
+  CHECK(mxst_learn_qr(&a, (const uint8_t *)"RIGHT", 5, 5) == 2);
+  qr_bytes(q, sizeof(q), 0x80); /* binary, not UTF-8, 1000 bytes long */
+  CHECK(mxst_learn_qr(&a, q, MXP_RESULT_DATA_MAX, 1000) == 3);
+  CHECK(mxst_set_name(&a, MXST_FN_QR, 2, "\xE5\x8F\xB3", 3)); /* 右 */
+  CHECK(mxst_set_name(&a, MXST_FN_SHAPE, 3, "box", 3));
+  size_t n = mxst_serialize(&a, blob, sizeof(blob));
+  CHECK(n > 0 && blob[4] == 3);
+  /* tail: n_lrn 1, QR record {6, 1, len, n 3, {1, 4, 0, 4, "LEFT"}, {2, ...}, {3, ...}}, CRC */
+  const size_t body = 1 + (4 + 4) + (4 + 5) + (4 + 128);
+  const size_t o_lrn = n - 2 - (4 + body) - 1;
+  CHECK(blob[o_lrn] == 1);
+  const uint8_t *r = blob + o_lrn + 1;
+  CHECK(r[0] == 6 && r[1] == 1 && r[2] == (uint8_t)body && r[3] == (uint8_t)(body >> 8) && r[4] == 3);
+  CHECK(r[5] == 1 && r[6] == 4 && r[7] == 0 && r[8] == 4 && memcmp(r + 9, "LEFT", 4) == 0);
+  CHECK(r[13] == 2 && r[14] == 5 && r[16] == 5 && memcmp(r + 17, "RIGHT", 5) == 0);
+  CHECK(r[22] == 3 && r[23] == (uint8_t)1000 && r[24] == (uint8_t)(1000 >> 8) && r[25] == 128 && r[26] == 0x80);
+  /* the shape and motion func configs are the 4th and 5th records */
+  uint8_t rec[MXP_FUNC_CONFIG_SIZE];
+  mxp_pack_motion_config(&a.motion_cfg, rec);
+  CHECK(memcmp(blob + o_lrn - MXP_FUNC_CONFIG_SIZE, rec, sizeof(rec)) == 0);
+  mxp_pack_shape_config(&a.shape_cfg, rec);
+  CHECK(memcmp(blob + o_lrn - 2 * MXP_FUNC_CONFIG_SIZE, rec, sizeof(rec)) == 0);
+  memset(&b, 0xAB, sizeof(b));
+  CHECK(mxst_deserialize(blob, n, &b));
+  CHECK(memcmp(&a, &b, sizeof(a)) == 0);
+  CHECK(b.n_qr == 3 && b.qr[2].total_len == 1000 && b.qr[2].len == 128 && b.qr[0].bytes[4] == 0);
+  CHECK(b.shape_cfg.mode == 1 && b.shape_cfg.threshold == 99 && b.motion_cfg.threshold == 7);
+  uint8_t l = 0;
+  const char *s = mxst_get_name(&b, MXST_FN_QR, 2, &l);
+  CHECK(s && l == 3 && memcmp(s, "\xE5\x8F\xB3", 3) == 0);
+  CHECK(mxst_get_name(&b, MXST_FN_SHAPE, 3, NULL) != NULL);
+}
+
+/* One QR table entry for qr_record. */
+typedef struct {
+  uint8_t id;
+  uint16_t total;
+  uint8_t len, fill;
+} qr_ent_t;
+
+/* Writes a QR learned record (fn 6, layout ver) of n entries to p; returns its size. */
+static size_t qr_record(uint8_t *p, uint8_t ver, const qr_ent_t *e, uint8_t n) {
+  size_t o = 4;
+  p[o++] = n;
+  for (int i = 0; i < n; i++) {
+    p[o++] = e[i].id;
+    p[o++] = (uint8_t)e[i].total;
+    p[o++] = (uint8_t)(e[i].total >> 8);
+    p[o++] = e[i].len;
+    memset(p + o, e[i].fill, e[i].len);
+    o += e[i].len;
+  }
+  const size_t body = o - 4;
+  p[0] = 6;
+  p[1] = ver;
+  p[2] = (uint8_t)body;
+  p[3] = (uint8_t)(body >> 8);
+  return o;
+}
+
+static void test_qr_record_read(void) {
+  static uint8_t lrn[1200];
+  static uint8_t t[MXST_BLOB_MAX + 64];
+  static mxs_data_t d;
+  /* ids out of order are read sorted; bytes beyond len are 0 */
+  const qr_ent_t ok[3] = {{5, 3, 3, 'c'}, {2, 129, 128, 'b'}, {7, 1, 1, 'a'}};
+  size_t n = build_v3(lrn, qr_record(lrn, 1, ok, 3), 1, t);
+  memset(&d, 0xAB, sizeof(d));
+  CHECK(mxst_deserialize(t, n, &d));
+  CHECK(d.n_qr == 3 && d.qr[0].id == 2 && d.qr[1].id == 5 && d.qr[2].id == 7);
+  CHECK(d.qr[0].total_len == 129 && d.qr[0].len == 128 && d.qr[0].bytes[127] == 'b');
+  CHECK(d.qr[1].len == 3 && d.qr[1].bytes[2] == 'c' && d.qr[1].bytes[3] == 0);
+  CHECK(d.n_colors == 2 && d.n_names == 2 && gesture_is(&d.gesture_cfg, 30, 70, 2));
+  /* an empty QR record is fine */
+  n = build_v3(lrn, qr_record(lrn, 1, NULL, 0), 1, t);
+  CHECK(mxst_deserialize(t, n, &d) && d.n_qr == 0);
+  /* next to the line record */
+  const uint8_t line[7] = {4, 1, 3, 0, 10, 20, 200};
+  memcpy(lrn, line, sizeof(line));
+  n = build_v3(lrn, sizeof(line) + qr_record(lrn + sizeof(line), 1, ok, 1), 2, t);
+  CHECK(mxst_deserialize(t, n, &d) && d.n_qr == 1 && d.qr[0].id == 5 && d.line_has_color == 1);
+}
+
+static void test_reject_bad_qr_record(void) {
+  static uint8_t lrn[1400];
+  static uint8_t t[MXST_BLOB_MAX + 512];
+  size_t k;
+#define QR_REJECT(label, ...)                                         \
+  do {                                                                \
+    const qr_ent_t e_[] = {__VA_ARGS__};                              \
+    k = qr_record(lrn, 1, e_, (uint8_t)(sizeof(e_) / sizeof(e_[0]))); \
+    expect_reject(label, t, build_v3(lrn, k, 1, t));                  \
+  } while (0)
+  QR_REJECT("qr dup id", {1, 2, 2, 'a'}, {1, 2, 2, 'b'});
+  QR_REJECT("qr id 9", {9, 2, 2, 'a'});
+  QR_REJECT("qr id 0", {0, 2, 2, 'a'});
+  QR_REJECT("qr len 129", {1, 129, 129, 'a'});
+  QR_REJECT("qr len > total_len", {1, 3, 4, 'a'});
+  QR_REJECT("qr total 300, len 5", {1, 300, 5, 'a'});
+  QR_REJECT("qr total 50, len 30", {1, 50, 30, 'a'});
+  QR_REJECT("qr len 0", {1, 0, 0, 'a'});
+#undef QR_REJECT
+  /* 9 entries */
+  qr_ent_t nine[9];
+  for (int i = 0; i < 9; i++) nine[i] = (qr_ent_t){(uint8_t)(i + 1), 1, 1, 'x'};
+  nine[8].id = 1;
+  expect_reject("qr n 9", t, build_v3(lrn, qr_record(lrn, 1, nine, 9), 1, t));
+  /* body length does not match the entries */
+  const qr_ent_t one[1] = {{1, 4, 4, 'a'}};
+  k = qr_record(lrn, 1, one, 1);
+  lrn[2] = (uint8_t)(k - 4 + 1);
+  lrn[k] = 0;
+  expect_reject("qr body longer than entries", t, build_v3(lrn, k + 1, 1, t));
+  k = qr_record(lrn, 1, one, 1);
+  lrn[2] = (uint8_t)(k - 4 - 1);
+  expect_reject("qr body shorter than entries", t, build_v3(lrn, k - 1, 1, t));
+  k = qr_record(lrn, 1, NULL, 0);
+  lrn[2] = 0; /* not even n */
+  expect_reject("qr body empty", t, build_v3(lrn, 4, 1, t));
+  /* the QR record twice (also when one is a layout this firmware cannot read) */
+  k = qr_record(lrn, 1, one, 1);
+  k += qr_record(lrn + k, 2, one, 1);
+  expect_reject("qr record twice", t, build_v3(lrn, k, 2, t));
+}
+
+static void test_qr_record_unknown_layout_skipped(void) {
+  static uint8_t lrn[600];
+  static uint8_t t[MXST_BLOB_MAX + 64];
+  static mxs_data_t d;
+  const qr_ent_t e[2] = {{1, 4, 4, 'a'}, {1, 4, 4, 'a'}}; /* layout 2 is not checked */
+  size_t n = build_v3(lrn, qr_record(lrn, 2, e, 2), 1, t);
+  memset(&d, 0xAB, sizeof(d));
+  CHECK(mxst_deserialize(t, n, &d));
+  CHECK(d.n_qr == 0 && d.n_colors == 2 && d.n_names == 2);
+  /* the names of QR codes it could not read are dropped, the rest is kept */
+  mxs_data_t a;
+  mxst_defaults(&a);
+  CHECK(mxst_learn_qr(&a, (const uint8_t *)"GO", 2, 2) == 1);
+  CHECK(mxst_set_name(&a, MXST_FN_QR, 1, "go", 2));
+  CHECK(mxst_set_name(&a, MXST_FN_TAG, 4, "tag", 3));
+  n = mxst_serialize(&a, blob, sizeof(blob));
+  CHECK(n > 0);
+  const size_t o_qr = n - 2 - (4 + 1 + 4 + 2);
+  CHECK(blob[o_qr] == 6 && blob[o_qr + 1] == 1);
+  blob[o_qr + 1] = 2;
+  fix_crc(blob, n);
+  memset(&d, 0xAB, sizeof(d));
+  CHECK(mxst_deserialize(blob, n, &d));
+  CHECK(d.n_qr == 0 && d.n_names == 1 && mxst_get_name(&d, MXST_FN_TAG, 4, NULL) != NULL);
+  CHECK(mxst_get_name(&d, MXST_FN_QR, 1, NULL) == NULL && d.names[1].fn == 0);
+  /* a QR name without its code in a readable record: dropped too */
+  blob[o_qr + 1] = 1;
+  blob[o_qr + 5] = 2; /* the code is id 2 now, the name is (6, 1) */
+  fix_crc(blob, n);
+  CHECK(mxst_deserialize(blob, n, &d) && d.n_qr == 1 && d.qr[0].id == 2 && d.n_names == 1);
+}
+
+static void test_learn_qr_ids(void) {
+  mxs_data_t d;
+  mxst_defaults(&d);
+  CHECK(mxst_learn_qr(&d, (const uint8_t *)"LEFT", 4, 4) == 1);
+  CHECK(d.n_qr == 1 && d.qr[0].id == 1 && d.qr[0].len == 4 && d.qr[0].total_len == 4);
+  CHECK(memcmp(d.qr[0].bytes, "LEFT", 4) == 0 && d.qr[0].bytes[4] == 0);
+  /* the same content: the same id, nothing added */
+  CHECK(mxst_learn_qr(&d, (const uint8_t *)"LEFT", 4, 4) == 1 && d.n_qr == 1);
+  CHECK(mxst_learn_qr(&d, (const uint8_t *)"RIGHT", 5, 5) == 2 && d.n_qr == 2);
+  /* forget 1: the next new one gets the lowest free id; the table stays sorted */
+  mxst_forget_qr(&d, 1);
+  CHECK(d.n_qr == 1 && d.qr[0].id == 2);
+  CHECK(mxst_learn_qr(&d, (const uint8_t *)"UP", 2, 2) == 1);
+  CHECK(d.n_qr == 2 && d.qr[0].id == 1 && d.qr[1].id == 2 && memcmp(d.qr[0].bytes, "UP", 2) == 0);
+  /* fill up to 8, then FULL; a learned one still answers its id */
+  char c[2] = {'a', 0};
+  for (int i = 3; i <= MXST_MAX_QR; i++) {
+    c[0] = (char)('a' + i);
+    CHECK(mxst_learn_qr(&d, (const uint8_t *)c, 1, 1) == i);
+  }
+  CHECK(d.n_qr == MXST_MAX_QR);
+  CHECK(mxst_learn_qr(&d, (const uint8_t *)"NEW", 3, 3) == MXST_LEARN_FULL && d.n_qr == MXST_MAX_QR);
+  CHECK(mxst_learn_qr(&d, (const uint8_t *)"RIGHT", 5, 5) == 2);
+  /* nothing to learn: empty content, NULL, or lengths that cannot be a code */
+  mxst_defaults(&d);
+  CHECK(mxst_learn_qr(&d, (const uint8_t *)"", 0, 0) == MXST_LEARN_NO_COLOR);
+  CHECK(mxst_learn_qr(&d, NULL, 4, 4) == MXST_LEARN_NO_COLOR);
+  uint8_t q[200];
+  qr_bytes(q, sizeof(q), 1);
+  CHECK(mxst_learn_qr(&d, q, 129, 129) == MXST_LEARN_NO_COLOR);  /* more than 128 stored bytes */
+  CHECK(mxst_learn_qr(&d, q, 100, 300) == MXST_LEARN_NO_COLOR);  /* long content cut short of 128 */
+  CHECK(mxst_learn_qr(&d, q, 5, 4) == MXST_LEARN_NO_COLOR);      /* len > total_len */
+  CHECK(mxst_learn_qr(&d, q, 3, 4) == MXST_LEARN_NO_COLOR);      /* short content cut */
+  CHECK(d.n_qr == 0);
+}
+
+static void test_learn_qr_long_payload(void) {
+  mxs_data_t d;
+  mxst_defaults(&d);
+  uint8_t q[MXP_RESULT_DATA_MAX];
+  qr_bytes(q, sizeof(q), 9);
+  /* the same first 128 bytes, different lengths: different codes (review item 2) */
+  CHECK(mxst_learn_qr(&d, q, MXP_RESULT_DATA_MAX, 300) == 1);
+  CHECK(mxst_learn_qr(&d, q, MXP_RESULT_DATA_MAX, 301) == 2);
+  CHECK(mxst_learn_qr(&d, q, MXP_RESULT_DATA_MAX, 128) == 3); /* exactly 128: not cut */
+  CHECK(mxst_learn_qr(&d, q, MXP_RESULT_DATA_MAX, 300) == 1);
+  CHECK(mxst_qr_lookup(&d, q, MXP_RESULT_DATA_MAX, 301) == 2);
+  CHECK(mxst_qr_lookup(&d, q, MXP_RESULT_DATA_MAX, 302) == 0);
+  CHECK(d.n_qr == 3 && d.qr[0].total_len == 300 && d.qr[1].total_len == 301 && d.qr[2].total_len == 128);
+}
+
+static void test_qr_lookup(void) {
+  mxs_data_t d;
+  mxst_defaults(&d);
+  CHECK(mxst_qr_lookup(&d, (const uint8_t *)"LEFT", 4, 4) == 0);
+  CHECK(mxst_learn_qr(&d, (const uint8_t *)"LEFT", 4, 4) == 1);
+  CHECK(mxst_learn_qr(&d, (const uint8_t *)"LEFTIST", 7, 7) == 2);
+  CHECK(mxst_qr_lookup(&d, (const uint8_t *)"LEFT", 4, 4) == 1);
+  CHECK(mxst_qr_lookup(&d, (const uint8_t *)"LEFTIST", 7, 7) == 2);
+  CHECK(mxst_qr_lookup(&d, (const uint8_t *)"LEF", 3, 3) == 0);
+  CHECK(mxst_qr_lookup(&d, (const uint8_t *)"left", 4, 4) == 0); /* bytes compare exactly */
+  CHECK(mxst_qr_lookup(&d, (const uint8_t *)"LEFT", 4, 5) == 0);
+  CHECK(mxst_qr_lookup(&d, NULL, 0, 0) == 0);
+  CHECK(mxst_qr_lookup(&d, (const uint8_t *)"", 0, 0) == 0);
+}
+
+static void test_forget_qr_drops_name(void) {
+  mxs_data_t d;
+  mxst_defaults(&d);
+  CHECK(mxst_learn_qr(&d, (const uint8_t *)"A", 1, 1) == 1);
+  CHECK(mxst_learn_qr(&d, (const uint8_t *)"B", 1, 1) == 2);
+  CHECK(mxst_learn_qr(&d, (const uint8_t *)"C", 1, 1) == 3);
+  CHECK(mxst_set_name(&d, MXST_FN_QR, 1, "one", 3));
+  CHECK(mxst_set_name(&d, MXST_FN_QR, 2, "two", 3));
+  CHECK(mxst_set_name(&d, MXST_FN_TAG, 2, "tag", 3));
+  CHECK(mxst_set_name(&d, MXST_FN_SHAPE, 2, "tri", 3));
+  mxst_forget_qr(&d, 2);
+  CHECK(d.n_qr == 2 && d.qr[0].id == 1 && d.qr[1].id == 3 && d.qr[2].id == 0 && d.qr[2].len == 0);
+  CHECK(mxst_get_name(&d, MXST_FN_QR, 2, NULL) == NULL && mxst_get_name(&d, MXST_FN_QR, 1, NULL) != NULL);
+  CHECK(mxst_get_name(&d, MXST_FN_TAG, 2, NULL) != NULL && mxst_get_name(&d, MXST_FN_SHAPE, 2, NULL) != NULL);
+  mxst_forget_qr(&d, 7); /* absent: no-op */
+  CHECK(d.n_qr == 2 && d.n_names == 3);
+  mxst_forget_qr(&d, 0xFFFF);
+  CHECK(d.n_qr == 0 && d.n_names == 2 && mxst_get_name(&d, MXST_FN_QR, 1, NULL) == NULL);
+  CHECK(mxst_get_name(&d, MXST_FN_TAG, 2, NULL) != NULL);
+}
+
+static void test_name_keys_m7(void) {
+  mxs_data_t d;
+  mxst_defaults(&d);
+  /* QR (6): only learned ids */
+  CHECK(!mxst_set_name(&d, MXST_FN_QR, 1, "a", 1));
+  CHECK(mxst_learn_qr(&d, (const uint8_t *)"X", 1, 1) == 1);
+  CHECK(mxst_set_name(&d, MXST_FN_QR, 1, "a", 1));
+  CHECK(!mxst_set_name(&d, MXST_FN_QR, 2, "a", 1));
+  CHECK(!mxst_set_name(&d, MXST_FN_QR, 0, "a", 1));
+  /* shapes (11): ids 1-4 */
+  CHECK(mxst_set_name(&d, MXST_FN_SHAPE, 1, "o", 1));
+  CHECK(mxst_set_name(&d, MXST_FN_SHAPE, MXP_SHAPE_MAX, "r", 1));
+  CHECK(!mxst_set_name(&d, MXST_FN_SHAPE, 5, "x", 1));
+  CHECK(!mxst_set_name(&d, MXST_FN_SHAPE, 0, "x", 1));
+  /* motion (12): never */
+  CHECK(!mxst_set_name(&d, MXST_FN_MOTION, 0, "m", 1));
+  CHECK(!mxst_set_name(&d, MXST_FN_MOTION, 1, "m", 1));
+  CHECK(d.n_names == 3);
+  /* in a blob: a shape name with id 5 or a motion name is corrupt */
+  size_t n = mxst_serialize(&d, blob, sizeof(blob));
+  CHECK(n > 0);
+  const size_t o_nm = 4 + 1 + MXP_CONFIG_SIZE + 1 + 1; /* names: (6,1,"a"), (11,1,"o"), (11,4,"r") */
+  CHECK(blob[o_nm] == 6 && blob[o_nm + 5] == 11 && blob[o_nm + 10] == 11 && blob[o_nm + 11] == 4);
+  blob[o_nm + 11] = 5;
+  fix_crc(blob, n);
+  expect_reject("shape name id 5", blob, n);
+  blob[o_nm + 11] = 4;
+  blob[o_nm + 10] = 12;
+  fix_crc(blob, n);
+  expect_reject("motion name", blob, n);
+  blob[o_nm + 10] = 11;
+  blob[o_nm + 1] = 9; /* QR name id 9: never a QR id */
+  fix_crc(blob, n);
+  expect_reject("qr name id 9", blob, n);
+}
+
+static void test_serialize_validates_m7(void) {
+  static mxs_data_t base, d;
+  mxst_defaults(&base);
+  CHECK(mxst_learn_qr(&base, (const uint8_t *)"AB", 2, 2) == 1);
+  CHECK(mxst_learn_qr(&base, (const uint8_t *)"CD", 2, 2) == 2);
+  CHECK(mxst_serialize(&base, blob, sizeof(blob)) > 0);
+
+  d = base; d.shape_cfg.mode = 2;          expect_no_serialize("shape mode 2", &d);
+  d = base; d.shape_cfg.min_size = 15;     expect_no_serialize("shape min_size 15", &d);
+  d = base; d.shape_cfg.min_size = 241;    expect_no_serialize("shape min_size 241", &d);
+  d = base; d.shape_cfg.max_results = 0;   expect_no_serialize("shape max_results 0", &d);
+  d = base; d.shape_cfg.max_results = 9;   expect_no_serialize("shape max_results 9", &d);
+  d = base; d.motion_cfg.threshold = 4;    expect_no_serialize("motion threshold 4", &d);
+  d = base; d.motion_cfg.threshold = 101;  expect_no_serialize("motion threshold 101", &d);
+  d = base; d.motion_cfg.min_size = 7;     expect_no_serialize("motion min_size 7", &d);
+  d = base; d.motion_cfg.max_results = 9;  expect_no_serialize("motion max_results 9", &d);
+  d = base; d.n_qr = 9;                    expect_no_serialize("n_qr 9", &d);
+  d = base; d.qr[1].id = 1;                expect_no_serialize("qr dup id", &d);
+  d = base; d.qr[1].id = 9;                expect_no_serialize("qr id 9", &d);
+  d = base; d.qr[0].id = 0;                expect_no_serialize("qr id 0", &d);
+  d = base; d.qr[0].len = 129;             expect_no_serialize("qr len 129", &d);
+  d = base; d.qr[0].len = 3;               expect_no_serialize("qr len > total_len", &d);
+  d = base; d.qr[0].total_len = 300;       expect_no_serialize("qr total 300, len 2", &d);
+  d = base; d.qr[0].len = 0; d.qr[0].total_len = 0; expect_no_serialize("qr empty", &d);
+  d = base; d.names[0] = (mxs_name_t){MXST_FN_QR, 3, 1, "q"}; d.n_names = 1;
+  expect_no_serialize("qr name of an unlearned id", &d);
+  /* boundary values are valid; an unused QR slot is not checked */
+  d = base;
+  d.shape_cfg.mode = 1; d.shape_cfg.threshold = 255; d.shape_cfg.min_size = 240; d.shape_cfg.max_results = 1;
+  d.motion_cfg.threshold = 5; d.motion_cfg.min_size = 240; d.motion_cfg.max_results = 1;
+  d.qr[5].id = 77;
+  CHECK(mxst_serialize(&d, blob, sizeof(blob)) > 0);
+}
+
+static void test_func_config_records_m7(void) {
+  static const uint8_t recs[2][MXP_FUNC_CONFIG_SIZE] = {
+      {11, 1, 3, 200, 5, 20, 9, 9, 9, 9}, /* shape, clamped like SET_FUNC_CONFIG */
+      {12, 1, 1, 250, 0, 9, 9, 9, 9, 9},  /* motion, clamped */
+  };
+  uint8_t t[MXST_BLOB_MAX + 16];
+  size_t n = build_v2(recs, 2, 2, t);
+  mxs_data_t d;
+  memset(&d, 0xAB, sizeof(d));
+  CHECK(mxst_deserialize(t, n, &d));
+  CHECK(d.shape_cfg.mode == 0 && d.shape_cfg.threshold == 200 && d.shape_cfg.min_size == 16 &&
+        d.shape_cfg.max_results == 8);
+  CHECK(d.motion_cfg.threshold == 5 && d.motion_cfg.min_size == 240 && d.motion_cfg.max_results == 1);
+  /* unknown layout versions keep the defaults */
+  static const uint8_t v2s[2][MXP_FUNC_CONFIG_SIZE] = {
+      {11, 2, 1, 0, 32, 4, 0, 0, 0, 0},
+      {12, 2, 30, 24, 4, 0, 0, 0, 0, 0},
+  };
+  n = build_v2(v2s, 2, 2, t);
+  memset(&d, 0xAB, sizeof(d));
+  CHECK(mxst_deserialize(t, n, &d));
+  CHECK(shape_cfg_is_default(&d.shape_cfg) && motion_cfg_is_default(&d.motion_cfg));
+  /* duplicates reject */
+  static const uint8_t dup_shape[2][MXP_FUNC_CONFIG_SIZE] = {
+      {11, 1, 1, 0, 32, 4, 0, 0, 0, 0},
+      {11, 2, 1, 0, 32, 4, 0, 0, 0, 0},
+  };
+  n = build_v2(dup_shape, 2, 2, t);
+  expect_reject("duplicate shape record", t, n);
+  static const uint8_t dup_motion[2][MXP_FUNC_CONFIG_SIZE] = {
+      {12, 1, 30, 24, 4, 0, 0, 0, 0, 0},
+      {12, 1, 30, 24, 4, 0, 0, 0, 0, 0},
+  };
+  n = build_v2(dup_motion, 2, 2, t);
+  expect_reject("duplicate motion record", t, n);
+}
+
 int main(void) {
   test_defaults();
   test_roundtrip();
@@ -1004,10 +1480,23 @@ int main(void) {
   test_set_object_clears_name();
   test_name_keys_m6();
   test_serialize_validates_m6();
+  test_defaults_m7();
+  test_deserialize_m6_v3_fixture();
+  test_roundtrip_m7();
+  test_qr_record_read();
+  test_reject_bad_qr_record();
+  test_qr_record_unknown_layout_skipped();
+  test_learn_qr_ids();
+  test_learn_qr_long_payload();
+  test_qr_lookup();
+  test_forget_qr_drops_name();
+  test_name_keys_m7();
+  test_serialize_validates_m7();
+  test_func_config_records_m7();
   if (fails) {
-    printf("%d failure(s)\n", fails);
+    printf("%d failure(s) of %d checks\n", fails, checks);
     return 1;
   }
-  printf("store tests passed\n");
+  printf("store tests passed (%d checks)\n", checks);
   return 0;
 }

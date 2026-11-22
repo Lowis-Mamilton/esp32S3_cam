@@ -37,10 +37,11 @@ static bool color_learned(const mxs_data_t *d, uint16_t id)
 }
 
 /* FORGET: function_id u8, id u16 (0xFFFF = all). Absent ids succeed; face
- * detection (3) learns and names nothing, so it always succeeds; AprilTag (2)
- * and gesture (8) only have names; line (4) id 1 / 0xFFFF clears the line
- * colour (mode 2 -> 0), object (5) id 1 / 0xFFFF clears the object and its
- * name (protocol.md 9). */
+ * detection (3) and motion (12) learn and name nothing, so they always
+ * succeed; AprilTag (2), gesture (8) and shapes (11) only have names; line (4)
+ * id 1 / 0xFFFF clears the line colour (mode 2 -> 0), object (5) id 1 /
+ * 0xFFFF clears the object and its name (protocol.md 9); QR (6) drops the
+ * code(s) and their names (protocol.md 11). */
 static size_t handle_forget(mxs_state_t *s, const mxp_frame_t *req, uint8_t *out, size_t out_cap)
 {
   if (req->len != 3) return reply_err(req, MXP_ERR_BAD_LENGTH, out, out_cap);
@@ -48,7 +49,7 @@ static size_t handle_forget(mxs_state_t *s, const mxp_frame_t *req, uint8_t *out
   uint16_t id = get_u16(req->payload + 1);
   uint8_t nc = s->data->n_colors, nn = s->data->n_names; /* forgetting only ever removes */
   const uint8_t line_has = s->data->line_has_color, line_mode = s->data->line_cfg.mode;
-  const uint8_t has_obj = s->data->has_object;
+  const uint8_t has_obj = s->data->has_object, nq = s->data->n_qr;
   if (fn == MXP_FUNC_COLOR) {
     if (id == 0xFFFF) mxst_forget_color(s->data, 0xFF);
     else if (id >= 1 && id <= MXST_MAX_COLORS) mxst_forget_color(s->data, (uint8_t)id);
@@ -60,13 +61,17 @@ static size_t handle_forget(mxs_state_t *s, const mxp_frame_t *req, uint8_t *out
     if (id == 1 || id == 0xFFFF) mxst_set_line_color(s->data, NULL);
   } else if (fn == MXP_FUNC_TRACK) {
     if (id == 1 || id == 0xFFFF) mxst_set_object(s->data, NULL);
-  } else if (fn == MXP_FUNC_FACE) {
+  } else if (fn == MXP_FUNC_QR) {
+    mxst_forget_qr(s->data, id); /* the code(s) and their names */
+  } else if (fn == MXP_FUNC_SHAPE) {
+    mxst_forget_names(s->data, MXST_FN_SHAPE, id); /* fixed shapes: only names */
+  } else if (fn == MXP_FUNC_FACE || fn == MXP_FUNC_MOTION) {
     /* nothing to forget */
   } else {
     return reply_err(req, MXP_ERR_BAD_PARAM, out, out_cap);
   }
   if (s->data->n_colors != nc || s->data->n_names != nn || s->data->line_has_color != line_has ||
-      s->data->line_cfg.mode != line_mode || s->data->has_object != has_obj)
+      s->data->line_cfg.mode != line_mode || s->data->has_object != has_obj || s->data->n_qr != nq)
     mark_dirty(s);
   return reply(req, NULL, 0, out, out_cap);
 }
@@ -89,7 +94,11 @@ static size_t handle_set_name(mxs_state_t *s, const mxp_frame_t *req, uint8_t *o
   } else if (sn.function_id == MXP_FUNC_TRACK) {
     /* one object, id 1, and only once it is learned */
     if (sn.id != 1 || !s->data->has_object) return reply_err(req, MXP_ERR_BAD_PARAM, out, out_cap);
-  } else { /* face (3), line (4) and the rest have no names */
+  } else if (sn.function_id == MXP_FUNC_QR) {
+    if (!mxst_qr_get(s->data, sn.id)) return reply_err(req, MXP_ERR_BAD_PARAM, out, out_cap);
+  } else if (sn.function_id == MXP_FUNC_SHAPE) {
+    if (sn.id < 1 || sn.id > MXP_SHAPE_MAX) return reply_err(req, MXP_ERR_BAD_PARAM, out, out_cap);
+  } else { /* face (3), line (4), motion (12) and the rest have no names */
     return reply_err(req, MXP_ERR_BAD_PARAM, out, out_cap);
   }
   uint8_t old_len = 0;
@@ -103,9 +112,10 @@ static size_t handle_set_name(mxs_state_t *s, const mxp_frame_t *req, uint8_t *o
   return reply(req, NULL, 0, out, out_cap);
 }
 
-/* GET_LEARNED: colours (by id, with rgb and name), named tags / gestures (by
- * id, rgb 0), the line colour (0 or 1 item, id 1, no name) or the object (0
- * or 1 item, id 1, its mean colour and name). */
+/* GET_LEARNED: colours (by id, with rgb and name), named tags / gestures /
+ * shapes (by id, rgb 0), the line colour (0 or 1 item, id 1, no name), the
+ * object (0 or 1 item, id 1, its mean colour and name) or the learned QR
+ * codes (by id, rgb 0, names; the content is GET_LEARNED_DATA's). */
 static size_t handle_get_learned(mxs_state_t *s, const mxp_frame_t *req, uint8_t *out, size_t out_cap)
 {
   if (req->len != 1) return reply_err(req, MXP_ERR_BAD_LENGTH, out, out_cap);
@@ -140,10 +150,19 @@ static size_t handle_get_learned(mxs_state_t *s, const mxp_frame_t *req, uint8_t
       if (nm) memcpy(it->name, nm, it->name_len);
       else it->name_len = 0;
     }
-  } else if (fn == MXP_FUNC_APRILTAG || fn == MXP_FUNC_GESTURE) {
-    uint8_t name_fn = fn == MXP_FUNC_APRILTAG ? MXST_FN_TAG : MXST_FN_GESTURE;
+  } else if (fn == MXP_FUNC_QR) {
+    for (int i = 0; i < d->n_qr; i++) {
+      mxp_learned_t *it = &items[n++];
+      memset(it, 0, sizeof(*it));
+      it->id = d->qr[i].id;
+      const char *nm = mxst_get_name(d, MXST_FN_QR, it->id, &it->name_len);
+      if (nm) memcpy(it->name, nm, it->name_len);
+      else it->name_len = 0;
+    }
+  } else if (fn == MXP_FUNC_APRILTAG || fn == MXP_FUNC_GESTURE || fn == MXP_FUNC_SHAPE) {
+    /* fixed ids, so the named ones (names are keyed by MXST_FN_* == MXP_FUNC_*) */
     for (int i = 0; i < d->n_names; i++) {
-      if (d->names[i].fn != name_fn) continue;
+      if (d->names[i].fn != fn) continue;
       mxp_learned_t *it = &items[n++];
       memset(it, 0, sizeof(*it));
       it->id = d->names[i].id;
@@ -237,6 +256,12 @@ static bool fcfg_get(const mxs_data_t *d, uint8_t fn, uint8_t out[MXP_FUNC_CONFI
   case MXP_FUNC_GESTURE:
     mxp_pack_gesture_config(&d->gesture_cfg, out);
     return true;
+  case MXP_FUNC_SHAPE:
+    mxp_pack_shape_config(&d->shape_cfg, out);
+    return true;
+  case MXP_FUNC_MOTION:
+    mxp_pack_motion_config(&d->motion_cfg, out);
+    return true;
   default:
     return false;
   }
@@ -253,6 +278,10 @@ static bool fcfg_set(mxs_data_t *d, const uint8_t p[MXP_FUNC_CONFIG_SIZE])
     return mxp_unpack_track_config(p, MXP_FUNC_CONFIG_SIZE, &d->track_cfg);
   case MXP_FUNC_GESTURE:
     return mxp_unpack_gesture_config(p, MXP_FUNC_CONFIG_SIZE, &d->gesture_cfg);
+  case MXP_FUNC_SHAPE:
+    return mxp_unpack_shape_config(p, MXP_FUNC_CONFIG_SIZE, &d->shape_cfg);
+  case MXP_FUNC_MOTION:
+    return mxp_unpack_motion_config(p, MXP_FUNC_CONFIG_SIZE, &d->motion_cfg);
   default:
     return false;
   }
@@ -336,6 +365,7 @@ static void change_function(mxs_state_t *s, uint8_t fn)
   none.function_id = fn;
   size_t n = mxp_pack_results(&none, s->results, sizeof(s->results));
   s->results_len = (uint16_t)n;
+  s->rdata_n = 0;
   s->results_invalidated = true;
   s->function_id = fn;
 }
@@ -353,6 +383,57 @@ bool mxs_take_results_invalidated(mxs_state_t *s)
   bool v = s->results_invalidated;
   s->results_invalidated = false;
   return v;
+}
+
+/* Records in the cached GET_RESULTS batch (0 before any frame). */
+static uint8_t cached_count(const mxs_state_t *s)
+{
+  return s->results_len >= 6 ? s->results[5] : 0;
+}
+
+/* GET_RESULT_DATA (protocol.md 11): record `index` of the cached batch. */
+static size_t handle_get_result_data(mxs_state_t *s, const mxp_frame_t *req, uint8_t *out, size_t out_cap)
+{
+  uint8_t index;
+  if (!mxp_unpack_get_result_data(req->payload, req->len, &index))
+    return reply_err(req, MXP_ERR_BAD_LENGTH, out, out_cap);
+  if (index >= cached_count(s)) return reply_err(req, MXP_ERR_BAD_PARAM, out, out_cap);
+  mxp_result_data_t d;
+  memset(&d, 0, sizeof(d));
+  d.frame_id = cached_frame_id(s);
+  d.index = index;
+  if (index < s->rdata_n) {
+    const mxs_rdata_t *it = &s->rdata[index];
+    d.flags = it->flags & MXP_DATA_FLAG_TRUNCATED;
+    d.total_len = it->total_len;
+    d.len = it->len;
+    memcpy(d.data, it->data, it->len);
+  }
+  size_t n = mxp_pack_result_data(&d, s->scratch, sizeof(s->scratch));
+  if (n == 0) return reply_err(req, MXP_ERR_INTERNAL, out, out_cap);
+  return reply(req, s->scratch, (uint16_t)n, out, out_cap);
+}
+
+/* GET_LEARNED_DATA (protocol.md 11): the content of a learned QR code. */
+static size_t handle_get_learned_data(mxs_state_t *s, const mxp_frame_t *req, uint8_t *out, size_t out_cap)
+{
+  uint8_t fn;
+  uint16_t id;
+  if (!mxp_unpack_get_learned_data(req->payload, req->len, &fn, &id))
+    return reply_err(req, MXP_ERR_BAD_LENGTH, out, out_cap);
+  const mxst_qr_t *q = fn == MXP_FUNC_QR ? mxst_qr_get(s->data, id) : NULL;
+  if (!q) return reply_err(req, MXP_ERR_BAD_PARAM, out, out_cap);
+  mxp_learned_data_t d;
+  memset(&d, 0, sizeof(d));
+  d.function_id = fn;
+  d.id = id;
+  d.flags = q->total_len > MXP_RESULT_DATA_MAX ? MXP_DATA_FLAG_TRUNCATED : 0;
+  d.total_len = q->total_len;
+  d.len = q->len;
+  memcpy(d.data, q->bytes, q->len);
+  size_t n = mxp_pack_learned_data(&d, s->scratch, sizeof(s->scratch));
+  if (n == 0) return reply_err(req, MXP_ERR_INTERNAL, out, out_cap);
+  return reply(req, s->scratch, (uint16_t)n, out, out_cap);
 }
 
 size_t mxs_handle(mxs_state_t *s, const mxp_frame_t *req, uint32_t now_ms, uint8_t *out,
@@ -400,11 +481,11 @@ size_t mxs_handle(mxs_state_t *s, const mxp_frame_t *req, uint32_t now_ms, uint8
     if (!mxp_unpack_learn(req->payload, req->len, &lr))
       return reply_err(req, MXP_ERR_BAD_LENGTH, out, out_cap);
     /* 11 bytes ("learn into this id") is reserved for M9 (protocol.md 9);
-     * only colour (1), line (4) and object (5) learn, and only as the
-     * current function. */
+     * only colour (1), line (4), object (5) and QR (6) learn, and only as
+     * the current function. */
     if (lr.has_id || lr.function_id != s->function_id ||
         (lr.function_id != MXP_FUNC_COLOR && lr.function_id != MXP_FUNC_LINE &&
-         lr.function_id != MXP_FUNC_TRACK))
+         lr.function_id != MXP_FUNC_TRACK && lr.function_id != MXP_FUNC_QR))
       return reply_err(req, MXP_ERR_BAD_PARAM, out, out_cap);
     if (s->pending_learn.active) return reply_err(req, MXP_ERR_BUSY, out, out_cap);
     s->pending_learn.active = true;
@@ -416,6 +497,10 @@ size_t mxs_handle(mxs_state_t *s, const mxp_frame_t *req, uint32_t now_ms, uint8
   }
   case MXP_CMD_GET_RESULTS:
     return handle_get_results(s, req, out, out_cap);
+  case MXP_CMD_GET_RESULT_DATA:
+    return handle_get_result_data(s, req, out, out_cap);
+  case MXP_CMD_GET_LEARNED_DATA:
+    return handle_get_learned_data(s, req, out, out_cap);
   case MXP_CMD_FORGET:
     return handle_forget(s, req, out, out_cap);
   case MXP_CMD_SET_NAME:
@@ -519,6 +604,18 @@ bool mxs_finish_learn_object(mxs_state_t *s, uint8_t seq, const mxk_model_t *m)
   return mxs_complete_learn(s, seq, 1);
 }
 
+bool mxs_finish_learn_qr(mxs_state_t *s, uint8_t seq, const uint8_t *bytes, uint8_t len, uint16_t total_len)
+{
+  if (!learn_claimed(s, seq)) return false;
+  if (s->pending_learn.req.function_id != MXP_FUNC_QR || !bytes)
+    return mxs_complete_learn(s, seq, MXS_LEARN_NO_COLOR);
+  const uint8_t n_before = s->data->n_qr;
+  int r = mxst_learn_qr(s->data, bytes, len, total_len);
+  if (s->data->n_qr != n_before) mark_dirty(s); /* a learned code answers its id unchanged */
+  int result = r > 0 ? r : (r == MXST_LEARN_FULL ? MXS_LEARN_FULL : MXS_LEARN_NO_COLOR);
+  return mxs_complete_learn(s, seq, result);
+}
+
 bool mxs_take_pending_store(mxs_state_t *s, uint8_t *cmd, uint8_t *seq, mxs_data_t *snapshot)
 {
   if (!s->pending_store.active || s->pending_store.claimed) return false;
@@ -550,6 +647,20 @@ void mxs_set_results(mxs_state_t *s, const uint8_t *packed, uint16_t len)
   if (!packed || len == 0 || len > MXS_RESULTS_MAX) return;
   memcpy(s->results, packed, len);
   s->results_len = len;
+  s->rdata_n = 0; /* the new batch has no attached data until mxs_set_result_data */
+}
+
+void mxs_set_result_data(mxs_state_t *s, const mxs_rdata_t *items, uint8_t n)
+{
+  const uint8_t count = cached_count(s);
+  if (n > count) n = count;
+  if (n > MXP_MAX_RESULTS) n = MXP_MAX_RESULTS;
+  if (!items) n = 0;
+  for (int i = 0; i < n; i++) {
+    s->rdata[i] = items[i];
+    if (s->rdata[i].len > MXP_RESULT_DATA_MAX) s->rdata[i].len = MXP_RESULT_DATA_MAX;
+  }
+  s->rdata_n = n;
 }
 
 size_t mxs_peek_deferred(const mxs_state_t *s, uint8_t *seq, uint8_t *out, size_t out_cap)

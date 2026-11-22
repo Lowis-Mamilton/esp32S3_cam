@@ -25,9 +25,10 @@ extern "C" {
 
 /* mxs_handle returns this instead of a size when the response is deferred:
  * nothing is sent now.
- * - LEARN (functions 1, 4, 5): the pipeline claims it (mxs_take_pending_learn)
- *   and completes it on the next frame (mxs_finish_learn for 1 / 4,
- *   mxs_finish_learn_object for 5; both call mxs_complete_learn);
+ * - LEARN (functions 1, 4, 5, 6): the pipeline claims it
+ *   (mxs_take_pending_learn) and completes it on the next frame
+ *   (mxs_finish_learn for 1 / 4, mxs_finish_learn_object for 5,
+ *   mxs_finish_learn_qr for 6; all call mxs_complete_learn);
  *   a SET_FUNCTION change or host timeout cancels it (BAD_PARAM). Either way
  *   the response packet is queued in the state's deferred outbox and the link
  *   sends it (mxs_peek_deferred / mxs_ack_deferred) — never the pipeline.
@@ -43,7 +44,8 @@ extern "C" {
 /* Largest packed results payload: 6 + 8 x (12 + 18). */
 #define MXS_RESULTS_MAX (6 + MXP_MAX_RESULTS * (12 + MXP_RESULT_EXTRA_MAX))
 /* Largest response packet mxs_handle produces: GET_LEARNED for AprilTag with
- * 32 names of 48 bytes (1 + 32 x 54 payload bytes). Size `out` with this. */
+ * 32 names of 48 bytes (1 + 32 x 54 payload bytes). Size `out` with this.
+ * (GET_RESULT_DATA / GET_LEARNED_DATA answer at most 9 + 128 bytes.) */
 #define MXS_RESPONSE_MAX (MXP_OVERHEAD + 1 + MXST_MAX_NAMES * (6 + MXP_NAME_MAX))
 
 /* Results the pipeline passes to mxs_complete_learn() (> 0 is the learned id). */
@@ -63,6 +65,16 @@ typedef struct {
   uint8_t pkt[MXS_DEFERRED_PKT];
 } mxs_deferred_pkt_t;
 
+/* Attached data of one result record (QR content, protocol.md 11 GET_RESULT_DATA):
+ * the first len (<= 128) bytes, total_len the full length, flags
+ * MXP_DATA_FLAG_TRUNCATED when total_len > 128. len 0 = no data. */
+typedef struct {
+  uint8_t flags;
+  uint16_t total_len;
+  uint8_t len;
+  uint8_t data[MXP_RESULT_DATA_MAX];
+} mxs_rdata_t;
+
 typedef struct {
   bool active;  /* a SAVE / FACTORY_RESET is outstanding: further ones get BUSY */
   bool claimed; /* the save worker took it */
@@ -79,6 +91,8 @@ typedef struct {
   uint32_t data_gen; /* bumped by every change of *data */
   uint8_t results[MXS_RESULTS_MAX]; /* GET_RESULTS: latest processed frame, packed */
   uint16_t results_len;             /* 0 = no frame processed yet */
+  mxs_rdata_t rdata[MXP_MAX_RESULTS]; /* GET_RESULT_DATA: attached data of those records */
+  uint8_t rdata_n;                    /* records with an rdata entry; the rest have none */
   mxs_pending_store_t pending_store;
   /* Scratch for building large response payloads (GET_LEARNED). */
   uint8_t scratch[MXS_RESPONSE_MAX];
@@ -101,19 +115,30 @@ void mxs_init(mxs_state_t *s, const mxp_info_t *info, mxs_data_t *data);
  * (0 if out_cap is too small; MXS_RESPONSE_MAX always suffices).
  * Function IDs: SET_FUNCTION accepts 0 (none) and the capabilities set with
  * mxs_set_capabilities (1 colour, 2 AprilTag, 3 face detection, 4 line, 5
- * object tracking, 8 gesture).
+ * object tracking, 6 QR code, 8 gesture, 11 shapes, 12 motion).
  * GET/SET_FUNC_CONFIG (protocol.md 9) serve the functions that have a func
  * config and are in that list (4 line -> data->line_cfg, 5 track ->
- * data->track_cfg, 8 gesture -> data->gesture_cfg), any time, whatever the
+ * data->track_cfg, 8 gesture -> data->gesture_cfg, 11 shape ->
+ * data->shape_cfg, 12 motion -> data->motion_cfg), any time, whatever the
  * current function; SET marks dirty only when a value changes.
  * LEARN: 9 bytes only (the 11-byte form with an id is BAD_PARAM in M6), for
- * colour (1), line (4) or object (5), equal to the current function;
+ * colour (1), line (4), object (5) or QR (6), equal to the current function;
  * deferred (see MXS_DEFERRED). Line (4): one learned colour, id 1, no names;
  * FORGET 4 (id 1 / 0xFFFF) clears it and sets mode 2 back to 0. Object (5):
  * one object, id 1, nameable once learned; LEARN replaces it and drops its
  * name; FORGET 5 (id 1 / 0xFFFF) clears both. GET_LEARNED 4 / 5 answer 0 or
  * 1 item (protocol.md 9). Gesture (8) is named like AprilTag (SET_NAME /
  * GET_LEARNED / FORGET for ids 1-9, protocol.md 10) and LEARN 8 is BAD_PARAM.
+ * M7 (protocol.md 11): QR (6) learns "content -> id 1-8"; SET_NAME 6 only for
+ * learned ids; GET_LEARNED 6 lists the learned ids (rgb 0, names); FORGET 6
+ * drops a code and its name (0xFFFF all). Shapes (11) are named like gestures
+ * (ids 1-4), LEARN 11 is BAD_PARAM. Motion (12) has nothing to learn or name:
+ * LEARN / SET_NAME / GET_LEARNED 12 are BAD_PARAM, FORGET 12 succeeds.
+ * GET_RESULT_DATA (0x21): the attached data (mxs_set_result_data) of record
+ * `index` of the cached GET_RESULTS batch, with its frame_id; len 0 for a
+ * record without data; BAD_PARAM when no frame is cached or index >= count.
+ * GET_LEARNED_DATA (0x35): the content of learned QR id (function 6 only,
+ * TRUNCATED when longer than 128 bytes); anything else is BAD_PARAM.
  * Every request is treated as coming over USB, so STREAM_START/STOP are
  * always allowed (the NOT_SUPPORTED path for UART/I2C arrives with the
  * transport flag in M4). */
@@ -159,6 +184,14 @@ bool mxs_finish_learn(mxs_state_t *s, uint8_t seq, const uint8_t *rgb);
  * dropped; dirty) -> id 1. NULL, an invalid model or a learn of another
  * function -> BAD_PARAM. The caller re-arms its tracker (mxk_reset) itself. */
 bool mxs_finish_learn_object(mxs_state_t *s, uint8_t seq, const mxk_model_t *m);
+/* Same for a QR (6) learn, after the frame's codes were decoded: bytes = the
+ * chosen code's first len bytes (len = min(total_len, 128)), NULL = no
+ * decoded code in the region. mxst_learn_qr -> 0xB0 with the id (a learned
+ * code answers its own id), FULL when 8 are learned, BAD_PARAM for NULL /
+ * len 0 / inconsistent lengths or a learn of another function. Marks dirty
+ * only when a code was added. false and no change when the learn was
+ * cancelled meanwhile. */
+bool mxs_finish_learn_qr(mxs_state_t *s, uint8_t seq, const uint8_t *bytes, uint8_t len, uint16_t total_len);
 
 /* Save worker: claims the pending SAVE / FACTORY_RESET (once). For SAVE,
  * *snapshot receives a copy of the data to write (may be NULL for a reset). */
@@ -174,8 +207,14 @@ bool mxs_complete_store(mxs_state_t *s, uint8_t seq, bool ok);
  * GET_RESULTS (ignored when len > MXS_RESULTS_MAX). The caller must drop a
  * frame processed with another function than s->function_id (checked under
  * the same lock). A function change resets the cache to "no records" for the
- * new function with the last frame_id. */
+ * new function with the last frame_id. A stored batch (and a function change)
+ * also resets the attached data to "none". */
 void mxs_set_results(mxs_state_t *s, const uint8_t *packed, uint16_t len);
+/* Pipeline: attached data of the batch just stored with mxs_set_results; call
+ * it right after, under the same lock. items[i] belongs to record i; n is cut
+ * to the batch's record count, records >= n have no data (len 0). len > 128 is
+ * cut to 128. items may be NULL when n is 0. */
+void mxs_set_result_data(mxs_state_t *s, const mxs_rdata_t *items, uint8_t n);
 
 /* Stops streaming when no request arrived for more than 3000 ms (and cancels a
  * pending LEARN). Also cancels a LEARN nobody claimed within

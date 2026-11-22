@@ -8,8 +8,9 @@ static const char *TAG = "mxst";
 #define NS "mxcam"
 #define KEY "data"
 
-/* One blob buffer (~3 KB) for load and save: they never run at the same time
- * (boot code, then the save worker; see mxcam_store.h). */
+/* One blob buffer (MXST_BLOB_MAX, ~4 KB since M7's QR table) for load and
+ * save: they never run at the same time (boot code, then the save worker; see
+ * mxcam_store.h). Static, so neither caller's stack holds it. */
 static uint8_t s_buf[MXST_BLOB_MAX];
 
 static esp_err_t ensure_init(void) {

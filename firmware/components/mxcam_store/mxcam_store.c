@@ -18,14 +18,31 @@ void mxst_defaults(mxs_data_t *d) {
   mxp_gesture_config_defaults(&d->gesture_cfg);
   mxp_line_config_defaults(&d->line_cfg);
   mxp_track_config_defaults(&d->track_cfg);
+  mxp_shape_config_defaults(&d->shape_cfg);
+  mxp_motion_config_defaults(&d->motion_cfg);
 }
 
-static bool name_key_ok(uint8_t fn, uint16_t id) {
+static int find_qr(const mxs_data_t *d, uint16_t id) {
+  for (int i = 0; i < d->n_qr; i++)
+    if (d->qr[i].id == id) return i;
+  return -1;
+}
+
+/* Name keys by id range only; a QR (6) name also needs the id to be learned
+ * (name_key_ok). */
+static bool name_key_range_ok(uint8_t fn, uint16_t id) {
   if (fn == MXST_FN_COLOR) return id >= 1 && id <= MXST_MAX_COLORS;
   if (fn == MXST_FN_TAG) return id <= MXST_TAG_ID_MAX;
   if (fn == MXST_FN_TRACK) return id == 1; /* one object */
+  if (fn == MXST_FN_QR) return id >= 1 && id <= MXST_MAX_QR;
   if (fn == MXST_FN_GESTURE) return id >= 1 && id <= MXST_GESTURE_ID_MAX;
-  return false; /* face (3) and line (4) have no names */
+  if (fn == MXST_FN_SHAPE) return id >= 1 && id <= MXP_SHAPE_MAX;
+  return false; /* face (3), line (4) and motion (12) have no names */
+}
+
+static bool name_key_ok(const mxs_data_t *d, uint8_t fn, uint16_t id) {
+  if (!name_key_range_ok(fn, id)) return false;
+  return fn != MXST_FN_QR || find_qr(d, id) >= 0;
 }
 
 static bool color_id_ok(uint8_t id) { return id >= 1 && id <= MXST_MAX_COLORS; }
@@ -43,7 +60,7 @@ static void remove_name_at(mxs_data_t *d, int i) {
 }
 
 bool mxst_set_name(mxs_data_t *d, uint8_t fn, uint16_t id, const char *utf8, uint8_t len) {
-  if (!name_key_ok(fn, id) || len > MXP_NAME_MAX || (len > 0 && !utf8)) return false;
+  if (!name_key_ok(d, fn, id) || len > MXP_NAME_MAX || (len > 0 && !utf8)) return false;
   if (len > 0 && !mxp_utf8_valid((const uint8_t *)utf8, len)) return false;
   int i = find_name(d, fn, id);
   if (len == 0) {
@@ -155,6 +172,60 @@ bool mxst_set_object(mxs_data_t *d, const mxk_model_t *m) {
   return true;
 }
 
+/* A stored QR content: the first min(total_len, 128) bytes, at least one. */
+static bool qr_len_ok(uint8_t len, uint16_t total_len) {
+  const uint16_t want = total_len > MXP_RESULT_DATA_MAX ? MXP_RESULT_DATA_MAX : total_len;
+  return len >= 1 && len == want;
+}
+
+uint16_t mxst_qr_lookup(const mxs_data_t *d, const uint8_t *bytes, uint8_t len, uint16_t total_len) {
+  if (!bytes || len == 0) return 0;
+  for (int i = 0; i < d->n_qr; i++) {
+    const mxst_qr_t *q = &d->qr[i];
+    if (q->total_len == total_len && q->len == len && memcmp(q->bytes, bytes, len) == 0) return q->id;
+  }
+  return 0;
+}
+
+const mxst_qr_t *mxst_qr_get(const mxs_data_t *d, uint16_t id) {
+  int i = find_qr(d, id);
+  return i < 0 ? NULL : &d->qr[i];
+}
+
+int mxst_learn_qr(mxs_data_t *d, const uint8_t *bytes, uint8_t len, uint16_t total_len) {
+  if (!bytes || !qr_len_ok(len, total_len)) return MXST_LEARN_NO_COLOR;
+  uint16_t known = mxst_qr_lookup(d, bytes, len, total_len);
+  if (known) return known;
+  if (d->n_qr >= MXST_MAX_QR) return MXST_LEARN_FULL;
+  uint8_t id = 1; /* lowest id not in use; the table is sorted by id */
+  int pos = 0;
+  while (pos < d->n_qr && d->qr[pos].id == id) {
+    pos++;
+    id++;
+  }
+  for (int j = d->n_qr; j > pos; j--) d->qr[j] = d->qr[j - 1];
+  mxst_qr_t *q = &d->qr[pos];
+  memset(q, 0, sizeof(*q));
+  q->id = id;
+  q->len = len;
+  q->total_len = total_len;
+  memcpy(q->bytes, bytes, len);
+  d->n_qr++;
+  return id;
+}
+
+static void remove_qr_at(mxs_data_t *d, int i) {
+  for (int j = i; j + 1 < d->n_qr; j++) d->qr[j] = d->qr[j + 1];
+  d->n_qr--;
+  memset(&d->qr[d->n_qr], 0, sizeof(d->qr[0]));
+}
+
+void mxst_forget_qr(mxs_data_t *d, uint16_t id) {
+  for (int i = d->n_qr - 1; i >= 0; i--)
+    if (id == 0xFFFF || d->qr[i].id == id) remove_qr_at(d, i);
+  mxst_forget_names(d, MXST_FN_QR, id);
+}
+
 /* A func config is valid when the clamping codec leaves it unchanged (the
  * ranges live in one place: mxcam_proto.c, protocol.md 9). */
 static bool line_cfg_valid(const mxp_line_config_t *c) {
@@ -175,11 +246,40 @@ static bool track_cfg_valid(const mxp_track_config_t *c) {
   return memcmp(a, b, sizeof(a)) == 0;
 }
 
+static bool shape_cfg_valid(const mxp_shape_config_t *c) {
+  uint8_t a[MXP_FUNC_CONFIG_SIZE], b[MXP_FUNC_CONFIG_SIZE];
+  mxp_shape_config_t u;
+  mxp_pack_shape_config(c, a);
+  if (!mxp_unpack_shape_config(a, sizeof(a), &u)) return false;
+  mxp_pack_shape_config(&u, b);
+  return memcmp(a, b, sizeof(a)) == 0;
+}
+
+static bool motion_cfg_valid(const mxp_motion_config_t *c) {
+  uint8_t a[MXP_FUNC_CONFIG_SIZE], b[MXP_FUNC_CONFIG_SIZE];
+  mxp_motion_config_t u;
+  mxp_pack_motion_config(c, a);
+  if (!mxp_unpack_motion_config(a, sizeof(a), &u)) return false;
+  mxp_pack_motion_config(&u, b);
+  return memcmp(a, b, sizeof(a)) == 0;
+}
+
 /* Gesture config v1 ranges (protocol.md 10); deserialize gets them from the
  * clamping mxp_unpack_gesture_config. */
 static bool gesture_cfg_valid(const mxp_gesture_config_t *g) {
   return g->hand_threshold >= 10 && g->hand_threshold <= 95 && g->gesture_threshold <= 100 &&
          g->max_hands >= 1 && g->max_hands <= 2;
+}
+
+/* The QR table: ids 1-8 in increasing order, valid lengths. */
+static bool qr_table_valid(const mxs_data_t *d) {
+  if (d->n_qr > MXST_MAX_QR) return false;
+  for (int i = 0; i < d->n_qr; i++) {
+    const mxst_qr_t *q = &d->qr[i];
+    if (q->id < 1 || q->id > MXST_MAX_QR || !qr_len_ok(q->len, q->total_len)) return false;
+    if (i > 0 && q->id <= d->qr[i - 1].id) return false;
+  }
+  return true;
 }
 
 /* The same content rules deserialize enforces (so a save never writes a blob
@@ -188,8 +288,10 @@ static bool data_valid(const mxs_data_t *d) {
   if (d->n_colors > MXST_MAX_COLORS || d->n_names > MXST_MAX_NAMES) return false;
   if (!gesture_cfg_valid(&d->gesture_cfg)) return false;
   if (!line_cfg_valid(&d->line_cfg) || !track_cfg_valid(&d->track_cfg)) return false;
+  if (!shape_cfg_valid(&d->shape_cfg) || !motion_cfg_valid(&d->motion_cfg)) return false;
   if (d->line_has_color > 1 || d->has_object > 1) return false;
   if (d->has_object && !mxk_model_valid(&d->object)) return false;
+  if (!qr_table_valid(d)) return false;
   for (int i = 0; i < d->n_colors; i++) {
     if (!color_id_ok(d->colors[i].id)) return false;
     for (int j = 0; j < i; j++)
@@ -197,7 +299,7 @@ static bool data_valid(const mxs_data_t *d) {
   }
   for (int i = 0; i < d->n_names; i++) {
     const mxs_name_t *n = &d->names[i];
-    if (!name_key_ok(n->fn, n->id) || n->len == 0 || n->len > MXP_NAME_MAX) return false;
+    if (!name_key_ok(d, n->fn, n->id) || n->len == 0 || n->len > MXP_NAME_MAX) return false;
     if (!mxp_utf8_valid((const uint8_t *)n->name, n->len)) return false;
     for (int j = 0; j < i; j++)
       if (d->names[j].fn == n->fn && d->names[j].id == n->id) return false;
@@ -209,7 +311,7 @@ static const uint8_t MAGIC[4] = {'M', 'X', 'S', 'T'};
 #define MXST_VERSION_V1 1
 #define MXST_VERSION_V2 2
 #define MXST_VERSION 3     /* written by serialize */
-#define MXST_N_FCFG 3      /* func config records serialize writes (line, track, gesture) */
+#define MXST_N_FCFG 5      /* func config records serialize writes (line, track, gesture, shape, motion) */
 #define MXST_LRN_VERSION 1 /* layout version of the learned records */
 
 static void put_u16(uint8_t *p, uint16_t v) {
@@ -221,6 +323,12 @@ static uint16_t get_u16(const uint8_t *p) { return (uint16_t)(p[0] | (p[1] << 8)
 
 static size_t obj_rec_len(const mxk_model_t *m) { return MXST_OBJ_REC_FIXED + (size_t)m->tw * m->th; }
 
+static size_t qr_rec_len(const mxs_data_t *d) {
+  size_t n = 1;
+  for (int i = 0; i < d->n_qr; i++) n += 4u + d->qr[i].len;
+  return n;
+}
+
 size_t mxst_serialize(const mxs_data_t *d, uint8_t *out, size_t cap) {
   if (!data_valid(d)) return 0;
   size_t need = 4 + 1 + MXP_CONFIG_SIZE + 1 + (size_t)d->n_colors * 4 + 1 + 1 +
@@ -228,6 +336,7 @@ size_t mxst_serialize(const mxs_data_t *d, uint8_t *out, size_t cap) {
   for (int i = 0; i < d->n_names; i++) need += 4u + d->names[i].len;
   if (d->line_has_color) need += 4 + MXST_LINE_REC_LEN;
   if (d->has_object) need += 4 + obj_rec_len(&d->object);
+  if (d->n_qr) need += 4 + qr_rec_len(d);
   if (need > cap) return 0;
   size_t o = 0;
   memcpy(out, MAGIC, 4);
@@ -257,7 +366,9 @@ size_t mxst_serialize(const mxs_data_t *d, uint8_t *out, size_t cap) {
   o += mxp_pack_line_config(&d->line_cfg, out + o);
   o += mxp_pack_track_config(&d->track_cfg, out + o);
   o += mxp_pack_gesture_config(&d->gesture_cfg, out + o);
-  out[o++] = (uint8_t)(d->line_has_color + d->has_object);
+  o += mxp_pack_shape_config(&d->shape_cfg, out + o);
+  o += mxp_pack_motion_config(&d->motion_cfg, out + o);
+  out[o++] = (uint8_t)(d->line_has_color + d->has_object + (d->n_qr ? 1 : 0));
   if (d->line_has_color) {
     out[o++] = MXST_FN_LINE;
     out[o++] = MXST_LRN_VERSION;
@@ -285,6 +396,22 @@ size_t mxst_serialize(const mxs_data_t *d, uint8_t *out, size_t cap) {
     memcpy(out + o, m->tmpl, (size_t)m->tw * m->th);
     o += (size_t)m->tw * m->th;
   }
+  if (d->n_qr) {
+    out[o++] = MXST_FN_QR;
+    out[o++] = MXST_LRN_VERSION;
+    put_u16(out + o, (uint16_t)qr_rec_len(d));
+    o += 2;
+    out[o++] = d->n_qr;
+    for (int i = 0; i < d->n_qr; i++) {
+      const mxst_qr_t *q = &d->qr[i];
+      out[o++] = q->id;
+      put_u16(out + o, q->total_len);
+      o += 2;
+      out[o++] = q->len;
+      memcpy(out + o, q->bytes, q->len);
+      o += q->len;
+    }
+  }
   uint16_t crc = mxp_crc16(out, o);
   out[o++] = (uint8_t)(crc & 0xFF);
   out[o++] = (uint8_t)(crc >> 8);
@@ -298,7 +425,7 @@ static bool read_fcfg_list(const uint8_t *p, size_t *o, size_t end, mxs_data_t *
   if (*o + 1 > end) return false;
   uint8_t n = p[(*o)++];
   if (n > MXST_MAX_FCFG || *o + (size_t)n * MXP_FUNC_CONFIG_SIZE > end) return false;
-  bool seen_line = false, seen_track = false, seen_gesture = false;
+  bool seen_line = false, seen_track = false, seen_gesture = false, seen_shape = false, seen_motion = false;
   for (int i = 0; i < n; i++, *o += MXP_FUNC_CONFIG_SIZE) {
     const uint8_t *r = p + *o;
     /* unpack false = another layout version: keep the default */
@@ -317,6 +444,16 @@ static bool read_fcfg_list(const uint8_t *p, size_t *o, size_t end, mxs_data_t *
       if (seen_gesture) return false;
       seen_gesture = true;
       mxp_unpack_gesture_config(r, MXP_FUNC_CONFIG_SIZE, &t->gesture_cfg);
+      break;
+    case MXP_FUNC_SHAPE:
+      if (seen_shape) return false;
+      seen_shape = true;
+      mxp_unpack_shape_config(r, MXP_FUNC_CONFIG_SIZE, &t->shape_cfg);
+      break;
+    case MXP_FUNC_MOTION:
+      if (seen_motion) return false;
+      seen_motion = true;
+      mxp_unpack_motion_config(r, MXP_FUNC_CONFIG_SIZE, &t->motion_cfg);
       break;
     default:
       break; /* not known to this firmware */
@@ -343,6 +480,34 @@ static bool read_object(const uint8_t *b, size_t len, mxs_data_t *t) {
   return true;
 }
 
+/* QR table body (layout version 1, len bytes) -> t->qr, sorted by id. */
+static bool read_qr_table(const uint8_t *b, size_t len, mxs_data_t *t) {
+  if (len < 1 || b[0] > MXST_MAX_QR) return false;
+  const uint8_t n = b[0];
+  size_t o = 1;
+  for (int i = 0; i < n; i++) {
+    if (o + 4 > len) return false;
+    const uint8_t id = b[o], ql = b[o + 3];
+    const uint16_t total = get_u16(b + o + 1);
+    if (id < 1 || id > MXST_MAX_QR || !qr_len_ok(ql, total) || o + 4 + ql > len) return false;
+    if (find_qr(t, id) >= 0) return false;
+    int pos = t->n_qr; /* insertion keeps the table sorted by id */
+    while (pos > 0 && t->qr[pos - 1].id > id) {
+      t->qr[pos] = t->qr[pos - 1];
+      pos--;
+    }
+    mxst_qr_t *q = &t->qr[pos];
+    memset(q, 0, sizeof(*q));
+    q->id = id;
+    q->len = ql;
+    q->total_len = total;
+    memcpy(q->bytes, b + o + 4, ql);
+    t->n_qr++;
+    o += 4 + (size_t)ql;
+  }
+  return o == len;
+}
+
 /* v3 learned record list at p[*o]. Unknown functions / layout versions are
  * skipped; a known function twice, too many records, a wrong length or an
  * invalid model -> false. Add a function here (and to serialize) without
@@ -351,7 +516,7 @@ static bool read_lrn_list(const uint8_t *p, size_t *o, size_t end, mxs_data_t *t
   if (*o + 1 > end) return false;
   uint8_t n = p[(*o)++];
   if (n > MXST_MAX_LRN) return false;
-  bool seen_line = false, seen_track = false;
+  bool seen_line = false, seen_track = false, seen_qr = false;
   for (int i = 0; i < n; i++) {
     if (*o + 4 > end) return false;
     const uint8_t fn = p[*o], ver = p[*o + 1];
@@ -373,6 +538,12 @@ static bool read_lrn_list(const uint8_t *p, size_t *o, size_t end, mxs_data_t *t
       seen_track = true;
       if (ver != MXST_LRN_VERSION) break;
       if (!read_object(b, len, t)) return false;
+      break;
+    case MXP_FUNC_QR:
+      if (seen_qr) return false;
+      seen_qr = true;
+      if (ver != MXST_LRN_VERSION) break;
+      if (!read_qr_table(b, len, t)) return false;
       break;
     default:
       break; /* not known to this firmware */
@@ -414,7 +585,8 @@ bool mxst_deserialize(const uint8_t *p, size_t len, mxs_data_t *out) {
     uint16_t id = (uint16_t)(p[o + 1] | (p[o + 2] << 8));
     uint8_t nl = p[o + 3];
     o += 4;
-    if (!name_key_ok(fn, id) || nl == 0 || nl > MXP_NAME_MAX || o + nl > end) return false;
+    /* QR names are matched with the learned codes after the learned list */
+    if (!name_key_range_ok(fn, id) || nl == 0 || nl > MXP_NAME_MAX || o + nl > end) return false;
     if (find_name(&t, fn, id) >= 0) return false;
     if (!mxp_utf8_valid(p + o, nl)) return false;
     mxs_name_t *n = &t.names[i];
@@ -428,6 +600,11 @@ bool mxst_deserialize(const uint8_t *p, size_t len, mxs_data_t *out) {
   if (p[4] >= MXST_VERSION_V2 && !read_fcfg_list(p, &o, end, &t)) return false;
   if (p[4] >= MXST_VERSION && !read_lrn_list(p, &o, end, &t)) return false;
   if (o != end) return false;
+  /* A QR name whose code is not learned (its record was of a layout this
+   * firmware cannot read, or missing) is dropped, not a reason to lose the
+   * whole blob. */
+  for (int i = t.n_names - 1; i >= 0; i--)
+    if (t.names[i].fn == MXST_FN_QR && find_qr(&t, t.names[i].id) < 0) remove_name_at(&t, i);
   *out = t;
   return true;
 }
