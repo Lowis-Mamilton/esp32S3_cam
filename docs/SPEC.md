@@ -181,6 +181,7 @@ USB、UART、I2C 三種傳輸用同一套封包。
 - **Web Serial PWA**，TypeScript + Vite + React（見 ADR-0004）
 - 介面細節（版面、功能頁、學習、參數、展示模式、外觀）見 **`docs/studio-ui.md`**；Studio UI 已依此實作（含展示模式），GitHub Pages 已上線：https://lowis-mamilton.github.io/esp32S3_cam/
 - 支援 Windows、macOS 上的 Chrome / Edge；Safari 不支援 Web Serial
+- 手機和平板也能用（ADR-0023）：視窗小於 960 px 時改成單欄的窄版，學習框可以用手指或觸控筆拖。Android 的 Chrome / Edge 可用藍牙連線；iPhone、iPad 的瀏覽器沒有 Web Bluetooth 也沒有 Web Serial，只能用展示模式
 - 發佈到 GitHub Pages（已完成）；可安裝到桌面、離線可用（**尚未完成**，M5 做 PWA）
 - 連線方式：USB（Web Serial）或藍牙（Web Bluetooth，要藍牙版韌體）。藍牙每次都要按一下「藍牙連線」並在瀏覽器的清單裡選 `MXCam-XXXX`；即時畫面最多 5 fps；韌體燒錄只能用 USB。
 - 介面模仿 HUSKYLENS 的螢幕介面：即時畫面＋辨識框、功能切換、顏色學習、參數調整、存到板子
